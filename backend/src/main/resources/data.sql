@@ -112,3 +112,59 @@ FOREIGN KEY (parent_jurisdiction_id) REFERENCES jurisdictions(jurisdiction_id);
 ALTER TABLE users
 ADD CONSTRAINT fk_supported_artist
 FOREIGN KEY (supported_artist_id) REFERENCES users(user_id);
+
+
+-- Users
+ALTER TABLE users ADD COLUMN photo_url TEXT;
+ALTER TABLE users ADD COLUMN bio TEXT;
+
+-- Songs
+ALTER TABLE songs ADD COLUMN description TEXT;
+ALTER TABLE songs ADD COLUMN duration INTEGER;
+
+CREATE TABLE videos (
+    video_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    artist_id UUID REFERENCES users(user_id),
+    genre_id UUID REFERENCES genres(genre_id),
+    title VARCHAR NOT NULL,
+    video_url TEXT NOT NULL,  -- S3/CDN
+    description TEXT,
+    duration INTEGER,  -- seconds
+    score INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE supporters (
+    supporter_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    listener_id UUID REFERENCES users(user_id),
+    artist_id UUID REFERENCES users(user_id),
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(listener_id, artist_id)
+);
+
+CREATE TABLE likes (
+    like_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    media_type VARCHAR(20) CHECK (media_type IN ('song','video')),
+    media_id UUID NOT NULL,
+    user_id UUID REFERENCES users(user_id),
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, media_type, media_id)
+);
+
+CREATE TABLE video_plays (
+    play_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    video_id UUID REFERENCES videos(video_id),
+    user_id UUID REFERENCES users(user_id),
+    played_at TIMESTAMP DEFAULT NOW(),
+    duration_secs INT
+);
+
+-- Populate jurisdictions (Harlem hierarchy)
+INSERT INTO jurisdictions (jurisdiction_id, name, polygon, parent_jurisdiction_id, created_at)
+VALUES 
+    ('00000000-0000-0000-0000-000000000001', 'Harlem', NULL, NULL, NOW()),
+    ('00000000-0000-0000-0000-000000000002', 'Uptown Harlem', NULL, '00000000-0000-0000-0000-000000000001', NOW()),
+    ('00000000-0000-0000-0000-000000000003', 'Downtown Harlem', NULL, '00000000-0000-0000-0000-000000000001', NOW());
+
+
+alter table genres add column created_at timestamp;
