@@ -1,31 +1,25 @@
 spring:
   datasource:
-    url: 
-jdbc:postgresql://localhost:5432/unis  # Your 
-local DB name
-    username: your_pg_user
-    password: your_pg_pass
+    url: jdbc:postgresql://localhost:5432/unis
+    username: ${DB_USERNAME:postgres} 
+    password: ${DB_PASSWORD:}  
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: validate  # Or 'update' for 
-dev; runs schema.sql
+      ddl-auto: auto-migrates
     show-sql: true
     properties:
       hibernate:
-        dialect: 
-org.hibernate.dialect.PostgreSQLDialect
+        dialect: org.hibernate.dialect.PostgreSQLDialect
   sql:
     init:
-      mode: always  # Runs schema.sql + 
-data.sql on startup
+      mode: always 
   task:
     scheduling:
       pool:
-        size: 2  # For @Scheduled jobs
+        size: 2 
 
 logging:
   level:
     org.springframework: INFO
     com.unis: DEBUG
-

@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.time.LocalDateTime;
 
 @Repository
 public interface AdViewRepository extends JpaRepository<AdView, UUID> {

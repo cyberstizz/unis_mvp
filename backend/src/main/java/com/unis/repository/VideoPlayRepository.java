@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import java.time.LocalDate;
 import java.util.UUID;
+import com.unis.entity.VideoPlay;
 
 @Repository
 public interface VideoPlayRepository extends JpaRepository<VideoPlay, UUID> {

@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import java.util.UUID;
+import com.unis.entity.User;
 
 @Repository
 public interface ReferralRepository extends JpaRepository<Referral, UUID> {
