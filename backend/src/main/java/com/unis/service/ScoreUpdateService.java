@@ -12,7 +12,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 public class ScoreUpdateService {
@@ -101,6 +103,17 @@ public class ScoreUpdateService {
             user.setScore(newScore);
             user.setLevel(level);
             userRepository.save(user);
+        }
+    }
+
+    private void updateArtistScoreIncrement(UUID artistId, int increment) {
+        User artist = userRepository.findById(artistId).orElse(null);
+        if (artist != null) {
+            int newScore = artist.getScore() + increment;
+            String level = getLevel(newScore);
+            artist.setScore(newScore);
+            artist.setLevel(level);
+            userRepository.save(artist);
         }
     }
 

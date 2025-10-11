@@ -9,6 +9,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -26,9 +27,9 @@ public class UserService {
     // Register new user (mandatory supported_artist_id validation)
     public User register(User newUser, UUID supportedArtistId) {
         // Validate supported_artist_id exists and is artist role
-        User supportedArtist = userRepository.findById(supportedArtistId)
-            .orElseThrow(() -> new RuntimeException("Supported artist not found"));
-        if (!"artist".equals(supportedArtist.getRole().toString())) {
+        Optional<User> optionalArtist = userRepository.findById(supportedArtistId);
+        User supportedArtist = optionalArtist.orElseThrow(() -> new RuntimeException("Supported artist not found"));
+        if (supportedArtist.getRole() != User.Role.artist) {  // Enum comparison
             throw new RuntimeException("Supported user must be an artist");
         }
 
@@ -51,11 +52,11 @@ public class UserService {
         return savedUser;
     }
 
-    // Fetch profile (full with jurisdiction)
+    // Fetch profile
     public User getProfile(UUID userId) {
-        return userRepository.findByIdWithJurisdiction(userId)
-            .orElseThrow(() -> new RuntimeException("User not found"));
-    }
+    return userRepository.findById(userId)
+        .orElseThrow(() -> new RuntimeException("User not found"));
+}
 
     // Update photo
     public User updatePhoto(UUID userId, String photoUrl) {
@@ -86,13 +87,12 @@ public class UserService {
 
     // Artist page fetch (user + media/awards count)
     public User getArtistProfile(UUID artistId) {
-        User artist = userRepository.findByIdWithJurisdiction(artistId)
-            .orElseThrow(() -> new RuntimeException("Artist not found"));
-        if (!"artist".equals(artist.getRole().toString())) {
-            throw new RuntimeException("Not an artist");
-        }
-        // Add counts if needed (e.g., via repo queries)
-        // artist.setSupporterCount(supporterRepository.countByArtist(artist));
+        User artist = userRepository.findById(artistId)
+        .orElseThrow(() -> new RuntimeException("Artist not found"));
+    if (artist.getRole() != User.Role.artist) {
+        throw new RuntimeException("Not an artist");
+    }
+
         return artist;
     }
 }
