@@ -36,4 +36,8 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Modifying
     @Query("UPDATE Song s SET s.score = s.score + :increment WHERE s.songId = :id")
     void incrementScore(@Param("id") UUID id, @Param("increment") int increment);
+
+    // Add after computeSongScores
+    @Query("SELECT s FROM Song s WHERE s.artist.userId = :artistId ORDER BY s.createdAt DESC")
+    List<Song> findByArtistId(@Param("artistId") UUID artistId);
 }

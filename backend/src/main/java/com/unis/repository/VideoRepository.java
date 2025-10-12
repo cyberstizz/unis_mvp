@@ -19,16 +19,25 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     Long countPlaysToday(@Param("videoId") UUID videoId);
 
     @Modifying
-    @Query("UPDATE Song s SET s.score = :score, s.level = :level WHERE s.songId = :id")
-    void updateSongScoreAndLevel(@Param("id") UUID id, @Param("score") int score, @Param("level") String level);
+    @Query("UPDATE Video v SET v.score = :score, v.level = :level WHERE v.videoId = :id")
+    void updateVideoScoreAndLevel(@Param("id") UUID id, @Param("score") int score, @Param("level") String level);
 
-    @Query(value = "SELECT s.song_id, " +
-                "COALESCE((SELECT COUNT(sp.play_id) * 1 FROM song_plays sp WHERE sp.song_id = s.song_id), 0) + " +
-                "COALESCE((SELECT COUNT(v.vote_id) * 3 FROM votes v WHERE v.target_type = 'song' AND v.target_id = s.song_id), 0) + " +
-                "COALESCE((SELECT COUNT(l.like_id) * 2 FROM likes l WHERE l.media_type = 'song' AND l.media_id = s.song_id), 0) + " +
-                "COALESCE((SELECT COUNT(a.award_id) * 10 FROM awards a WHERE a.target_type = 'song' AND a.target_id = s.song_id), 0) + " +
-                "s.score as new_score " +
-                "FROM songs s " +
-                "GROUP BY s.song_id", nativeQuery = true)
-    List<Object[]> computeSongScores();
+    @Query(value = "SELECT v.video_id, " +
+                   "COALESCE((SELECT COUNT(vp.play_id) * 1 FROM video_plays vp WHERE vp.video_id = v.video_id), 0) + " +
+                   "COALESCE((SELECT COUNT(vt.vote_id) * 3 FROM votes vt WHERE vt.target_type = 'video' AND vt.target_id = v.video_id), 0) + " +
+                   "COALESCE((SELECT COUNT(l.like_id) * 2 FROM likes l WHERE l.media_type = 'video' AND l.media_id = v.video_id), 0) + " +
+                   "COALESCE((SELECT COUNT(a.award_id) * 10 FROM awards a WHERE a.target_type = 'video' AND a.target_id = v.video_id), 0) + " +
+                   "v.score as new_score " +
+                   "FROM videos v " +
+                   "GROUP BY v.video_id", nativeQuery = true)
+    List<Object[]> computeVideoScores();
+
+    // Add for artist dashboard (page 7)
+    @Query("SELECT v FROM Video v WHERE v.artist.userId = :artistId ORDER BY v.createdAt DESC")
+    List<Video> findByArtistId(@Param("artistId") UUID artistId);
+
+    // Increment score (for events)
+    @Modifying
+    @Query("UPDATE Video v SET v.score = v.score + :increment WHERE v.videoId = :id")
+    void incrementScore(@Param("id") UUID id, @Param("increment") int increment);
 }
