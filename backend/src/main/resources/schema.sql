@@ -1,5 +1,5 @@
--- Enable UUID generation
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Enable UUID generation (manual install)
+-- CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Jurisdictions (no dependencies)
 CREATE TABLE IF NOT EXISTS jurisdictions (
