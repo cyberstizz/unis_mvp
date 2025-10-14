@@ -34,6 +34,9 @@ public class Video {
     @Column
     private Integer score = 0;
 
+    @Column(name = "level")
+    private String level = "silver";
+
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
