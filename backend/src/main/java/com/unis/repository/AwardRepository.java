@@ -14,7 +14,7 @@ public interface AwardRepository extends JpaRepository<Award, UUID> {
     @Query("SELECT a FROM Award a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId AND a.interval.intervalId = :intervalId AND a.awardDate BETWEEN :start AND :end ORDER BY a.votesCount DESC")
     List<Award> findTopByPeriod(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("start") LocalDate start, @Param("end") LocalDate end);
 
-    // For cron: Top candidates by votes
-    @Query("SELECT v.target_id, COUNT(v) as voteCount FROM Vote v WHERE v.jurisdiction.jurisdictionId = :jurisdictionId AND v.interval.intervalId = :intervalId GROUP BY v.target_id ORDER BY voteCount DESC")
+    // For cron: Top candidates by votes (native for GROUP BY/alias)
+    @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)
     List<Object[]> findTopVoteCounts(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId);
 }

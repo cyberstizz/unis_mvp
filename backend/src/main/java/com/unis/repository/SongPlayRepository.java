@@ -10,9 +10,9 @@ import java.util.UUID;
 
 @Repository
 public interface SongPlayRepository extends JpaRepository<SongPlay, UUID> {
-    @Query("SELECT COUNT(p) FROM SongPlay p WHERE p.song.songId = :songId AND DATE(p.playedAt) = :date")
+    @Query(value = "SELECT COUNT(p) FROM SongPlay p WHERE p.song.songId = :songId AND DATE(p.playedAt) = :date", nativeQuery = true)  // Native for DATE
     Long countPlaysByDay(@Param("songId") UUID songId, @Param("date") LocalDate date);
 
-    @Query("SELECT COUNT(p) FROM SongPlay p WHERE DATE(p.playedAt) = CURRENT_DATE")
+    @Query(value = "SELECT COUNT(p) FROM SongPlay p WHERE DATE(p.playedAt) = CURRENT_DATE", nativeQuery = true)  // Native for CURRENT_DATE
     Long countPlaysToday();
 }
