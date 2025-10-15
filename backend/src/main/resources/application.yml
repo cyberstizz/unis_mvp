@@ -25,3 +25,6 @@ logging:
     org.springframework.boot.autoconfigure.jdbc: DEBUG
     com.zaxxer.hikari: DEBUG
     org.springframework.jdbc.datasource: DEBUG
+    org.springframework: INFO
+    com.unis: DEBUG
+    org.springframework.security: DEBUG
