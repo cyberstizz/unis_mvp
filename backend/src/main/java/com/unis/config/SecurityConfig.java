@@ -24,13 +24,14 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
             .authorizeHttpRequests(authz -> authz
-                .requestMatchers("/api/v1/**").permitAll()  // Open all API
-                .requestMatchers("/actuator/**").permitAll()  // Open actuator
-                .anyRequest().authenticated()
+                .requestMatchers("/api/v1/**").permitAll()  // Specific: Open API first
+                .requestMatchers("/actuator/**").permitAll()  // Specific: Open actuator
+                .requestMatchers("/error/**").permitAll()
+                .anyRequest().authenticated()  // Catch-all last
             )
-            .csrf(csrf -> csrf.disable())  // Full disable
+            .csrf(csrf -> csrf.disable())  // Disable CSRF
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-            .httpBasic(basic -> basic.disable())  // Disable basic auth for API
+            .httpBasic(basic -> basic.disable())  // Disable basic auth
             .formLogin(form -> form.disable());  // Disable form login
 
         return http.build();

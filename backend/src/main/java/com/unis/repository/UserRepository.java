@@ -22,15 +22,15 @@ Optional<User> findByIdWithJurisdiction(@Param("id") UUID id);
     List<User> findTopArtistsByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId, int limit);
 
     // For score batch: Native for complex SUMs (only one definition)
-    @Query(value = "SELECT u.user_id, " +
-                   "COALESCE((SELECT COUNT(r.referral_id) * 5 FROM referrals r WHERE r.referrer_id = u.user_id), 0) + " +
-                   "COALESCE((SELECT COUNT(sp.play_id) * 1 FROM song_plays sp WHERE sp.user_id = u.user_id), 0) + " +
-                   "COALESCE((SELECT COUNT(v.vote_id) * 2 FROM votes v WHERE v.user_id = u.user_id), 0) + " +
-                   "FLOOR(DATEDIFF(CURRENT_DATE, u.created_at) / 30.0) * 1 + " +  // Age months *1
-                   "u.score as new_score " +
-                   "FROM users u " +
-                   "GROUP BY u.user_id", nativeQuery = true)
-    List<Object[]> computeUserScores();  // Returns [userId, newScore] arrays
+@Query(value = "SELECT u.user_id, " +
+               "COALESCE((SELECT COUNT(r.referral_id) * 5 FROM referrals r WHERE r.referrer_id = u.user_id), 0) + " +
+               "COALESCE((SELECT COUNT(sp.play_id) * 1 FROM song_plays sp WHERE sp.user_id = u.user_id), 0) + " +
+               "COALESCE((SELECT COUNT(v.vote_id) * 2 FROM votes v WHERE v.user_id = u.user_id), 0) + " +
+               "FLOOR(EXTRACT(DAY FROM age(CURRENT_DATE, u.created_at)) / 30.0) * 1 + " +  // Postgres age() for months
+               "u.score as new_score " +
+               "FROM users u " +
+               "GROUP BY u.user_id", nativeQuery = true)
+List<Object[]> computeUserScores();  // Returns [userId, newScore] arrays  // Returns [userId, newScore] arrays
 
     @Modifying
     @Query("UPDATE User u SET u.score = :score, u.level = :level WHERE u.userId = :id")
