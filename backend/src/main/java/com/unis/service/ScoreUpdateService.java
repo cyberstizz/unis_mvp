@@ -124,4 +124,9 @@ public class ScoreUpdateService {
         return "silver";
     }
 
+    public void onAward(UUID targetId, int i) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'onAward'");
+    }
+
 }

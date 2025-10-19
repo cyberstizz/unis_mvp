@@ -1,7 +1,7 @@
 package com.unis.controller;
 
 import com.unis.entity.Song;
-// import com.unis.entity.Video;
+import com.unis.entity.Video;
 import com.unis.service.MediaService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -23,33 +23,66 @@ public class MediaController {
         return ResponseEntity.ok(saved);
     }
 
-    // DELETE /api/v1/media/song/{id} (delete, page 7)
+    // POST /api/v1/media/video (add video, page 7)
+    @PostMapping("/video")
+    public ResponseEntity<Video> addVideo(@RequestPart("video") Video video, @RequestPart("file") MultipartFile file) {
+        Video saved = mediaService.addVideo(video, file);
+        return ResponseEntity.ok(saved);
+    }
+
+    // DELETE /api/v1/media/song/{id} (delete song, page 7)
     @DeleteMapping("/song/{songId}")
     public ResponseEntity<Void> deleteSong(@PathVariable UUID songId) {
         mediaService.deleteSong(songId);
         return ResponseEntity.ok().build();
     }
 
-    // POST /api/v1/media/song/{id}/play (play, pages 1/3/11)
+    // DELETE /api/v1/media/video/{id} (delete video, page 7)
+    @DeleteMapping("/video/{videoId}")
+    public ResponseEntity<Void> deleteVideo(@PathVariable UUID videoId) {
+        mediaService.deleteVideo(videoId);
+        return ResponseEntity.ok().build();
+    }
+
+    // POST /api/v1/media/song/{id}/play?userId={userId} (play song, pages 1,3,11)
     @PostMapping("/song/{songId}/play")
     public ResponseEntity<Void> playSong(@PathVariable UUID songId, @RequestParam UUID userId) {
         mediaService.playSong(songId, userId);
         return ResponseEntity.ok().build();
     }
 
-    // GET /api/v1/media/songs/jurisdiction/{id} (top songs, page 3)
+    // POST /api/v1/media/video/{id}/play?userId={userId} (play video, pages 1,3,11)
+    @PostMapping("/video/{videoId}/play")
+    public ResponseEntity<Void> playVideo(@PathVariable UUID videoId, @RequestParam UUID userId) {
+        mediaService.playVideo(videoId, userId);
+        return ResponseEntity.ok().build();
+    }
+
+    // GET /api/v1/media/songs/jurisdiction/{id}?limit=3 (top songs, page 3)
     @GetMapping("/songs/jurisdiction/{jurisdictionId}")
     public ResponseEntity<List<Song>> getTopSongsByJurisdiction(@PathVariable UUID jurisdictionId, @RequestParam(defaultValue = "3") int limit) {
         List<Song> songs = mediaService.getTopSongsByJurisdiction(jurisdictionId, limit);
         return ResponseEntity.ok(songs);
     }
 
-    // GET /api/v1/media/songs/artist/{artistId} (dashboard media, page 7)
+    // GET /api/v1/media/videos/jurisdiction/{id}?limit=3 (top videos, page 3)
+    @GetMapping("/videos/jurisdiction/{jurisdictionId}")
+    public ResponseEntity<List<Video>> getTopVideosByJurisdiction(@PathVariable UUID jurisdictionId, @RequestParam(defaultValue = "3") int limit) {
+        List<Video> videos = mediaService.getTopVideosByJurisdiction(jurisdictionId, limit);
+        return ResponseEntity.ok(videos);
+    }
+
+    // GET /api/v1/media/songs/artist/{artistId} (artist's songs, page 7)
     @GetMapping("/songs/artist/{artistId}")
     public ResponseEntity<List<Song>> getSongsByArtist(@PathVariable UUID artistId) {
         List<Song> songs = mediaService.getSongsByArtist(artistId);
         return ResponseEntity.ok(songs);
     }
 
-    // Mirror for videos (addVideo, deleteVideo, playVideo, getTopVideosByJurisdiction, getVideosByArtist)
+    // GET /api/v1/media/videos/artist/{artistId} (artist's videos, page 7)
+    @GetMapping("/videos/artist/{artistId}")
+    public ResponseEntity<List<Video>> getVideosByArtist(@PathVariable UUID artistId) {
+        List<Video> videos = mediaService.getVideosByArtist(artistId);
+        return ResponseEntity.ok(videos);
+    }
 }

@@ -1,4 +1,7 @@
 spring:
+  web:
+    resources:
+      static-locations: classpath:/static, classpath:/uploads
   datasource:
     url: jdbc:postgresql://localhost:5432/unis
     username: unis_user  

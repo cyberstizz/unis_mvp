@@ -2,8 +2,8 @@ package com.unis.service;
 
 import com.unis.entity.Song;
 import com.unis.entity.Video;
-import com.unis.entity.VideoPlay;
 import com.unis.entity.SongPlay;
+import com.unis.entity.VideoPlay;
 import com.unis.entity.User;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
@@ -14,9 +14,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;  // <-- Added for orElseThrow
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -42,15 +41,15 @@ public class MediaService {
 
     // Add song (page 7 artist dashboard)
     public Song addSong(Song song, MultipartFile file) {
-        song.setFileUrl("/uploads/" + file.getOriginalFilename());  // Placeholder
-        song.setCreatedAt(LocalDateTime.now());
+        song.setFileUrl("/uploads/" + file.getOriginalFilename());  // Placeholder (S3 later)
+        song.setCreatedAt(java.time.LocalDateTime.now());
         return songRepository.save(song);
     }
 
-    // Similar addVideo
+    // Add video (page 7 artist dashboard)
     public Video addVideo(Video video, MultipartFile file) {
         video.setVideoUrl("/uploads/" + file.getOriginalFilename());
-        video.setCreatedAt(LocalDateTime.now());
+        video.setCreatedAt(java.time.LocalDateTime.now());
         return videoRepository.save(video);
     }
 
@@ -59,15 +58,17 @@ public class MediaService {
         songRepository.deleteById(songId);
     }
 
-    // Similar deleteVideo
+    // Delete video (page 7)
     public void deleteVideo(UUID videoId) {
         videoRepository.deleteById(videoId);
     }
 
-    // Play song (page 1/3/11, increments play + score)
+    // Play song (pages 1,3,11—inserts play, triggers score +1)
     public void playSong(UUID songId, UUID userId) {
-        Song song = songRepository.findById(songId).orElseThrow(() -> new RuntimeException("Song not found"));
-        User user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
+        Optional<Song> optionalSong = songRepository.findById(songId);
+        Optional<User> optionalUser = userRepository.findById(userId);
+        Song song = optionalSong.orElseThrow(() -> new RuntimeException("Song not found"));
+        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         SongPlay play = SongPlay.builder()
             .song(song)
             .user(user)
@@ -77,10 +78,12 @@ public class MediaService {
         scoreUpdateService.onPlay(userId, songId, "song");
     }
 
-    // Similar playVideo
+    // Play video (pages 1,3,11—inserts play, triggers score +1)
     public void playVideo(UUID videoId, UUID userId) {
-        Video video = videoRepository.findById(videoId).orElseThrow(() -> new RuntimeException("Video not found"));
-        User user = userRepository.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
+        Optional<Video> optionalVideo = videoRepository.findById(videoId);
+        Optional<User> optionalUser = userRepository.findById(userId);
+        Video video = optionalVideo.orElseThrow(() -> new RuntimeException("Video not found"));
+        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         VideoPlay play = VideoPlay.builder()
             .video(video)
             .user(user)
@@ -90,18 +93,24 @@ public class MediaService {
         scoreUpdateService.onPlay(userId, videoId, "video");
     }
 
-    // Get top songs by jurisdiction (page 3 find, page 1 feed)
+    // Get top songs by jurisdiction (pages 3,1 feed)
     public List<Song> getTopSongsByJurisdiction(UUID jurisdictionId, int limit) {
         List<Song> songs = songRepository.findTopByJurisdiction(jurisdictionId);
-        return songs.subList(0, Math.min(limit, songs.size()));  // Safe sublist
+        return songs.subList(0, Math.min(limit, songs.size()));
     }
 
-    // Artist media list (page 7 dashboard)
+    // Get top videos by jurisdiction (pages 3,1 feed)
+    public List<Video> getTopVideosByJurisdiction(UUID jurisdictionId, int limit) {
+        List<Video> videos = videoRepository.findTopByJurisdiction(jurisdictionId);
+        return videos.subList(0, Math.min(limit, videos.size()));
+    }
+
+    // Artist's songs (page 7 dashboard)
     public List<Song> getSongsByArtist(UUID artistId) {
         return songRepository.findByArtistId(artistId);
     }
 
-    // Similar getVideosByArtist
+    // Artist's videos (page 7 dashboard)
     public List<Video> getVideosByArtist(UUID artistId) {
         return videoRepository.findByArtistId(artistId);
     }
