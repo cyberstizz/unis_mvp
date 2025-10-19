@@ -1,21 +1,21 @@
 package com.unis.service;
 
 import com.unis.entity.Jurisdiction;
-import com.unis.entity.Song;
 import com.unis.entity.User;
+import com.unis.entity.Song;
 import com.unis.entity.Video;
-import com.unis.entity.Award;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.UserRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
-import com.unis.repository.AwardRepository;
 import com.unis.repository.SongPlayRepository;
 import com.unis.repository.VideoPlayRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -32,9 +32,6 @@ public class JurisdictionService {
 
     @Autowired
     private VideoRepository videoRepository;
-
-    @Autowired
-    private AwardRepository awardRepository;
 
     @Autowired
     private SongPlayRepository songPlayRepository;
@@ -56,22 +53,22 @@ public class JurisdictionService {
     // Trending 30 songs/videos by plays today (page 8)
     public List<Object[]> getTrendingMediaByJurisdiction(UUID jurisdictionId, String type, int limit) {
         if ("song".equals(type)) {
-            return songPlayRepository.findTrendingByJurisdiction(jurisdictionId, limit);  // Add to SongPlayRepo if needed
+            return songPlayRepository.findTrendingByJurisdiction(jurisdictionId, limit);
         } else {
-            return videoPlayRepository.findTrendingByJurisdiction(jurisdictionId, limit);  // Mirror for VideoPlayRepo
+            return videoPlayRepository.findTrendingByJurisdiction(jurisdictionId, limit);
         }
     }
 
     // Top 30 for jurisdiction (combined artists/songs with ranks)
-    public Object getJurisdictionTops(UUID jurisdictionId) {
+    public Map<String, Object> getJurisdictionTops(UUID jurisdictionId) {
         List<User> topArtists = getTopArtistsByJurisdiction(jurisdictionId, 30);
         List<Song> topSongs = songRepository.findTopByJurisdiction(jurisdictionId);
         List<Video> topVideos = videoRepository.findTopByJurisdiction(jurisdictionId);
-        // Rank: Add rank field in response or compute in service
-        return new Object() {
-            public List<User> topArtists = topArtists;
-            public List<Song> topSongs = topSongs;
-            public List<Video> topVideos = topVideos;
-        };
+
+        Map<String, Object> tops = new HashMap<>();
+        tops.put("topArtists", topArtists);
+        tops.put("topSongs", topSongs);
+        tops.put("topVideos", topVideos);
+        return tops;
     }
 }

@@ -6,8 +6,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -32,7 +33,7 @@ public class EarningsService {
     }
 
     // Breakdown by type (ad revenue/impressions)
-    public Object getEarningsBreakdown(UUID artistId, int days) {
+    public Map<String, BigDecimal> getEarningsBreakdown(UUID artistId, int days) {
         List<Object[]> earningsData = getEarningsByArtist(artistId, days);
         BigDecimal total = BigDecimal.ZERO;
         BigDecimal adRevenue = BigDecimal.ZERO;
@@ -42,15 +43,15 @@ public class EarningsService {
             LocalDate date = (LocalDate) row[0];
             BigDecimal dailyTotal = (BigDecimal) row[1];
             total = total.add(dailyTotal);
-            // Example breakdown: Assume 70% ad, 30% impressions (extend with real logic)
+            // Example breakdown: Assume 70% ad, 30% impressions (extend with real logic from ad_views)
             adRevenue = adRevenue.add(dailyTotal.multiply(new BigDecimal("0.7")));
             impressions = impressions.add(dailyTotal.multiply(new BigDecimal("0.3")));
         }
 
-        return new Object() {
-            public BigDecimal total = total;
-            public BigDecimal adRevenue = adRevenue;
-            public BigDecimal impressions = impressions;
-        };
+        Map<String, BigDecimal> breakdown = new HashMap<>();
+        breakdown.put("total", total);
+        breakdown.put("adRevenue", adRevenue);
+        breakdown.put("impressions", impressions);
+        return breakdown;
     }
 }
