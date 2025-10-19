@@ -24,7 +24,20 @@ public class ScoreUpdateService {
     @Autowired
     private SongRepository songRepository;
 
-    // ... Autowire other repos (Vote, etc.)
+    @Autowired
+    private VoteRepository voteRepository;
+    
+    @Autowired
+    private SongPlayRepository songPlayRepository;
+    
+    @Autowired
+    private SupporterRepository supporterRepository;
+    
+    @Autowired
+    private AwardRepository awardRepository;
+    
+    @Autowired
+    private ReferralRepository referralRepository;
 
     // Event-driven: On new play (call from MediaService)
     @Transactional

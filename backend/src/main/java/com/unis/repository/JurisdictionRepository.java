@@ -21,4 +21,8 @@ public interface JurisdictionRepository extends JpaRepository<Jurisdiction, UUID
     // Top jurisdictions (e.g., for page 8, order by name or add score if needed)
     @Query("SELECT j FROM Jurisdiction j WHERE j.parentJurisdiction IS NULL ORDER BY j.name")
     List<Jurisdiction> findTopLevelJurisdictions();
+
+    // Get all IDs for cron (loop over jurisdictions)
+    @Query("SELECT j.jurisdictionId FROM Jurisdiction j")
+    List<UUID> findAllJurisdictionIds();
 }
