@@ -14,6 +14,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,17 +46,39 @@ public class MediaService {
     @Autowired
     private ScoreUpdateService scoreUpdateService;
 
+    private static final String UPLOAD_DIR = "src/main/resources/static/uploads/";  // Local folder
+
     // Add song (page 7 artist dashboard)
     public Song addSong(Song song, MultipartFile file) {
-        song.setFileUrl("/uploads/" + file.getOriginalFilename());  // Placeholder (S3 later)
-        song.setCreatedAt(java.time.LocalDateTime.now());
+        try {
+            Path uploadPath = Paths.get(UPLOAD_DIR);
+            if (!Files.exists(uploadPath)) {
+                Files.createDirectories(uploadPath);
+            }
+            String fileName = file.getOriginalFilename();
+            file.transferTo(new File(UPLOAD_DIR + fileName));
+            song.setFileUrl("/uploads/" + fileName);
+        } catch (IOException e) {
+            throw new RuntimeException("File upload failed", e);
+        }
+        song.setCreatedAt(LocalDateTime.now());
         return songRepository.save(song);
     }
 
     // Add video (page 7 artist dashboard)
     public Video addVideo(Video video, MultipartFile file) {
-        video.setVideoUrl("/uploads/" + file.getOriginalFilename());
-        video.setCreatedAt(java.time.LocalDateTime.now());
+        try {
+            Path uploadPath = Paths.get(UPLOAD_DIR);
+            if (!Files.exists(uploadPath)) {
+                Files.createDirectories(uploadPath);
+            }
+            String fileName = file.getOriginalFilename();
+            file.transferTo(new File(UPLOAD_DIR + fileName));
+            video.setVideoUrl("/uploads/" + fileName);
+        } catch (IOException e) {
+            throw new RuntimeException("File upload failed", e);
+        }
+        video.setCreatedAt(LocalDateTime.now());
         return videoRepository.save(video);
     }
 

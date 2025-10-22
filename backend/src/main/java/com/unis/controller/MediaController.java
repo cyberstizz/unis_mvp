@@ -3,7 +3,12 @@ package com.unis.controller;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
 import com.unis.service.MediaService;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -17,11 +22,13 @@ public class MediaController {
     private MediaService mediaService;
 
     // POST /api/v1/media/song (add song, page 7)
-    @PostMapping("/song")
-    public ResponseEntity<Song> addSong(@RequestPart("song") Song song, @RequestPart("file") MultipartFile file) {
-        Song saved = mediaService.addSong(song, file);
-        return ResponseEntity.ok(saved);
-    }
+    @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Song> addSong(
+        @RequestPart("song") @Valid @NotNull Song song,
+        @RequestPart("file") MultipartFile file) {
+    Song saved = mediaService.addSong(song, file);
+    return ResponseEntity.ok(saved);
+    } 
 
     // POST /api/v1/media/video (add video, page 7)
     @PostMapping("/video")

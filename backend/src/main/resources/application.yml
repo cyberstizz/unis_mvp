@@ -21,6 +21,10 @@ spring:
     scheduling:
       pool:
         size: 2
+  servlet:
+    multipart:
+      max-file-size: 50MB  # Per file
+      max-request-size: 50MB  # Per request
 
 logging:
   level:
