@@ -1,6 +1,5 @@
 package com.unis.controller;
 
-import com.unis.dto.SongUploadRequest;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
 import com.unis.service.MediaService;
@@ -20,23 +19,15 @@ public class MediaController {
 
     // POST /api/v1/media/song (add song, page 7)
     @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Song> addSong(@RequestPart("song") SongUploadRequest songRequest, @RequestPart("file") MultipartFile file) {
-        Song saved = mediaService.addSong(songRequest, file);
+    public ResponseEntity<Song> addSong(@RequestPart("song") String songJson, @RequestPart("file") MultipartFile file) {
+        Song saved = mediaService.addSong(songJson, file);
         return ResponseEntity.ok(saved);
     }
 
-    // Mirror for video
+    // POST /api/v1/media/video (add video, page 7)
     @PostMapping(value = "/video", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Video> addVideo(@RequestPart("video") SongUploadRequest videoRequest, @RequestPart("file") MultipartFile file) {
-        // Map to Video (title, genreId, artistId, description, duration)
-        Video video = Video.builder()
-            .title(videoRequest.getTitle())
-            .genreId(videoRequest.getGenreId())
-            .artistId(videoRequest.getArtistId())
-            .description(videoRequest.getDescription())
-            .duration(videoRequest.getDuration())
-            .build();
-        Video saved = mediaService.addVideo(video, file);
+    public ResponseEntity<Video> addVideo(@RequestPart("video") String videoJson, @RequestPart("file") MultipartFile file) {
+        Video saved = mediaService.addVideo(videoJson, file);
         return ResponseEntity.ok(saved);
     }
 

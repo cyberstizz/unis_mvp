@@ -1,6 +1,8 @@
 package com.unis.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;  // For JSON parse
 import com.unis.dto.SongUploadRequest;
+import com.unis.dto.VideoUploadRequest;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
 import com.unis.entity.SongPlay;
@@ -48,62 +50,74 @@ public class MediaService {
     @Autowired
     private FileStorageService fileStorageService;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();  // For JSON parse
+
     // Add song (page 7 artist dashboard)
-    public Song addSong(SongUploadRequest req, MultipartFile file) {
-        // Resolve artist
-        User artist = userRepository.findById(req.getArtistId())
-                .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+    public Song addSong(String songJson, MultipartFile file) {
+        try {
+            SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
+            // Resolve artist
+            User artist = userRepository.findById(req.getArtistId())
+                    .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
 
-        // Resolve genre (optional)
-        Genre genre = null;
-        if (req.getGenreId() != null) {
-            genre = genreRepository.findById(req.getGenreId())
-                    .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
+            // Resolve genre (optional)
+            Genre genre = null;
+            if (req.getGenreId() != null) {
+                genre = genreRepository.findById(req.getGenreId())
+                        .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
+            }
+
+            // Save file and get URL
+            String fileUrl = fileStorageService.storeFile(file);
+
+            // Build Song entity
+            Song song = Song.builder()
+                    .title(req.getTitle())
+                    .artist(artist)
+                    .genre(genre)
+                    .description(req.getDescription())
+                    .duration(req.getDuration())
+                    .fileUrl(fileUrl)
+                    .build();
+
+            return songRepository.save(song);
+        } catch (IOException e) {
+            throw new RuntimeException("JSON parse or file upload failed", e);
         }
-
-        // Save file and get URL
-        String fileUrl = fileStorageService.storeFile(file);
-
-        // Build Song entity
-        Song song = Song.builder()
-                .title(req.getTitle())
-                .artist(artist)
-                .genre(genre)
-                .description(req.getDescription())
-                .duration(req.getDuration())
-                .fileUrl(fileUrl)
-                .build();
-
-        return songRepository.save(song);
     }
 
     // Add video (page 7 artist dashboard)
-    public Video addVideo(SongUploadRequest req, MultipartFile file) {  // Reuse DTO for simplicity
-        // Resolve artist
-        User artist = userRepository.findById(req.getArtistId())
-                .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+    public Video addVideo(String videoJson, MultipartFile file) {
+        try {
+            VideoUploadRequest req = objectMapper.readValue(videoJson, VideoUploadRequest.class);
+            // Resolve artist
+            User artist = userRepository.findById(req.getArtistId())
+                    .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
 
-        // Resolve genre (optional)
-        Genre genre = null;
-        if (req.getGenreId() != null) {
-            genre = genreRepository.findById(req.getGenreId())
-                    .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
+            // Resolve genre (optional)
+            Genre genre = null;
+            if (req.getGenreId() != null) {
+                genre = genreRepository.findById(req.getGenreId())
+                        .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
+            }
+
+            // Save file and get URL
+            String fileUrl = fileStorageService.storeFile(file);
+
+            // Build Video entity
+            Video video = Video.builder()
+                    .title(req.getTitle())
+                    .artist(artist)
+                    .genre(genre)
+                    .description(req.getDescription())
+                    .duration(req.getDuration())
+                    .videoUrl(fileUrl)
+                    .build();
+
+            return videoRepository.save(video);
+        } catch (IOException e) {
+            throw new RuntimeException("JSON parse or file upload failed", e);
         }
-
-        // Save file and get URL
-        String fileUrl = fileStorageService.storeFile(file);
-
-        // Build Video entity
-        Video video = Video.builder()
-                .title(req.getTitle())
-                .artist(artist)
-                .genre(genre)
-                .description(req.getDescription())
-                .duration(req.getDuration())
-                .videoUrl(fileUrl)
-                .build();
-
-        return videoRepository.save(video);
     }
 
     // Delete song (page 7)
