@@ -1,19 +1,14 @@
 package com.unis.controller;
 
+import com.unis.dto.SongUploadRequest;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
 import com.unis.service.MediaService;
-
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotNull;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.http.MediaType;
-import com.unis.dto.SongUploadRequest;
 import java.util.List;
 import java.util.UUID;
 
@@ -25,16 +20,22 @@ public class MediaController {
 
     // POST /api/v1/media/song (add song, page 7)
     @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Song> addSong(
-        @RequestPart("song") SongUploadRequest songRequest,
-        @RequestPart("file") MultipartFile file) {
-    Song saved = mediaService.addSong(songRequest, file);
-    return ResponseEntity.ok(saved);
-} 
+    public ResponseEntity<Song> addSong(@RequestPart("song") SongUploadRequest songRequest, @RequestPart("file") MultipartFile file) {
+        Song saved = mediaService.addSong(songRequest, file);
+        return ResponseEntity.ok(saved);
+    }
 
-    // POST /api/v1/media/video (add video, page 7)
-    @PostMapping("/video")
-    public ResponseEntity<Video> addVideo(@RequestPart("video") Video video, @RequestPart("file") MultipartFile file) {
+    // Mirror for video
+    @PostMapping(value = "/video", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Video> addVideo(@RequestPart("video") SongUploadRequest videoRequest, @RequestPart("file") MultipartFile file) {
+        // Map to Video (title, genreId, artistId, description, duration)
+        Video video = Video.builder()
+            .title(videoRequest.getTitle())
+            .genreId(videoRequest.getGenreId())
+            .artistId(videoRequest.getArtistId())
+            .description(videoRequest.getDescription())
+            .duration(videoRequest.getDuration())
+            .build();
         Video saved = mediaService.addVideo(video, file);
         return ResponseEntity.ok(saved);
     }

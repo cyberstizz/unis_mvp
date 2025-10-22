@@ -1,32 +1,25 @@
 package com.unis.service;
 
+import com.unis.dto.SongUploadRequest;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
 import com.unis.entity.SongPlay;
 import com.unis.entity.VideoPlay;
 import com.unis.entity.User;
+import com.unis.entity.Genre;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
 import com.unis.repository.SongPlayRepository;
 import com.unis.repository.VideoPlayRepository;
 import com.unis.repository.UserRepository;
+import com.unis.repository.GenreRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-
-import com.unis.dto.SongUploadRequest;
-import com.unis.service.FileStorageService;
 
 @Service
 @Transactional
@@ -47,41 +40,69 @@ public class MediaService {
     private UserRepository userRepository;
 
     @Autowired
+    private GenreRepository genreRepository;
+
+    @Autowired
     private ScoreUpdateService scoreUpdateService;
 
-    private static final String UPLOAD_DIR = "src/main/resources/static/uploads/";  // Local folder
+    @Autowired
+    private FileStorageService fileStorageService;
 
     // Add song (page 7 artist dashboard)
-    public Song addSong(Song song, MultipartFile file) {
-        try {
-            Path uploadPath = Paths.get(UPLOAD_DIR);
-            if (!Files.exists(uploadPath)) {
-                Files.createDirectories(uploadPath);
-            }
-            String fileName = file.getOriginalFilename();
-            file.transferTo(new File(UPLOAD_DIR + fileName));
-            song.setFileUrl("/uploads/" + fileName);
-        } catch (IOException e) {
-            throw new RuntimeException("File upload failed", e);
+    public Song addSong(SongUploadRequest req, MultipartFile file) {
+        // Resolve artist
+        User artist = userRepository.findById(req.getArtistId())
+                .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+
+        // Resolve genre (optional)
+        Genre genre = null;
+        if (req.getGenreId() != null) {
+            genre = genreRepository.findById(req.getGenreId())
+                    .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
         }
-        song.setCreatedAt(LocalDateTime.now());
+
+        // Save file and get URL
+        String fileUrl = fileStorageService.storeFile(file);
+
+        // Build Song entity
+        Song song = Song.builder()
+                .title(req.getTitle())
+                .artist(artist)
+                .genre(genre)
+                .description(req.getDescription())
+                .duration(req.getDuration())
+                .fileUrl(fileUrl)
+                .build();
+
         return songRepository.save(song);
     }
 
     // Add video (page 7 artist dashboard)
-    public Video addVideo(Video video, MultipartFile file) {
-        try {
-            Path uploadPath = Paths.get(UPLOAD_DIR);
-            if (!Files.exists(uploadPath)) {
-                Files.createDirectories(uploadPath);
-            }
-            String fileName = file.getOriginalFilename();
-            file.transferTo(new File(UPLOAD_DIR + fileName));
-            video.setVideoUrl("/uploads/" + fileName);
-        } catch (IOException e) {
-            throw new RuntimeException("File upload failed", e);
+    public Video addVideo(SongUploadRequest req, MultipartFile file) {  // Reuse DTO for simplicity
+        // Resolve artist
+        User artist = userRepository.findById(req.getArtistId())
+                .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+
+        // Resolve genre (optional)
+        Genre genre = null;
+        if (req.getGenreId() != null) {
+            genre = genreRepository.findById(req.getGenreId())
+                    .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
         }
-        video.setCreatedAt(LocalDateTime.now());
+
+        // Save file and get URL
+        String fileUrl = fileStorageService.storeFile(file);
+
+        // Build Video entity
+        Video video = Video.builder()
+                .title(req.getTitle())
+                .artist(artist)
+                .genre(genre)
+                .description(req.getDescription())
+                .duration(req.getDuration())
+                .videoUrl(fileUrl)
+                .build();
+
         return videoRepository.save(video);
     }
 
