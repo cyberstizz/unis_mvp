@@ -12,6 +12,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.MediaType;
+import com.unis.dto.SongUploadRequest;
 import java.util.List;
 import java.util.UUID;
 
@@ -24,11 +26,11 @@ public class MediaController {
     // POST /api/v1/media/song (add song, page 7)
     @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Song> addSong(
-        @RequestPart("song") @Valid @NotNull Song song,
+        @RequestPart("song") SongUploadRequest songRequest,
         @RequestPart("file") MultipartFile file) {
-    Song saved = mediaService.addSong(song, file);
+    Song saved = mediaService.addSong(songRequest, file);
     return ResponseEntity.ok(saved);
-    } 
+} 
 
     // POST /api/v1/media/video (add video, page 7)
     @PostMapping("/video")
