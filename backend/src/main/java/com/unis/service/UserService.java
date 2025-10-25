@@ -19,20 +19,13 @@ public class UserService {
     private UserRepository userRepository;
 
     @Autowired
-    private SupporterRepository supporterRepository;  // Assume you have this repo
+    private SupporterRepository supporterRepository;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
 
-    // Register new user (mandatory supported_artist_id validation)
+    // Register new user (mandatory supported_artist_id for listeners only)
     public User register(User newUser, UUID supportedArtistId) {
-        // Validate supported_artist_id exists and is artist role
-        Optional<User> optionalArtist = userRepository.findById(supportedArtistId);
-        User supportedArtist = optionalArtist.orElseThrow(() -> new RuntimeException("Supported artist not found"));
-        if (supportedArtist.getRole() != User.Role.artist) {  // Enum comparison
-            throw new RuntimeException("Supported user must be an artist");
-        }
-
         // Hash password
         newUser.setPasswordHash(passwordEncoder.encode(newUser.getPasswordHash()));
         newUser.setCreatedAt(LocalDateTime.now());
@@ -40,44 +33,52 @@ public class UserService {
 
         // Save user
         User savedUser = userRepository.save(newUser);
-        savedUser.setSupportedArtistId(supportedArtistId);  // Set FK
 
-        // Auto-create supporter link
-        Supporter supporter = Supporter.builder()
-            .listener(savedUser)
-            .artist(supportedArtist)
-            .build();
-        supporterRepository.save(supporter);
+        // For listeners: Validate and set supported artist + create Supporter
+        if ("listener".equals(savedUser.getRole().toString()) && supportedArtistId != null) {
+            Optional<User> optionalArtist = userRepository.findById(supportedArtistId);
+            User supportedArtist = optionalArtist.orElseThrow(() -> new RuntimeException("Supported artist not found"));
+            if (!"artist".equals(supportedArtist.getRole().toString())) {
+                throw new RuntimeException("Supported user must be an artist");
+            }
+            savedUser.setSupportedArtistId(supportedArtistId);
+
+            Supporter supporter = Supporter.builder()
+                .listener(savedUser)
+                .artist(supportedArtist)
+                .build();
+            supporterRepository.save(supporter);
+        }  // Artists skip (no supported, no Supporter)
 
         return savedUser;
     }
 
-    // Fetch profile
+    // Fetch profile (full with jurisdiction)
     public User getProfile(UUID userId) {
-    return userRepository.findById(userId)
-        .orElseThrow(() -> new RuntimeException("User not found"));
-}
+        Optional<User> optionalUser = userRepository.findByIdWithJurisdiction(userId);
+        return optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
+    }
 
     // Update photo
     public User updatePhoto(UUID userId, String photoUrl) {
-        User user = userRepository.findById(userId)
-            .orElseThrow(() -> new RuntimeException("User not found"));
+        Optional<User> optionalUser = userRepository.findById(userId);
+        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         user.setPhotoUrl(photoUrl);
         return userRepository.save(user);
     }
 
     // Update bio
     public User updateBio(UUID userId, String bio) {
-        User user = userRepository.findById(userId)
-            .orElseThrow(() -> new RuntimeException("User not found"));
+        Optional<User> optionalUser = userRepository.findById(userId);
+        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         user.setBio(bio);
         return userRepository.save(user);
     }
 
     // Update password (validate old)
     public User updatePassword(UUID userId, String oldPassword, String newPassword) {
-        User user = userRepository.findById(userId)
-            .orElseThrow(() -> new RuntimeException("User not found"));
+        Optional<User> optionalUser = userRepository.findById(userId);
+        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         if (!passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
             throw new RuntimeException("Old password incorrect");
         }
@@ -87,12 +88,13 @@ public class UserService {
 
     // Artist page fetch (user + media/awards count)
     public User getArtistProfile(UUID artistId) {
-        User artist = userRepository.findById(artistId)
-        .orElseThrow(() -> new RuntimeException("Artist not found"));
-    if (artist.getRole() != User.Role.artist) {
-        throw new RuntimeException("Not an artist");
-    }
-
+        Optional<User> optionalArtist = userRepository.findByIdWithJurisdiction(artistId);
+        User artist = optionalArtist.orElseThrow(() -> new RuntimeException("Artist not found"));
+        if (!"artist".equals(artist.getRole().toString())) {
+            throw new RuntimeException("Not an artist");
+        }
+        // Add counts if needed (e.g., via repo queries)
+        // artist.setSupporterCount(supporterRepository.countByArtist(artist));
         return artist;
     }
 }
