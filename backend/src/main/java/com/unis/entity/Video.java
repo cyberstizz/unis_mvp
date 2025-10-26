@@ -1,5 +1,6 @@
 package com.unis.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -11,6 +12,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class Video {
     @Id
     @GeneratedValue
@@ -32,9 +34,11 @@ public class Video {
     private String videoUrl;
 
     @Column
+    @Builder.Default
     private Integer score = 0;
 
     @Column(name = "level")
+    @Builder.Default
     private String level = "silver";
 
     @Column(name = "created_at")

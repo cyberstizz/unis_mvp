@@ -156,22 +156,22 @@ public class MediaService {
         VideoPlay play = VideoPlay.builder()
             .video(video)
             .user(user)
-            .durationSecs(180)  // Placeholder
+            .durationSecs(180)
             .build();
         videoPlayRepository.save(play);
         scoreUpdateService.onPlay(userId, videoId, "video");
     }
 
-    // Get top songs by jurisdiction (pages 3,1 feed)
+   // Get top songs by jurisdiction (pages 3,1 feed)
     public List<Song> getTopSongsByJurisdiction(UUID jurisdictionId, int limit) {
-        List<Song> songs = songRepository.findTopByJurisdiction(jurisdictionId);
-        return songs.subList(0, Math.min(limit, songs.size()));
+        List<Song> songs = songRepository.findTopByJurisdictionWithHierarchy(jurisdictionId, limit);
+        return songs;
     }
 
     // Get top videos by jurisdiction (pages 3,1 feed)
     public List<Video> getTopVideosByJurisdiction(UUID jurisdictionId, int limit) {
-        List<Video> videos = videoRepository.findTopByJurisdiction(jurisdictionId);
-        return videos.subList(0, Math.min(limit, videos.size()));
+        List<Video> videos = videoRepository.findTopByJurisdictionWithHierarchy(jurisdictionId, limit);
+        return videos;
     }
 
     // Artist's songs (page 7 dashboard)

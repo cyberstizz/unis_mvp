@@ -11,8 +11,15 @@ import java.util.UUID;
 
 @Repository
 public interface SongRepository extends JpaRepository<Song, UUID> {
-    @Query("SELECT s FROM Song s JOIN s.artist a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY s.score DESC")
-    List<Song> findTopByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId);
+    // Top by jurisdiction with hierarchy (recursive CTE for children)
+    @Query(value = "WITH RECURSIVE jurisdiction_tree AS ( " +
+               "  SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId " +
+               "  UNION ALL " +
+               "  SELECT j.jurisdiction_id FROM jurisdictions j JOIN jurisdiction_tree jt ON j.parent_jurisdiction_id = jt.jurisdiction_id " +
+               ") " +
+               "SELECT s.* FROM songs s JOIN users u ON s.artist_id = u.user_id JOIN jurisdiction_tree jt ON u.jurisdiction_id = jt.jurisdiction_id " +
+               "ORDER BY s.score DESC LIMIT :limit", nativeQuery = true)
+    List<Song> findTopByJurisdictionWithHierarchy(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
 
     // For plays today (native for count)
     @Query(value = "SELECT COUNT(*) FROM song_plays sp WHERE sp.song_id = :songId AND DATE(sp.played_at) = CURRENT_DATE", nativeQuery = true)
@@ -41,13 +48,6 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Query("SELECT s FROM Song s WHERE s.artist.userId = :artistId ORDER BY s.createdAt DESC")
     List<Song> findByArtistId(@Param("artistId") UUID artistId);
 
-    // Top by jurisdiction with hierarchy (recursive CTE for children)
-    @Query(value = "WITH RECURSIVE jurisdiction_tree AS ( " +
-                   "  SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId " +
-                   "  UNION ALL " +
-                   "  SELECT j.jurisdiction_id FROM jurisdictions j JOIN jurisdiction_tree jt ON j.parent_jurisdiction_id = jt.jurisdiction_id " +
-                   ") " +
-                   "SELECT s.* FROM songs s JOIN users u ON s.artist_id = u.user_id JOIN jurisdiction_tree jt ON u.jurisdiction_id = jt.jurisdiction_id " +
-                   "ORDER BY s.score DESC LIMIT :limit", nativeQuery = true)
-    List<Song> findTopByJurisdictionRecursive(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
+    @Query("SELECT s FROM Song s JOIN s.artist a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY s.score DESC")
+    List<Song> findTopByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId);
 }

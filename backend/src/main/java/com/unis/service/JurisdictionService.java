@@ -4,6 +4,7 @@ import com.unis.entity.Jurisdiction;
 import com.unis.entity.User;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
+import com.unis.service.MediaService;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.UserRepository;
 import com.unis.repository.SongRepository;
@@ -39,6 +40,9 @@ public class JurisdictionService {
     @Autowired
     private VideoPlayRepository videoPlayRepository;
 
+    @Autowired
+    private MediaService mediaService;
+
     // Get jurisdiction details with bio (page 8)
     public Jurisdiction getJurisdiction(UUID jurisdictionId) {
         return jurisdictionRepository.findByIdWithParent(jurisdictionId)
@@ -62,13 +66,12 @@ public class JurisdictionService {
     // Top 30 for jurisdiction (combined artists/songs with ranks)
     public Map<String, Object> getJurisdictionTops(UUID jurisdictionId) {
         List<User> topArtists = getTopArtistsByJurisdiction(jurisdictionId, 30);
-        List<Song> topSongs = songRepository.findTopByJurisdiction(jurisdictionId);
-        List<Video> topVideos = videoRepository.findTopByJurisdiction(jurisdictionId);
-
+        List<Song> topSongs = mediaService.getTopSongsByJurisdiction(jurisdictionId, 30);  // Uses recursive
+        List<Video> topVideos = mediaService.getTopVideosByJurisdiction(jurisdictionId, 30);  // Uses recursive
         Map<String, Object> tops = new HashMap<>();
-        tops.put("topArtists", topArtists);
-        tops.put("topSongs", topSongs);
-        tops.put("topVideos", topVideos);
+            tops.put("topArtists", topArtists);
+            tops.put("topSongs", topSongs);
+            tops.put("topVideos", topVideos);
         return tops;
-    }
+}
 }
