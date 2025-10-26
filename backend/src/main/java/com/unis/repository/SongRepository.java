@@ -37,7 +37,17 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Query("UPDATE Song s SET s.score = s.score + :increment WHERE s.songId = :id")
     void incrementScore(@Param("id") UUID id, @Param("increment") int increment);
 
-    // Add after computeSongScores
+    // Add for artist dashboard (page 7)
     @Query("SELECT s FROM Song s WHERE s.artist.userId = :artistId ORDER BY s.createdAt DESC")
     List<Song> findByArtistId(@Param("artistId") UUID artistId);
+
+    // Top by jurisdiction with hierarchy (recursive CTE for children)
+    @Query(value = "WITH RECURSIVE jurisdiction_tree AS ( " +
+                   "  SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId " +
+                   "  UNION ALL " +
+                   "  SELECT j.jurisdiction_id FROM jurisdictions j JOIN jurisdiction_tree jt ON j.parent_jurisdiction_id = jt.jurisdiction_id " +
+                   ") " +
+                   "SELECT s.* FROM songs s JOIN users u ON s.artist_id = u.user_id JOIN jurisdiction_tree jt ON u.jurisdiction_id = jt.jurisdiction_id " +
+                   "ORDER BY s.score DESC LIMIT :limit", nativeQuery = true)
+    List<Song> findTopByJurisdictionRecursive(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
 }

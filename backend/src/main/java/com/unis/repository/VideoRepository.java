@@ -36,6 +36,16 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Query("SELECT v FROM Video v WHERE v.artist.userId = :artistId ORDER BY v.createdAt DESC")
     List<Video> findByArtistId(@Param("artistId") UUID artistId);
 
+    // Top by jurisdiction with hierarchy (recursive CTE for children)
+    @Query(value = "WITH RECURSIVE jurisdiction_tree AS ( " +
+                   "  SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId " +
+                   "  UNION ALL " +
+                   "  SELECT j.jurisdiction_id FROM jurisdictions j JOIN jurisdiction_tree jt ON j.parent_jurisdiction_id = jt.jurisdiction_id " +
+                   ") " +
+                   "SELECT v.* FROM videos v JOIN users u ON v.artist_id = u.user_id JOIN jurisdiction_tree jt ON u.jurisdiction_id = jt.jurisdiction_id " +
+                   "ORDER BY v.score DESC LIMIT :limit", nativeQuery = true)
+    List<Video> findTopByJurisdictionRecursive(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
+
     // Increment score (for events)
     @Modifying
     @Query("UPDATE Video v SET v.score = v.score + :increment WHERE v.videoId = :id")
