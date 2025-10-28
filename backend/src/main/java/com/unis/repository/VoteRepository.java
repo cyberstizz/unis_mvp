@@ -35,6 +35,10 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
     @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)
     List<Object[]> findTopVoteCounts(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId);
 
+    // Top vote counts for specific date (for past cron)
+    @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.vote_date = :voteDate GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)
+    List<Object[]> findTopVoteCountsForDate(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("voteDate") LocalDate voteDate);
+
     // Exists for unique check (returns Long count > 0)
     @Query(value = "SELECT COUNT(*) FROM votes v WHERE v.user_id = :userId AND v.target_type = :targetType AND v.target_id = :targetId AND v.genre_id = :genreId AND v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.vote_date = :voteDate", nativeQuery = true)
     Long existsByUserUserIdAndTargetTypeAndTargetIdAndGenreGenreIdAndJurisdictionJurisdictionIdAndIntervalIntervalIdAndVoteDate(@Param("userId") UUID userId, @Param("targetType") String targetType, @Param("targetId") UUID targetId, @Param("genreId") UUID genreId, @Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("voteDate") LocalDate voteDate);
