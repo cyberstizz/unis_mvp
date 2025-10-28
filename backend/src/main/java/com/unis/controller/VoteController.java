@@ -1,14 +1,19 @@
 package com.unis.controller;
 
-import com.unis.entity.Award;
+import com.unis.dto.VoteRequest;
 import com.unis.entity.Vote;
-import com.unis.repository.AwardRepository;
+import com.unis.entity.VotingInterval;
+import com.unis.entity.Genre;
+import com.unis.entity.Jurisdiction;
+import com.unis.entity.User;
+import com.unis.repository.UserRepository;
+import com.unis.repository.GenreRepository;
+import com.unis.repository.JurisdictionRepository;
+import com.unis.repository.VotingIntervalRepository;
 import com.unis.service.VoteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -19,11 +24,54 @@ public class VoteController {
     private VoteService voteService;
 
     @Autowired
-    private AwardRepository awardRepository;
+    private UserRepository userRepository;
+
+    @Autowired
+    private GenreRepository genreRepository;
+
+    @Autowired
+    private JurisdictionRepository jurisdictionRepository;
+
+    @Autowired
+    private VotingIntervalRepository votingIntervalRepository;
 
     // POST /api/v1/vote/submit (submit vote, page 2)
     @PostMapping("/submit")
-    public ResponseEntity<Vote> submitVote(@RequestBody Vote vote) {
+    public ResponseEntity<Vote> submitVote(@RequestBody VoteRequest req) {
+        // Fetch full User object from userId
+        User user = userRepository.findById(req.getUserId())
+            .orElseThrow(() -> new RuntimeException("User not found: " + req.getUserId()));
+
+        // Fetch Genre, Jurisdiction, Interval (optional—null OK if not provided)
+        Genre genre = null;
+        if (req.getGenreId() != null) {
+            genre = genreRepository.findById(req.getGenreId())
+                .orElseThrow(() -> new RuntimeException("Genre not found: " + req.getGenreId()));
+        }
+
+        Jurisdiction jurisdiction = null;
+        if (req.getJurisdictionId() != null) {
+            jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
+                .orElseThrow(() -> new RuntimeException("Jurisdiction not found: " + req.getJurisdictionId()));
+        }
+
+        VotingInterval interval = null;
+        if (req.getIntervalId() != null) {
+            interval = votingIntervalRepository.findById(req.getIntervalId())
+                .orElseThrow(() -> new RuntimeException("Interval not found: " + req.getIntervalId()));
+        }
+
+        // Build Vote entity
+        Vote vote = Vote.builder()
+            .user(user)
+            .targetType(req.getTargetType())
+            .targetId(req.getTargetId())
+            .genre(genre)
+            .jurisdiction(jurisdiction)
+            .interval(interval)
+            .voteDate(req.getVoteDate())
+            .build();
+
         Vote saved = voteService.submitVote(vote);
         return ResponseEntity.ok(saved);
     }
@@ -44,18 +92,6 @@ public class VoteController {
     public ResponseEntity<Long> getTotalVotes(@PathVariable String targetType, @PathVariable UUID targetId) {
         Long total = voteService.getTotalVotesForTarget(targetType, targetId);
         return ResponseEntity.ok(total);
-    }
-
-    // GET /api/v1/vote/leaderboards?type={type}&intervalId={id}&jurisdictionId={id} (leaderboards, page 4)
-    @GetMapping("/leaderboards")
-    public ResponseEntity<List<Award>> getLeaderboards(
-            @RequestParam String type,
-            @RequestParam(required = false) UUID intervalId,
-            @RequestParam(required = false) UUID jurisdictionId) {
-        LocalDate start = LocalDate.now().minusDays(30);  // Example range
-        LocalDate end = LocalDate.now();
-        List<Award> awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
-        return ResponseEntity.ok(awards);
     }
 
     // GET /api/v1/vote/votes/user/{userId} (votes cast by user, for score)

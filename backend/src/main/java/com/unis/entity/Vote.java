@@ -1,5 +1,6 @@
 package com.unis.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDate;
@@ -12,6 +13,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})  // Ignore proxy internals for JSON
 public class Vote {
     @Id
     @GeneratedValue
@@ -23,7 +25,7 @@ public class Vote {
     private User user;
 
     @Column(name = "target_type", nullable = false)
-    private String targetType;  // 'artist' or 'song'
+    private String targetType;  // "song" or "artist"
 
     @Column(name = "target_id", nullable = false)
     private UUID targetId;
