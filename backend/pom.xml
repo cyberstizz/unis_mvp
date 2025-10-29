@@ -12,7 +12,7 @@
 	<artifactId>unis</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>Unis</name>
-	<description>UNIS Backend APIDemo project for Spring Boot</description>
+	<description>UNIS Backend API Demo project for Spring Boot</description>
 	<url/>
 	<licenses>
 		<license/>
@@ -114,6 +114,12 @@
 					</excludes>
 				</configuration>
 			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.2.5</version>
+			</plugin>
+
 		</plugins>
 	</build>
 

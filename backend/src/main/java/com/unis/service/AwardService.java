@@ -87,7 +87,7 @@ public class AwardService {
                         scoreUpdateService.onAward(targetId, 100);
                     }
                 }
-                // Mirror for artists (add findTopArtistVotesForDate if needed)
+                // Mirror for artists
             }
         }
     }
