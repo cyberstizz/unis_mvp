@@ -1,40 +1,38 @@
 spring:
+  application:
+    name: unis
   web:
     resources:
-      static-locations: classpath:/static, classpath:/uploads
+      static-locations: classpath:/static,classpath:/uploads
   datasource:
     url: jdbc:postgresql://localhost:5432/unis
-    username: unis_user  
+    username: unis_user
     password: "$ucce$$7"
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: none  
+      ddl-auto: none
     show-sql: true
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
   sql:
     init:
-      mode: never 
+      mode: never
   task:
     scheduling:
       pool:
         size: 2
   servlet:
     multipart:
-      max-file-size: 50MB  
-      max-request-size: 50MB  
+      max-file-size: 50MB
+      max-request-size: 50MB
   jwt:
     secret: unis-super-secret-key-change-this-in-production-should-be-at-least-256-bits-long
-    expiration: 86400000 # Token expires in 24 hours
+    expiration: 86400000  # 24 hours
 
-  server:
+server:
   port: 8080
-
-  spring:
-  application:
-    name: unis
 
 logging:
   level:
