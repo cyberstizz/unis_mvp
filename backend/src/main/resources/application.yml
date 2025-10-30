@@ -23,11 +23,11 @@ spring:
         size: 2
   servlet:
     multipart:
-      max-file-size: 50MB  # Per file
-      max-request-size: 50MB  # Per request
+      max-file-size: 50MB  
+      max-request-size: 50MB  
   jwt:
-  secret: unis-super-secret-key-change-this-in-production-should-be-at-least-256-bits-long
-  expiration: 86400000 # Token expires in 24 hours (86400000 ms)
+    secret: unis-super-secret-key-change-this-in-production-should-be-at-least-256-bits-long
+    expiration: 86400000 # Token expires in 24 hours
 
   server:
   port: 8080
