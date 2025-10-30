@@ -14,11 +14,15 @@ public class CorsConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
-        config.addAllowedOriginPattern("http://localhost:3000"); // Vite dev
+        // Add Vite's port (5173); keep 3000 for flexibility
+        config.addAllowedOriginPattern("http://localhost:5173");
+        config.addAllowedOriginPattern("http://localhost:3000");
+        config.addAllowedOriginPattern("http://127.0.0.1:5173");
         config.addAllowedOriginPattern("http://127.0.0.1:3000");
+        // Or wildcard for dev: config.addAllowedOriginPattern("*"); (less secure, but quick)
         config.addAllowedHeader("*");
         config.addAllowedMethod("*");
-        source.registerCorsConfiguration("/**", config);
+        source.registerCorsConfiguration("/**", config);  // Global
         return new CorsFilter(source);
     }
 }
