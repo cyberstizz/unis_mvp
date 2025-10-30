@@ -16,7 +16,7 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
   sql:
     init:
-      mode: never  # Skip scripts
+      mode: never 
   task:
     scheduling:
       pool:
@@ -25,6 +25,16 @@ spring:
     multipart:
       max-file-size: 50MB  # Per file
       max-request-size: 50MB  # Per request
+  jwt:
+  secret: unis-super-secret-key-change-this-in-production-should-be-at-least-256-bits-long
+  expiration: 86400000 # Token expires in 24 hours (86400000 ms)
+
+  server:
+  port: 8080
+
+  spring:
+  application:
+    name: unis
 
 logging:
   level:

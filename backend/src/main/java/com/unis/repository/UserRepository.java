@@ -14,6 +14,8 @@ import java.util.UUID;
 public interface UserRepository extends JpaRepository<User, UUID> {
     User findByUsername(String username);  // For auth
 
+    Optional<User> findByEmail(String email);
+
     // Replace the existing findByIdWithJurisdiction
 @Query("SELECT u FROM User u LEFT JOIN FETCH u.jurisdiction WHERE u.userId = :id")  
 Optional<User> findByIdWithJurisdiction(@Param("id") UUID id);  
