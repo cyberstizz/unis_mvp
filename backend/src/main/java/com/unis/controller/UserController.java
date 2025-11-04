@@ -3,7 +3,7 @@ package com.unis.controller;
 import com.unis.dto.UserDto;
 import com.unis.entity.User;
 import com.unis.repository.JurisdictionRepository;
-import com.unis.entity.Jurisdiction;  // For setting jurisdiction object
+import com.unis.entity.Jurisdiction;  
 import com.unis.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;

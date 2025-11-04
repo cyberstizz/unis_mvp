@@ -33,6 +33,9 @@ public class Video {
     @Column(name = "video_url")
     private String videoUrl;
 
+    @Column(name = "artwork_url")
+    private String artworkUrl;
+
     @Column
     @Builder.Default
     private Integer score = 0;
@@ -49,4 +52,5 @@ public class Video {
 
     @Column
     private Integer duration;
+
 }

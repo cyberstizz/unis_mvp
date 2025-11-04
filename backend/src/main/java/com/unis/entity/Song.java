@@ -31,6 +31,9 @@ public class Song {
     @Column(name = "file_url")
     private String fileUrl;
 
+    @Column(name = "artwork_url")  // Add: For cover art
+    private String artworkUrl;
+
     @Column
     private Integer score = 0;
 

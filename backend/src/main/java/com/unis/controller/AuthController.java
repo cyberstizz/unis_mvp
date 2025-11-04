@@ -45,4 +45,19 @@ public class AuthController {
             return ResponseEntity.status(500).body("Login failed: " + e.getMessage());
         }
     }
+
+    @PostMapping("/logout")
+public ResponseEntity<?> logout(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        return ResponseEntity.badRequest().body("No token provided");
+    }
+
+    // String token = authHeader.substring(7);
+
+    // Later I will add logic to invalidate the token (e.g., token blacklist)
+    // jwtUtil.invalidateToken(token);
+
+    return ResponseEntity.ok("Logout successful");
+}
+
 }

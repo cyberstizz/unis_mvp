@@ -55,7 +55,7 @@ public class MediaService {
     private final ObjectMapper objectMapper = new ObjectMapper();  // For JSON parse
 
     // Add song (page 7 artist dashboard)
-    public Song addSong(String songJson, MultipartFile file) {
+    public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {  // Added: Optional artwork param
         try {
             SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
             // Resolve artist
@@ -69,8 +69,14 @@ public class MediaService {
                         .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
             }
 
-            // Save file and get URL
+            // Save audio file and get URL
             String fileUrl = fileStorageService.storeFile(file);
+
+            // Save artwork file if present and get URL
+            String artworkUrl = null;
+            if (artwork != null && !artwork.isEmpty()) {
+                artworkUrl = fileStorageService.storeFile(artwork);
+            }
 
             // Build Song entity
             Song song = Song.builder()
@@ -80,6 +86,7 @@ public class MediaService {
                     .description(req.getDescription())
                     .duration(req.getDuration())
                     .fileUrl(fileUrl)
+                    .artworkUrl(artworkUrl)  // Set artwork URL if present
                     .build();
 
             return songRepository.save(song);
@@ -89,7 +96,7 @@ public class MediaService {
     }
 
     // Add video (page 7 artist dashboard)
-    public Video addVideo(String videoJson, MultipartFile file) {
+    public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {  // Added: Optional artwork param
         try {
             VideoUploadRequest req = objectMapper.readValue(videoJson, VideoUploadRequest.class);
             // Resolve artist
@@ -103,8 +110,14 @@ public class MediaService {
                         .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
             }
 
-            // Save file and get URL
+            // Save video file and get URL
             String fileUrl = fileStorageService.storeFile(file);
+
+            // Save artwork file if present and get URL
+            String artworkUrl = null;
+            if (artwork != null && !artwork.isEmpty()) {
+                artworkUrl = fileStorageService.storeFile(artwork);
+            }
 
             // Build Video entity
             Video video = Video.builder()
@@ -114,6 +127,7 @@ public class MediaService {
                     .description(req.getDescription())
                     .duration(req.getDuration())
                     .videoUrl(fileUrl)
+                    .artworkUrl(artworkUrl)  // Set artwork URL if present
                     .build();
 
             return videoRepository.save(video);
