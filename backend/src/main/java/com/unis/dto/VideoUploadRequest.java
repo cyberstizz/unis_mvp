@@ -13,5 +13,6 @@ public class VideoUploadRequest {
     private UUID genreId;
     private UUID artistId;
     private String description;
+    private UUID jurisdictionId;  
     private Integer duration;
 }

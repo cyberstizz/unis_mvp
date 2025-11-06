@@ -1,5 +1,6 @@
 package com.unis.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
 
 import java.util.UUID;
@@ -8,10 +9,12 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@JsonIgnoreProperties(ignoreUnknown = true)  
 public class SongUploadRequest {
     private String title;
     private UUID genreId;
     private UUID artistId;
     private String description;
-    private Integer duration;
+    private UUID jurisdictionId;  
+    private Integer duration;  
 }

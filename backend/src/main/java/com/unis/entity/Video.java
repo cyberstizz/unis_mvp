@@ -30,6 +30,10 @@ public class Video {
     @JoinColumn(name = "genre_id")
     private Genre genre;
 
+    @ManyToOne(fetch = FetchType.LAZY)  
+    @JoinColumn(name = "jurisdiction_id")
+    private Jurisdiction jurisdiction;
+
     @Column(name = "video_url")
     private String videoUrl;
 

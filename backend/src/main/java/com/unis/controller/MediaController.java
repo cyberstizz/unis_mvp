@@ -19,15 +19,21 @@ public class MediaController {
 
     // POST /api/v1/media/song (add song, page 7)
     @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Song> addSong(@RequestPart("song") String songJson, @RequestPart("file") MultipartFile file) {
-        Song saved = mediaService.addSong(songJson, file);
+    public ResponseEntity<Song> addSong(
+            @RequestPart("song") String songJson, 
+            @RequestPart("file") MultipartFile file,
+            @RequestPart(value = "artwork", required = false) MultipartFile artwork) {  // Optional artwork
+        Song saved = mediaService.addSong(songJson, file, artwork);  // Pass all 3 args
         return ResponseEntity.ok(saved);
     }
 
     // POST /api/v1/media/video (add video, page 7)
     @PostMapping(value = "/video", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Video> addVideo(@RequestPart("video") String videoJson, @RequestPart("file") MultipartFile file) {
-        Video saved = mediaService.addVideo(videoJson, file);
+    public ResponseEntity<Video> addVideo(
+            @RequestPart("video") String videoJson, 
+            @RequestPart("file") MultipartFile file,
+            @RequestPart(value = "artwork", required = false) MultipartFile artwork) {  // Optional artwork
+        Video saved = mediaService.addVideo(videoJson, file, artwork);  // Pass all 3 args
         return ResponseEntity.ok(saved);
     }
 

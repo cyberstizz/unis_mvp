@@ -9,12 +9,14 @@ import com.unis.entity.SongPlay;
 import com.unis.entity.VideoPlay;
 import com.unis.entity.User;
 import com.unis.entity.Genre;
+import com.unis.entity.Jurisdiction;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
 import com.unis.repository.SongPlayRepository;
 import com.unis.repository.VideoPlayRepository;
 import com.unis.repository.UserRepository;
 import com.unis.repository.GenreRepository;
+import com.unis.repository.JurisdictionRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +49,9 @@ public class MediaService {
     private GenreRepository genreRepository;
 
     @Autowired
+    private JurisdictionRepository jurisdictionRepository;
+
+    @Autowired
     private ScoreUpdateService scoreUpdateService;
 
     @Autowired
@@ -55,48 +60,79 @@ public class MediaService {
     private final ObjectMapper objectMapper = new ObjectMapper();  // For JSON parse
 
     // Add song (page 7 artist dashboard)
-    public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {  // Added: Optional artwork param
+    public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {
         try {
-            SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
-            // Resolve artist
-            User artist = userRepository.findById(req.getArtistId())
-                    .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
-
-            // Resolve genre (optional)
-            Genre genre = null;
-            if (req.getGenreId() != null) {
-                genre = genreRepository.findById(req.getGenreId())
-                        .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
-            }
-
-            // Save audio file and get URL
-            String fileUrl = fileStorageService.storeFile(file);
-
-            // Save artwork file if present and get URL
-            String artworkUrl = null;
-            if (artwork != null && !artwork.isEmpty()) {
-                artworkUrl = fileStorageService.storeFile(artwork);
-            }
-
-            // Build Song entity
-            Song song = Song.builder()
-                    .title(req.getTitle())
-                    .artist(artist)
-                    .genre(genre)
-                    .description(req.getDescription())
-                    .duration(req.getDuration())
-                    .fileUrl(fileUrl)
-                    .artworkUrl(artworkUrl)  // Set artwork URL if present
-                    .build();
-
-            return songRepository.save(song);
-        } catch (IOException e) {
-            throw new RuntimeException("JSON parse or file upload failed", e);
+        SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
+        
+        // Guards (from prior)
+        if (req.getTitle() == null || req.getTitle().trim().isEmpty()) {
+            throw new IllegalArgumentException("Title is required");
         }
+        if (req.getArtistId() == null) {
+            throw new IllegalArgumentException("Artist ID is required and cannot be null");
+        }
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Audio file is required");
+        }
+
+        // Resolve artist
+        User artist = userRepository.findById(req.getArtistId())
+                .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+
+        // Resolve genre (optional)
+        Genre genre = null;
+        if (req.getGenreId() != null) {
+            genre = genreRepository.findById(req.getGenreId()).orElse(null);
+        }
+
+        // Resolve jurisdiction: From req, fallback to artist's
+        Jurisdiction jurisdiction = null;
+        if (req.getJurisdictionId() != null) {
+            jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
+                    .orElseThrow(() -> new IllegalArgumentException("Jurisdiction not found: " + req.getJurisdictionId()));
+        } else {
+            jurisdiction = artist.getJurisdiction();  // Assume User.jurisdiction exists
+            if (jurisdiction == null) {
+                throw new IllegalArgumentException("No jurisdiction: Specify in upload or set on artist profile");
+            }
+        }
+
+        // File storage (unchanged)
+        String fileUrl = fileStorageService.storeFile(file);
+        String artworkUrl = null;
+        if (artwork != null && !artwork.isEmpty()) {
+            artworkUrl = fileStorageService.storeFile(artwork);
+        }
+
+        // Duration (unchanged)
+        Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
+
+        // Build & save
+        Song song = Song.builder()
+                .title(req.getTitle())
+                .artist(artist)
+                .genre(genre)
+                .jurisdiction(jurisdiction)  // New: Set here
+                .description(req.getDescription())
+                .duration(duration)
+                .fileUrl(fileUrl)
+                .artworkUrl(artworkUrl)
+                .build();
+
+        return songRepository.save(song);
+    } catch (IOException e) {
+        throw new RuntimeException("JSON parse or file upload failed", e);
+    } catch (IllegalArgumentException e) {
+        throw new RuntimeException("Invalid upload data: " + e.getMessage(), e);
+    }
+}
+
+    private Integer computeDuration(MultipartFile file) {
+        return 180000;  // 3 min fallback
     }
 
     // Add video (page 7 artist dashboard)
-    public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {  // Added: Optional artwork param
+    public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {
         try {
             VideoUploadRequest req = objectMapper.readValue(videoJson, VideoUploadRequest.class);
             // Resolve artist
@@ -111,7 +147,7 @@ public class MediaService {
             }
 
             // Save video file and get URL
-            String fileUrl = fileStorageService.storeFile(file);
+            String videoUrl = fileStorageService.storeFile(file);
 
             // Save artwork file if present and get URL
             String artworkUrl = null;
@@ -126,7 +162,7 @@ public class MediaService {
                     .genre(genre)
                     .description(req.getDescription())
                     .duration(req.getDuration())
-                    .videoUrl(fileUrl)
+                    .videoUrl(videoUrl)
                     .artworkUrl(artworkUrl)  // Set artwork URL if present
                     .build();
 

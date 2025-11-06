@@ -88,7 +88,7 @@ class MediaServiceTest {
         // Mock request JSON
         String songJson = "{\"title\":\"Test Song\",\"genreId\":\"" + testGenreId + "\",\"artistId\":\"" + testUserId + "\",\"description\":\"Test\",\"duration\":180}";
         MultipartFile mockFile = new MockMultipartFile("file", "test.mp3", "audio/mpeg", "test content".getBytes());
-
+        MultipartFile mockFile2 = new MockMultipartFile("file", "test.jpg", "jpg", "test image".getBytes());
         // Mock lookups
         User mockArtist = User.builder().userId(testUserId).build();
         when(userRepository.findById(testUserId)).thenReturn(Optional.of(mockArtist));
@@ -98,7 +98,7 @@ class MediaServiceTest {
         Song mockSaved = Song.builder().songId(testSongId).title("Test Song").build();
         when(songRepository.save(any(Song.class))).thenReturn(mockSaved);
 
-        Song result = mediaService.addSong(songJson, mockFile);
+        Song result = mediaService.addSong(songJson, mockFile, mockFile2);
 
         assertNotNull(result);
         assertEquals("Test Song", result.getTitle());
@@ -111,7 +111,7 @@ class MediaServiceTest {
         // Mock request JSON
         String videoJson = "{\"title\":\"Test Video\",\"genreId\":\"" + testGenreId + "\",\"artistId\":\"" + testUserId + "\",\"description\":\"Test\",\"duration\":300}";
         MultipartFile mockFile = new MockMultipartFile("file", "test.mp4", "video/mp4", "test content".getBytes());
-
+        MultipartFile mockFile2 = new MockMultipartFile("file", "test.jpg", "jpg", "test image".getBytes());
         // Mock lookups
         User mockArtist = User.builder().userId(testUserId).build();
         when(userRepository.findById(testUserId)).thenReturn(Optional.of(mockArtist));
@@ -121,7 +121,7 @@ class MediaServiceTest {
         Video mockSaved = Video.builder().videoId(testVideoId).title("Test Video").build();
         when(videoRepository.save(any(Video.class))).thenReturn(mockSaved);
 
-        Video result = mediaService.addVideo(videoJson, mockFile);
+        Video result = mediaService.addVideo(videoJson, mockFile, mockFile2);
 
         assertNotNull(result);
         assertEquals("Test Video", result.getTitle());

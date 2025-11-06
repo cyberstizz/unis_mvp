@@ -1,5 +1,6 @@
 package com.unis.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -11,6 +12,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@JsonIgnoreProperties(ignoreUnknown = true)  // Safety for extras in JSON
 public class Song {
     @Id
     @GeneratedValue
@@ -28,10 +30,14 @@ public class Song {
     @JoinColumn(name = "genre_id")
     private Genre genre;
 
+    @ManyToOne(fetch = FetchType.LAZY)  
+    @JoinColumn(name = "jurisdiction_id")
+    private Jurisdiction jurisdiction;
+
     @Column(name = "file_url")
     private String fileUrl;
 
-    @Column(name = "artwork_url")  // Add: For cover art
+    @Column(name = "artwork_url")
     private String artworkUrl;
 
     @Column

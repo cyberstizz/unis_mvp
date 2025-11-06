@@ -1,6 +1,6 @@
 package com.unis.config;
 
-import com.unis.security.JwtRequestFilter;  // Your filter (swap if JwtRequestFilter)
+import com.unis.config.JwtRequestFilter;  // Your filter (swap if JwtRequestFilter)
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
