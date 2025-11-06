@@ -17,15 +17,22 @@ import com.unis.repository.VideoPlayRepository;
 import com.unis.repository.UserRepository;
 import com.unis.repository.GenreRepository;
 import com.unis.repository.JurisdictionRepository;
+
+import org.apache.tika.metadata.Metadata;
+import org.apache.tika.parser.ParseContext;
+import org.apache.tika.parser.audio.AudioParser;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import org.xml.sax.helpers.DefaultHandler;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+
 
 @Service
 @Transactional
@@ -56,15 +63,15 @@ public class MediaService {
 
     @Autowired
     private FileStorageService fileStorageService;
-
-    private final ObjectMapper objectMapper = new ObjectMapper();  // For JSON parse
+    // for json parse
+    private final ObjectMapper objectMapper = new ObjectMapper();  
 
     // Add song (page 7 artist dashboard)
     public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {
         try {
         SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
         
-        // Guards (from prior)
+        // Guards 
         if (req.getTitle() == null || req.getTitle().trim().isEmpty()) {
             throw new IllegalArgumentException("Title is required");
         }
@@ -85,26 +92,27 @@ public class MediaService {
             genre = genreRepository.findById(req.getGenreId()).orElse(null);
         }
 
-        // Resolve jurisdiction: From req, fallback to artist's
+        // Resolve jurisdiction
         Jurisdiction jurisdiction = null;
         if (req.getJurisdictionId() != null) {
             jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
                     .orElseThrow(() -> new IllegalArgumentException("Jurisdiction not found: " + req.getJurisdictionId()));
+        } else if (artist.getJurisdiction() != null) {
+            jurisdiction = artist.getJurisdiction();
         } else {
-            jurisdiction = artist.getJurisdiction();  // Assume User.jurisdiction exists
-            if (jurisdiction == null) {
-                throw new IllegalArgumentException("No jurisdiction: Specify in upload or set on artist profile");
-            }
+            // Fallback: Default to Harlem root (000...000001)
+            jurisdiction = jurisdictionRepository.findById(UUID.fromString("00000000-0000-0000-0000-000000000001"))
+                    .orElseThrow(() -> new IllegalArgumentException("Default jurisdiction not found"));
         }
 
-        // File storage (unchanged)
+        // File storage
         String fileUrl = fileStorageService.storeFile(file);
         String artworkUrl = null;
         if (artwork != null && !artwork.isEmpty()) {
             artworkUrl = fileStorageService.storeFile(artwork);
         }
 
-        // Duration (unchanged)
+        // Duration 
         Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
 
         // Build & save
@@ -128,8 +136,22 @@ public class MediaService {
 }
 
     private Integer computeDuration(MultipartFile file) {
+    if (file == null || file.isEmpty()) {
         return 180000;  // 3 min fallback
     }
+    try (InputStream is = file.getInputStream()) {
+        Metadata metadata = new Metadata();
+        new AudioParser().parse(is, new DefaultHandler(), metadata, new ParseContext());
+        String durStr = metadata.get("duration");
+        if (durStr != null && !durStr.isEmpty()) {
+            double seconds = Double.parseDouble(durStr);
+            return (int) (seconds * 1000);  
+        }
+    } catch (Exception e) {
+        System.err.println("Duration parse failed for " + file.getOriginalFilename() + ": " + e.getMessage());
+    }
+    return 180000;  // Fallback on error
+}
 
     // Add video (page 7 artist dashboard)
     public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {
@@ -139,11 +161,24 @@ public class MediaService {
             User artist = userRepository.findById(req.getArtistId())
                     .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
 
-            // Resolve genre (optional)
+            // Resolve genre 
             Genre genre = null;
             if (req.getGenreId() != null) {
                 genre = genreRepository.findById(req.getGenreId())
                         .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
+            }
+
+             // Resolve jurisdiction
+            Jurisdiction jurisdiction = null;
+            if (req.getJurisdictionId() != null) {
+                jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
+                        .orElseThrow(() -> new IllegalArgumentException("Jurisdiction not found: " + req.getJurisdictionId()));
+            } else if (artist.getJurisdiction() != null) {
+                jurisdiction = artist.getJurisdiction();
+            } else {
+                // Fallback: Default to Harlem root (000...000001)
+                jurisdiction = jurisdictionRepository.findById(UUID.fromString("00000000-0000-0000-0000-000000000001"))
+                        .orElseThrow(() -> new IllegalArgumentException("Default jurisdiction not found"));
             }
 
             // Save video file and get URL
@@ -160,6 +195,7 @@ public class MediaService {
                     .title(req.getTitle())
                     .artist(artist)
                     .genre(genre)
+                    .jurisdiction(jurisdiction)
                     .description(req.getDescription())
                     .duration(req.getDuration())
                     .videoUrl(videoUrl)

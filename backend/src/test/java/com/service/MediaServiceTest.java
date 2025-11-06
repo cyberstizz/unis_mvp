@@ -8,12 +8,14 @@ import com.unis.entity.SongPlay;
 import com.unis.entity.VideoPlay;
 import com.unis.entity.User;
 import com.unis.entity.Genre;
+import com.unis.entity.Jurisdiction;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
 import com.unis.repository.SongPlayRepository;
 import com.unis.repository.VideoPlayRepository;
 import com.unis.repository.UserRepository;
 import com.unis.repository.GenreRepository;
+import com.unis.repository.JurisdictionRepository;
 import com.unis.service.FileStorageService;
 import com.unis.service.MediaService;
 import com.unis.service.ScoreUpdateService;
@@ -61,6 +63,9 @@ class MediaServiceTest {
     private GenreRepository genreRepository;
 
     @Mock
+    private JurisdictionRepository jurisdictionRepository;
+
+    @Mock
     private ScoreUpdateService scoreUpdateService;
 
     @Mock
@@ -85,49 +90,89 @@ class MediaServiceTest {
 
     @Test
     void testAddSong() throws Exception {
-        // Mock request JSON
-        String songJson = "{\"title\":\"Test Song\",\"genreId\":\"" + testGenreId + "\",\"artistId\":\"" + testUserId + "\",\"description\":\"Test\",\"duration\":180}";
+        // Mock request JSON with jurisdictionId
+        String songJson = "{\"title\":\"Test Song\",\"genreId\":\"" + testGenreId + "\",\"artistId\":\"" + testUserId + "\",\"description\":\"Test\",\"duration\":180,\"jurisdictionId\":\"" + testJurisdictionId + "\"}";
         MultipartFile mockFile = new MockMultipartFile("file", "test.mp3", "audio/mpeg", "test content".getBytes());
-        MultipartFile mockFile2 = new MockMultipartFile("file", "test.jpg", "jpg", "test image".getBytes());
+        MultipartFile mockArtwork = new MockMultipartFile("artwork", "test.jpg", "image/jpeg", "test image".getBytes());  // Fixed key to "artwork"
+        
         // Mock lookups
         User mockArtist = User.builder().userId(testUserId).build();
         when(userRepository.findById(testUserId)).thenReturn(Optional.of(mockArtist));
+        
         Genre mockGenre = Genre.builder().genreId(testGenreId).build();
         when(genreRepository.findById(testGenreId)).thenReturn(Optional.of(mockGenre));
+        
+        Jurisdiction mockJurisdiction = Jurisdiction.builder().jurisdictionId(testJurisdictionId).build();
+        when(jurisdictionRepository.findById(testJurisdictionId)).thenReturn(Optional.of(mockJurisdiction));
+        
         when(fileStorageService.storeFile(mockFile)).thenReturn("/uploads/test.mp3");
-        Song mockSaved = Song.builder().songId(testSongId).title("Test Song").build();
+        when(fileStorageService.storeFile(mockArtwork)).thenReturn("/uploads/test.jpg");  // For artwork
+        
+        Song mockSaved = Song.builder()
+                .songId(testSongId)
+                .title("Test Song")
+                .artist(mockArtist)
+                .genre(mockGenre)
+                .jurisdiction(mockJurisdiction)  // NEW: Match expected
+                .description("Test")
+                .duration(180)
+                .fileUrl("/uploads/test.mp3")
+                .artworkUrl("/uploads/test.jpg")
+                .build();
         when(songRepository.save(any(Song.class))).thenReturn(mockSaved);
 
-        Song result = mediaService.addSong(songJson, mockFile, mockFile2);
+        Song result = mediaService.addSong(songJson, mockFile, mockArtwork);
 
         assertNotNull(result);
         assertEquals("Test Song", result.getTitle());
+        assertEquals(mockJurisdiction, result.getJurisdiction());  // NEW: Verify set
         verify(fileStorageService).storeFile(mockFile);
+        verify(fileStorageService).storeFile(mockArtwork);
         verify(songRepository).save(any(Song.class));
-    }
+}
 
-    @Test
-    void testAddVideo() throws Exception {
-        // Mock request JSON
-        String videoJson = "{\"title\":\"Test Video\",\"genreId\":\"" + testGenreId + "\",\"artistId\":\"" + testUserId + "\",\"description\":\"Test\",\"duration\":300}";
-        MultipartFile mockFile = new MockMultipartFile("file", "test.mp4", "video/mp4", "test content".getBytes());
-        MultipartFile mockFile2 = new MockMultipartFile("file", "test.jpg", "jpg", "test image".getBytes());
-        // Mock lookups
-        User mockArtist = User.builder().userId(testUserId).build();
-        when(userRepository.findById(testUserId)).thenReturn(Optional.of(mockArtist));
-        Genre mockGenre = Genre.builder().genreId(testGenreId).build();
-        when(genreRepository.findById(testGenreId)).thenReturn(Optional.of(mockGenre));
-        when(fileStorageService.storeFile(mockFile)).thenReturn("/uploads/test.mp4");
-        Video mockSaved = Video.builder().videoId(testVideoId).title("Test Video").build();
-        when(videoRepository.save(any(Video.class))).thenReturn(mockSaved);
+@Test
+void testAddVideo() throws Exception {
+    // Mock request JSON with jurisdictionId
+    String videoJson = "{\"title\":\"Test Video\",\"genreId\":\"" + testGenreId + "\",\"artistId\":\"" + testUserId + "\",\"description\":\"Test\",\"duration\":300,\"jurisdictionId\":\"" + testJurisdictionId + "\"}";
+    MultipartFile mockFile = new MockMultipartFile("file", "test.mp4", "video/mp4", "test content".getBytes());
+    MultipartFile mockArtwork = new MockMultipartFile("artwork", "test.jpg", "image/jpeg", "test image".getBytes());  // Fixed key to "artwork"
+    
+    // Mock lookups
+    User mockArtist = User.builder().userId(testUserId).build();
+    when(userRepository.findById(testUserId)).thenReturn(Optional.of(mockArtist));
+    
+    Genre mockGenre = Genre.builder().genreId(testGenreId).build();
+    when(genreRepository.findById(testGenreId)).thenReturn(Optional.of(mockGenre));
+    
+    Jurisdiction mockJurisdiction = Jurisdiction.builder().jurisdictionId(testJurisdictionId).build();
+    when(jurisdictionRepository.findById(testJurisdictionId)).thenReturn(Optional.of(mockJurisdiction));
+    
+    when(fileStorageService.storeFile(mockFile)).thenReturn("/uploads/test.mp4");
+    when(fileStorageService.storeFile(mockArtwork)).thenReturn("/uploads/test.jpg");  // For artwork
+    
+    Video mockSaved = Video.builder()
+            .videoId(testVideoId)
+            .title("Test Video")
+            .artist(mockArtist)
+            .genre(mockGenre)
+            .jurisdiction(mockJurisdiction)  // NEW: Match expected
+            .description("Test")
+            .duration(300)
+            .videoUrl("/uploads/test.mp4")
+            .artworkUrl("/uploads/test.jpg")
+            .build();
+    when(videoRepository.save(any(Video.class))).thenReturn(mockSaved);
 
-        Video result = mediaService.addVideo(videoJson, mockFile, mockFile2);
+    Video result = mediaService.addVideo(videoJson, mockFile, mockArtwork);
 
-        assertNotNull(result);
-        assertEquals("Test Video", result.getTitle());
-        verify(fileStorageService).storeFile(mockFile);
-        verify(videoRepository).save(any(Video.class));
-    }
+    assertNotNull(result);
+    assertEquals("Test Video", result.getTitle());
+    assertEquals(mockJurisdiction, result.getJurisdiction());  // NEW: Verify set
+    verify(fileStorageService).storeFile(mockFile);
+    verify(fileStorageService).storeFile(mockArtwork);
+    verify(videoRepository).save(any(Video.class));
+}
 
     @Test
     void testDeleteSong() {
