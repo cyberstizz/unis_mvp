@@ -1,3 +1,6 @@
+file:
+  upload-dir: uploads
+
 spring:
   application:
     name: unis

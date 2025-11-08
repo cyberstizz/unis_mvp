@@ -40,14 +40,15 @@ public class Video {
     @Column(name = "artwork_url")
     private String artworkUrl;
 
-    @Column
     @Builder.Default
+    @Column
     private Integer score = 0;
 
-    @Column(name = "level")
     @Builder.Default
+    @Column(name = "level")
     private String level = "silver";
-
+  
+    @Builder.Default
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 

@@ -8,6 +8,8 @@ import com.unis.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -69,5 +71,12 @@ public class UserController {
     public ResponseEntity<User> getArtistProfile(@PathVariable UUID artistId) {
         User artist = userService.getArtistProfile(artistId);
         return ResponseEntity.ok(artist);
+    }
+
+    @GetMapping("/artist/top")
+    public ResponseEntity<List<User>> getTopArtists(@RequestParam UUID jurisdictionId, @RequestParam(defaultValue = "5") int limit) {
+        // Use native query in UserService: SUM(s.score) GROUP BY artist_id ORDER DESC (JOIN songs/videos)
+        List<User> tops = userService.getTopArtistsByJurisdiction(jurisdictionId, limit);
+        return ResponseEntity.ok(tops);
     }
 }

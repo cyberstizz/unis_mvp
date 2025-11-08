@@ -8,8 +8,12 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/v1/media")
@@ -91,5 +95,23 @@ public class MediaController {
     public ResponseEntity<List<Video>> getVideosByArtist(@PathVariable UUID artistId) {
         List<Video> videos = mediaService.getVideosByArtist(artistId);
         return ResponseEntity.ok(videos);
+    }
+
+    @GetMapping("/trending")
+    public ResponseEntity<List<Object>> getTrendingMedia(@RequestParam UUID jurisdictionId, @RequestParam(defaultValue = "5") int limit) {
+        List<Song> topSongs = mediaService.getTopSongsByJurisdiction(jurisdictionId, limit);  // Score-based
+        List<Video> topVideos = mediaService.getTopVideosByJurisdiction(jurisdictionId, limit);
+        List<Object> mixed = new ArrayList<>();
+        mixed.addAll(topSongs);
+        mixed.addAll(topVideos);
+        mixed.sort(Comparator.comparing((Object o) -> -(o instanceof Song ? ((Song) o).getScore() : ((Video) o).getScore())));  // DESC score
+        return ResponseEntity.ok(mixed.stream().limit(limit).collect(Collectors.toList()));  // Mix + limit
+    }
+
+    @GetMapping("/new")
+    public ResponseEntity<List<Object>> getNewMedia(@RequestParam UUID jurisdictionId, @RequestParam(defaultValue = "5") int limit) {
+        // TODO: Implement by created_at DESC (add to MediaService: @Query native "SELECT * FROM songs WHERE jurisdiction_id = ?1 ORDER BY created_at DESC LIMIT ?2")
+        // Fallback: Top for MVP
+        return getTrendingMedia(jurisdictionId, limit);  // Reuse until new impl
     }
 }

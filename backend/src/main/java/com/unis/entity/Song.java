@@ -12,7 +12,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@JsonIgnoreProperties(ignoreUnknown = true)  // Safety for extras in JSON
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Song {
     @Id
     @GeneratedValue
@@ -40,12 +40,15 @@ public class Song {
     @Column(name = "artwork_url")
     private String artworkUrl;
 
+    @Builder.Default
     @Column
     private Integer score = 0;
 
+    @Builder.Default
     @Column(name = "level")
     private String level = "silver";
 
+    @Builder.Default
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 

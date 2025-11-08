@@ -3,14 +3,20 @@ package com.unis.service;
 import com.unis.entity.User;
 import com.unis.entity.Supporter;
 import com.unis.repository.UserRepository;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
+
 import com.unis.repository.SupporterRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -23,6 +29,11 @@ public class UserService {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired 
+    private EntityManager entityManager;
+
+    
 
     // Register new user (mandatory supported_artist_id for listeners only)
     public User register(User newUser, UUID supportedArtistId) {
@@ -102,4 +113,41 @@ public class UserService {
         return userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
     }
+
+    // Get top artists by total score in jurisdiction + hierarchy (for popular artists)
+    public List<User> getTopArtistsByJurisdiction(UUID jurisdictionId, int limit) {
+        String query = """
+            WITH RECURSIVE jurisdiction_hierarchy AS (
+            SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+            UNION ALL
+            SELECT j.jurisdiction_id FROM jurisdictions j
+            INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            )
+            SELECT DISTINCT u.user_id, u.username, COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) as total_score
+            FROM users u
+            LEFT JOIN songs s ON s.artist_id = u.user_id AND s.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
+            LEFT JOIN videos v ON v.artist_id = u.user_id AND v.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
+            GROUP BY u.user_id, u.username
+            HAVING COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) > 0  -- Only scored artists
+            ORDER BY total_score DESC
+            LIMIT :limit
+            """;
+        
+        Query q = entityManager.createNativeQuery(query);
+        q.setParameter("jurisdictionId", jurisdictionId);
+        q.setParameter("limit", limit);
+        
+        @SuppressWarnings("unchecked")
+        List<Object[]> results = q.getResultList();
+        return results.stream()
+                .map(row -> {
+                    User artist = new User();
+                    artist.setUserId((UUID) row[0]);
+                    artist.setUsername((String) row[1]);
+                    // Optional: artist.setTotalScore(((Number) row[2]).intValue()); if adding field
+                    return artist;
+                })
+                .collect(Collectors.toList());
+    }
+   
 }

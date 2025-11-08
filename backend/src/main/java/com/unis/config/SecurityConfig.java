@@ -59,6 +59,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/users/register").permitAll()  // Open register
                 .requestMatchers("/api/v1/users/login").permitAll()  // Open login
                 .requestMatchers("/api/v1/**").authenticated()  // Protect rest
+                .requestMatchers("/uploads/**").permitAll()  // Protect rest
                 .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/error/**").permitAll()
                 .anyRequest().authenticated()

@@ -12,6 +12,10 @@ import com.unis.entity.Genre;
 import com.unis.entity.Jurisdiction;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
+
 import com.unis.repository.SongPlayRepository;
 import com.unis.repository.VideoPlayRepository;
 import com.unis.repository.UserRepository;
@@ -22,6 +26,7 @@ import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.audio.AudioParser;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -29,9 +34,11 @@ import org.xml.sax.helpers.DefaultHandler;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 
 @Service
@@ -57,6 +64,9 @@ public class MediaService {
 
     @Autowired
     private JurisdictionRepository jurisdictionRepository;
+
+    @Autowired 
+    private EntityManager entityManager;
 
     @Autowired
     private ScoreUpdateService scoreUpdateService;
@@ -116,18 +126,20 @@ public class MediaService {
         Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
 
         // Build & save
-        Song song = Song.builder()
-                .title(req.getTitle())
-                .artist(artist)
-                .genre(genre)
-                .jurisdiction(jurisdiction)  // New: Set here
-                .description(req.getDescription())
-                .duration(duration)
-                .fileUrl(fileUrl)
-                .artworkUrl(artworkUrl)
-                .build();
+        Song song = new Song();
+            song.setTitle(req.getTitle());
+            song.setArtist(artist);
+            song.setGenre(genre);
+            song.setJurisdiction(jurisdiction);
+            song.setDescription(req.getDescription());
+            song.setDuration(duration);
+            song.setFileUrl(fileUrl);
+            song.setArtworkUrl(artworkUrl);
+            song.setScore(0);  
+            song.setLevel("silver");  
+            song.setCreatedAt(LocalDateTime.now());  
 
-        return songRepository.save(song);
+            return songRepository.save(song);
     } catch (IOException e) {
         throw new RuntimeException("JSON parse or file upload failed", e);
     } catch (IllegalArgumentException e) {
@@ -190,19 +202,24 @@ public class MediaService {
                 artworkUrl = fileStorageService.storeFile(artwork);
             }
 
-            // Build Video entity
-            Video video = Video.builder()
-                    .title(req.getTitle())
-                    .artist(artist)
-                    .genre(genre)
-                    .jurisdiction(jurisdiction)
-                    .description(req.getDescription())
-                    .duration(req.getDuration())
-                    .videoUrl(videoUrl)
-                    .artworkUrl(artworkUrl)  // Set artwork URL if present
-                    .build();
+            // Duration 
+            Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
 
-            return videoRepository.save(video);
+            // Build Video entity
+            Video video = new Video();
+                video.setTitle(req.getTitle());
+                video.setArtist(artist);
+                video.setGenre(genre);
+                video.setJurisdiction(jurisdiction);
+                video.setDescription(req.getDescription());
+                video.setDuration(duration);
+                video.setVideoUrl(videoUrl);
+                video.setArtworkUrl(artworkUrl);
+                video.setScore(0);  // Explicit
+                video.setLevel("silver");  // Explicit
+                video.setCreatedAt(LocalDateTime.now());  // Explicit
+
+                return videoRepository.save(video);
         } catch (IOException e) {
             throw new RuntimeException("JSON parse or file upload failed", e);
         }
@@ -248,16 +265,61 @@ public class MediaService {
         scoreUpdateService.onPlay(userId, videoId, "video");
     }
 
-   // Get top songs by jurisdiction (pages 3,1 feed)
+    // Get top songs by score in jurisdiction + hierarchy (page 3, feed trending/new)
     public List<Song> getTopSongsByJurisdiction(UUID jurisdictionId, int limit) {
-        List<Song> songs = songRepository.findTopByJurisdictionWithHierarchy(jurisdictionId, limit);
-        return songs;
+        String query = """
+            WITH RECURSIVE jurisdiction_hierarchy AS (
+            SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+            UNION ALL
+            SELECT j.jurisdiction_id FROM jurisdictions j
+            INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            )
+            SELECT s.* FROM songs s
+            INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
+            ORDER BY COALESCE(s.score, 0) DESC NULLS LAST, s.created_at DESC
+            LIMIT :limit
+            """;
+        
+        Query q = entityManager.createNativeQuery(query, Song.class);
+        q.setParameter("jurisdictionId", jurisdictionId);
+        q.setParameter("limit", limit);
+        
+        @SuppressWarnings("unchecked")
+        List<Song> results = q.getResultList();
+        return results.isEmpty() ? getFallbackSongs(limit) : results;  // Fallback if no data
     }
 
-    // Get top videos by jurisdiction (pages 3,1 feed)
+    // Symmetric for videos
     public List<Video> getTopVideosByJurisdiction(UUID jurisdictionId, int limit) {
-        List<Video> videos = videoRepository.findTopByJurisdictionWithHierarchy(jurisdictionId, limit);
-        return videos;
+        String query = """
+            WITH RECURSIVE jurisdiction_hierarchy AS (
+            SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+            UNION ALL
+            SELECT j.jurisdiction_id FROM jurisdictions j
+            INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            )
+            SELECT v.* FROM videos v
+            INNER JOIN jurisdiction_hierarchy jh ON v.jurisdiction_id = jh.jurisdiction_id
+            ORDER BY COALESCE(v.score, 0) DESC NULLS LAST, v.created_at DESC
+            LIMIT :limit
+            """;
+        
+        Query q = entityManager.createNativeQuery(query, Video.class);
+        q.setParameter("jurisdictionId", jurisdictionId);
+        q.setParameter("limit", limit);
+        
+        @SuppressWarnings("unchecked")
+        List<Video> results = q.getResultList();
+        return results.isEmpty() ? getFallbackVideos(limit) : results;  // Fallback if no data
+    }
+
+    // Private helpers: Fallback to first N by ID (for launch sparsity)
+    private List<Song> getFallbackSongs(int limit) {
+        return songRepository.findAll(Sort.by(Sort.Direction.ASC, "songId")).stream().limit(limit).collect(Collectors.toList());
+    }
+
+    private List<Video> getFallbackVideos(int limit) {
+        return videoRepository.findAll(Sort.by(Sort.Direction.ASC, "videoId")).stream().limit(limit).collect(Collectors.toList());
     }
 
     // Artist's songs (page 7 dashboard)
