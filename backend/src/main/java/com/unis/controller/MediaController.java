@@ -114,4 +114,10 @@ public class MediaController {
         // Fallback: Top for MVP
         return getTrendingMedia(jurisdictionId, limit);  // Reuse until new impl
     }
+
+    @GetMapping("/song/{songId}")
+    public ResponseEntity<Song> getSong(@PathVariable UUID songId) {
+        Song song = mediaService.getSongById(songId);
+        return ResponseEntity.ok(song);
+    }
 }

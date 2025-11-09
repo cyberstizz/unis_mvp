@@ -331,4 +331,16 @@ public class MediaService {
     public List<Video> getVideosByArtist(UUID artistId) {
         return videoRepository.findByArtistId(artistId);
     }
+
+    // Get single song by ID (for song detail page)
+    public Song getSongById(UUID songId) {
+        return songRepository.findById(songId)
+            .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
+    }
+
+    // Get single video by ID (for video detail page)
+    public Video getVideoById(UUID videoId) {
+        return videoRepository.findById(videoId)
+            .orElseThrow(() -> new RuntimeException("Video not found: " + videoId));
+    }
 }
