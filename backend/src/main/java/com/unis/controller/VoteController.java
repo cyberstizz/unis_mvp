@@ -100,4 +100,28 @@ public class VoteController {
         Long count = voteService.getVotesCastByUser(userId);
         return ResponseEntity.ok(count);
     }
+
+
+    // GET /api/v1/vote/nominees - Get top nominees by vote count
+    @GetMapping("/nominees")
+    public ResponseEntity<?> getNominees(
+            @RequestParam String targetType,
+            @RequestParam UUID genreId,
+            @RequestParam UUID jurisdictionId,
+            @RequestParam UUID intervalId,
+            @RequestParam(defaultValue = "20") int limit) {
+        
+        List<?> nominees = voteService.getNominees(targetType, genreId, jurisdictionId, intervalId, limit);
+        return ResponseEntity.ok(nominees);
+    }
+
+    // GET /api/v1/vote/check-eligibility
+    @GetMapping("/check-eligibility")
+    public ResponseEntity<Boolean> checkEligibility(
+            @RequestParam UUID userId,
+            @RequestParam UUID jurisdictionId) {
+        
+        boolean canVote = voteService.canUserVoteInJurisdiction(userId, jurisdictionId);
+        return ResponseEntity.ok(canVote);
+    }
 }

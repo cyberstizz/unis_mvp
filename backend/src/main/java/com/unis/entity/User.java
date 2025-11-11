@@ -31,7 +31,7 @@ public class User {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private Role role;  // Enum: listener, artist
+    private Role role;
 
     @Column(name = "supported_artist_id")
     private UUID supportedArtistId;
@@ -40,12 +40,15 @@ public class User {
     @JoinColumn(name = "jurisdiction_id")
     private Jurisdiction jurisdiction;
 
+    @Builder.Default  
     @Column
     private Integer score = 0;
 
+    @Builder.Default 
     @Column(name = "level")
     private String level = "silver";
 
+    @Builder.Default  
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -54,6 +57,10 @@ public class User {
 
     @Column
     private String bio;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "genre_id")
+    private Genre genre;
 
     public enum Role {
         listener, artist

@@ -15,4 +15,5 @@ public class UserDto {
     private String photoUrl;  // For photo update
     private String bio;  // For bio update
     private String newPassword;  // For password update
+    private UUID genreId;  // for artist registration
 }

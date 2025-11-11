@@ -3,6 +3,8 @@ package com.unis.controller;
 import com.unis.dto.UserDto;
 import com.unis.entity.User;
 import com.unis.repository.JurisdictionRepository;
+import com.unis.repository.GenreRepository;
+import com.unis.entity.Genre;
 import com.unis.entity.Jurisdiction;  
 import com.unis.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,21 +21,33 @@ public class UserController {
     private UserService userService;
 
     @Autowired
-    private JurisdictionRepository jurisdictionRepository;  // For fetching entity
+    private JurisdictionRepository jurisdictionRepository;
+
+    @Autowired
+    private GenreRepository genreRepository;
 
     // POST /api/v1/users/register (page 6 signup)
     @PostMapping("/register")
     public ResponseEntity<User> register(@RequestBody UserDto dto) {
-        User user = User.builder()  // Map DTO to entity
+        User user = User.builder()
             .username(dto.getUsername())
             .email(dto.getEmail())
-            .passwordHash(dto.getPassword())  // Hashed in service
+            .passwordHash(dto.getPassword())
             .role(User.Role.valueOf(dto.getRole()))
             .build();
+        
         // Fetch jurisdiction entity and set
         Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
             .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
         user.setJurisdiction(jurisdiction);
+        
+        // ADD THIS: Set genre for artists
+        if (dto.getGenreId() != null) {
+            Genre genre = genreRepository.findById(dto.getGenreId())
+                .orElseThrow(() -> new RuntimeException("Genre not found"));
+            user.setGenre(genre);
+        }
+        
         User registered = userService.register(user, dto.getSupportedArtistId());
         return ResponseEntity.ok(registered);
     }
