@@ -158,21 +158,21 @@ public List<?> getNominees(String targetType, UUID genreId, UUID jurisdictionId,
     if ("artist".equalsIgnoreCase(targetType)) {
         // Get artist IDs with vote counts first
         String countQuery = """
-            SELECT u.user_id, COALESCE(COUNT(v.vote_id), 0) as vote_count
-            FROM users u
-            LEFT JOIN votes v ON v.target_id = u.user_id 
-                AND v.target_type = 'artist'
-                AND v.genre_id = :genreId
-                AND v.jurisdiction_id IN (:jurisdictionIds)
-                AND v.interval_id = :intervalId
-                AND v.vote_date BETWEEN :startDate AND :endDate
-            WHERE u.role = 'ARTIST'
-              AND u.genre_id = :genreId
-              AND u.jurisdiction_id IN (:jurisdictionIds)
-            GROUP BY u.user_id
-            ORDER BY vote_count DESC
-            LIMIT :limit
-        """;
+        SELECT u.user_id, COALESCE(COUNT(v.vote_id), 0) as vote_count
+        FROM users u
+        LEFT JOIN votes v ON v.target_id = u.user_id 
+            AND v.target_type = 'artist'
+            AND v.genre_id = :genreId
+            AND v.jurisdiction_id IN (:jurisdictionIds)
+            AND v.interval_id = :intervalId
+            AND v.vote_date BETWEEN :startDate AND :endDate
+        WHERE u.role = 'artist'  
+        AND u.genre_id = :genreId
+        AND u.jurisdiction_id IN (:jurisdictionIds)  
+        GROUP BY u.user_id
+        ORDER BY vote_count DESC
+        LIMIT :limit
+    """;
         
         Query countQ = entityManager.createNativeQuery(countQuery);
         countQ.setParameter("genreId", genreId);
