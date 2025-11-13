@@ -15,6 +15,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 @Builder
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class Jurisdiction {
+    
     @Id
     @GeneratedValue
     @Column(columnDefinition = "UUID")
@@ -34,5 +35,8 @@ public class Jurisdiction {
     private LocalDateTime createdAt = LocalDateTime.now();
 
     @Column
-    private String bio;  // Added for page 8
+    private String bio;
+
+    @Column(name = "symbol_url")
+    private String symbolUrl;
 }

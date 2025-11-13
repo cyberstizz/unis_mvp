@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -63,15 +64,24 @@ public class JurisdictionService {
         }
     }
 
-    // Top 30 for jurisdiction (combined artists/songs with ranks)
     public Map<String, Object> getJurisdictionTops(UUID jurisdictionId) {
-        List<User> topArtists = getTopArtistsByJurisdiction(jurisdictionId, 30);
-        List<Song> topSongs = mediaService.getTopSongsByJurisdiction(jurisdictionId, 30);  // Uses recursive
-        List<Video> topVideos = mediaService.getTopVideosByJurisdiction(jurisdictionId, 30);  // Uses recursive
-        Map<String, Object> tops = new HashMap<>();
-            tops.put("topArtists", topArtists);
-            tops.put("topSongs", topSongs);
-            tops.put("topVideos", topVideos);
-        return tops;
-}
+    List<User> topArtists = userRepository.findTopArtistsByJurisdictionWithHierarchy(jurisdictionId, 30);  // New recursive
+    List<Song> topSongs = mediaService.getTopSongsByJurisdiction(jurisdictionId, 30);  // Your recursive query
+    List<Video> topVideos = mediaService.getTopVideosByJurisdiction(jurisdictionId, 30);  // Assume similar
+
+    Map<String, Object> tops = new HashMap<>();
+    tops.put("topArtists", topArtists);
+    tops.put("topSongs", topSongs);
+    tops.put("topVideos", topVideos);
+
+    // Add for frontend highlights (#1)
+    tops.put("topArtist", topArtists.isEmpty() ? null : topArtists.get(0));
+    tops.put("topSong", topSongs.isEmpty() ? null : topSongs.get(0));
+
+    return tops;
+   }
+
+    public Optional<Jurisdiction> getByName(String name) {
+        return jurisdictionRepository.findByName(name);
+    }
 }

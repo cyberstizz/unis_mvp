@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @RestController
@@ -33,5 +35,13 @@ public class JurisdictionController {
     public ResponseEntity<List<Object>> getTrendingMedia(@PathVariable UUID jurisdictionId, @RequestParam String type, @RequestParam(defaultValue = "30") int limit) {
         List<Object[]> trending = jurisdictionService.getTrendingMediaByJurisdiction(jurisdictionId, type, limit);
         return ResponseEntity.ok((List<Object>) (Object) trending);
+    }
+
+        @GetMapping("/byName/{name}")
+    public ResponseEntity<Map<String, Object>> getByName(@PathVariable String name) {
+        Optional<Jurisdiction> optJur = jurisdictionService.getByName(name);
+        if (optJur.isEmpty()) return ResponseEntity.notFound().build();
+        Jurisdiction jur = optJur.get();
+        return ResponseEntity.ok(Map.of("jurisdictionId", jur.getJurisdictionId(), "jurisdiction", jur));
     }
 }

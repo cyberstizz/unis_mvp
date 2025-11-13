@@ -17,14 +17,21 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByEmail(String email);
 
     // Replace the existing findByIdWithJurisdiction
-@Query("SELECT u FROM User u LEFT JOIN FETCH u.jurisdiction WHERE u.userId = :id")  
-Optional<User> findByIdWithJurisdiction(@Param("id") UUID id);  
+    @Query("SELECT u FROM User u LEFT JOIN FETCH u.jurisdiction WHERE u.userId = :id")  
+    Optional<User> findByIdWithJurisdiction(@Param("id") UUID id);  
 
-    @Query("SELECT u FROM User u WHERE u.role = 'artist' AND u.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY u.score DESC")
-    List<User> findTopArtistsByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId, int limit);
-
+    // Add this method (keep original JPQL if needed for other uses)
+    @Query(value = "WITH RECURSIVE jurisdiction_hierarchy AS ( " +
+            "  SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId " +
+            "  UNION ALL " +
+            "  SELECT j.jurisdiction_id FROM jurisdictions j JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id " +
+            ") " +
+            "SELECT u.* FROM users u JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id " +
+            "WHERE u.role = 'artist' " +
+            "ORDER BY u.score DESC LIMIT :limit", nativeQuery = true)
+    List<User> findTopArtistsByJurisdictionWithHierarchy(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
     // For score batch: Native for complex SUMs (only one definition)
-@Query(value = "SELECT u.user_id, " +
+    @Query(value = "SELECT u.user_id, " +
                "COALESCE((SELECT COUNT(r.referral_id) * 5 FROM referrals r WHERE r.referrer_id = u.user_id), 0) + " +
                "COALESCE((SELECT COUNT(sp.play_id) * 1 FROM song_plays sp WHERE sp.user_id = u.user_id), 0) + " +
                "COALESCE((SELECT COUNT(v.vote_id) * 2 FROM votes v WHERE v.user_id = u.user_id), 0) + " +
@@ -32,7 +39,7 @@ Optional<User> findByIdWithJurisdiction(@Param("id") UUID id);
                "u.score as new_score " +
                "FROM users u " +
                "GROUP BY u.user_id", nativeQuery = true)
-List<Object[]> computeUserScores();  // Returns [userId, newScore] arrays  // Returns [userId, newScore] arrays
+    List<Object[]> computeUserScores();  // Returns [userId, newScore] arrays  // Returns [userId, newScore] arrays
 
     @Modifying
     @Query("UPDATE User u SET u.score = :score, u.level = :level WHERE u.userId = :id")
