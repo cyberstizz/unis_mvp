@@ -30,18 +30,23 @@ public class JurisdictionController {
         return ResponseEntity.ok(tops);
     }
 
-    // GET /api/v1/jurisdictions/{id}/trending?type=song (page 8 trending media)
-    @GetMapping("/{jurisdictionId}/trending")
-    public ResponseEntity<List<Object>> getTrendingMedia(@PathVariable UUID jurisdictionId, @RequestParam String type, @RequestParam(defaultValue = "30") int limit) {
-        List<Object[]> trending = jurisdictionService.getTrendingMediaByJurisdiction(jurisdictionId, type, limit);
-        return ResponseEntity.ok((List<Object>) (Object) trending);
-    }
-
-        @GetMapping("/byName/{name}")
+    // GET /api/v1/jurisdictions/byName/{name}
+    @GetMapping("/byName/{name}")
     public ResponseEntity<Map<String, Object>> getByName(@PathVariable String name) {
         Optional<Jurisdiction> optJur = jurisdictionService.getByName(name);
         if (optJur.isEmpty()) return ResponseEntity.notFound().build();
         Jurisdiction jur = optJur.get();
         return ResponseEntity.ok(Map.of("jurisdictionId", jur.getJurisdictionId(), "jurisdiction", jur));
+    }
+
+    // GET /api/v1/jurisdictions/{id}/trending?type=...&genreId=...&limit=... (genreId optional)
+    @GetMapping("/{jurisdictionId}/trending")
+    public ResponseEntity<List<Object>> getTrendingMedia(
+            @PathVariable UUID jurisdictionId, 
+            @RequestParam String type, 
+            @RequestParam(required = false) UUID genreId,  // Optional for FindPage
+            @RequestParam(defaultValue = "30") int limit) {
+        List<Object[]> trending = jurisdictionService.getTrendingMediaByJurisdiction(jurisdictionId, type, genreId, limit);
+        return ResponseEntity.ok((List<Object>) (Object) trending);
     }
 }
