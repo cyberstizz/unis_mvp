@@ -52,8 +52,12 @@ public class AwardService {
     }
 
     // Get past awards/milestones (page 5; top for date range)
-    public List<Award> getPastAwards(String type, LocalDate start, LocalDate end, UUID jurisdictionId) {
-        return awardRepository.findTopByPeriod(jurisdictionId, null, start, end);
+    public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, UUID jurisdictionId, UUID genreId) {
+    List<Award> awards = awardRepository.findTopByPeriod(jurisdictionId, null, startDate, endDate);
+    if (genreId != null) {
+        awards = awards.stream().filter(a -> a.getGenre().getGenreId().equals(genreId)).toList();
+    }
+    return awards;
     }
 
     // Daily awards cron (midnight; top by votes for songs/artists per jurisdiction/genre/interval)
@@ -136,11 +140,58 @@ public class AwardService {
         computeForInterval(monthly.get().getIntervalId(), LocalDate.now());
         }
 
-        // General computeForInterval (dynamic range)
+        // General computeForInterval (dynamic range, mirror daily for all)
         public void computeForInterval(UUID intervalId, LocalDate cronDate) {
-        LocalDate startDate = getIntervalStartDate(intervalId, cronDate);  // Extend for past date
-        // Filter votes/plays BETWEEN startDate and cronDate
-        // Mirror song/artist logic
+        LocalDate startDate = getIntervalStartDate(intervalId, cronDate);
+        List<UUID> jurisdictions = jurisdictionRepository.findAllJurisdictionIds();
+        List<UUID> genres = genreRepository.findAllGenreIds();
+
+        for (UUID jurisdictionId : jurisdictions) {
+            for (UUID genreId : genres) {
+            // Top by votes for songs (filter for range)
+            List<Object[]> topSongVotes = voteRepository.findTopVoteCountsForRange(jurisdictionId, intervalId, startDate, cronDate);
+            for (Object[] top : topSongVotes) {
+                UUID targetId = (UUID) top[0];
+                int voteCount = ((Number) top[1]).intValue();
+                if (voteCount > 0) {
+                Award award = Award.builder()
+                    .targetType("song")
+                    .targetId(targetId)
+                    .genre(genreRepository.findById(genreId).orElse(null))
+                    .jurisdiction(jurisdictionRepository.findById(jurisdictionId).orElse(null))
+                    .interval(votingIntervalRepository.findById(intervalId).orElse(null))
+                    .awardDate(cronDate)
+                    .votesCount(voteCount)
+                    .engagementScore(voteCount * 10)
+                    .weight(100)
+                    .build();
+                awardRepository.save(award);
+                scoreUpdateService.onAward(targetId, 100);
+                }
+            }
+            // Mirror for artists
+            List<Object[]> topArtistVotes = voteRepository.findTopArtistVoteCountsForRange(jurisdictionId, intervalId, startDate, cronDate);
+            for (Object[] top : topArtistVotes) {
+                UUID targetId = (UUID) top[0];
+                int voteCount = ((Number) top[1]).intValue();
+                if (voteCount > 0) {
+                Award award = Award.builder()
+                    .targetType("artist")
+                    .targetId(targetId)
+                    .genre(genreRepository.findById(genreId).orElse(null))
+                    .jurisdiction(jurisdictionRepository.findById(jurisdictionId).orElse(null))
+                    .interval(votingIntervalRepository.findById(intervalId).orElse(null))
+                    .awardDate(cronDate)
+                    .votesCount(voteCount)
+                    .engagementScore(voteCount * 10)
+                    .weight(100)
+                    .build();
+                awardRepository.save(award);
+                scoreUpdateService.onAward(targetId, 100);
+                }
+            }
+            }
+        }
         }
 
         // Extend getIntervalStartDate for past date

@@ -1,6 +1,8 @@
 package com.unis.controller;
 
+import com.unis.dto.AwardDto;
 import com.unis.entity.Award;
+import com.unis.repository.AwardRepository;
 import com.unis.service.AwardService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -12,8 +14,12 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/awards")
 public class AwardController {
+
     @Autowired
     private AwardService awardService;
+
+    @Autowired
+    private AwardRepository awardRepository;
 
     // GET /api/v1/awards/leaderboards?type={type}&intervalId={id}&jurisdictionId={id} (page 4 current leaderboards)
     @GetMapping("/leaderboards")
@@ -31,8 +37,9 @@ public class AwardController {
             @RequestParam String type,
             @RequestParam LocalDate startDate,
             @RequestParam LocalDate endDate,
-            @RequestParam(required = false) UUID jurisdictionId) {
-        List<Award> awards = awardService.getPastAwards(type, startDate, endDate, jurisdictionId);
+            @RequestParam(required = false) UUID jurisdictionId,
+            @RequestParam(required = false) UUID genreId) {
+        List<Award> awards = awardService.getPastAwards(type, startDate, endDate, jurisdictionId, genreId);
         return ResponseEntity.ok(awards);
     }
 
@@ -51,5 +58,16 @@ public class AwardController {
         awardService.computeForInterval(intervalId, cronDate);
         return ResponseEntity.ok("Computed for " + cronDate);
     }
+
+    // @GetMapping
+    // public ResponseEntity<List<Award>> getMilestones(
+    // @RequestParam UUID jurisdictionId,
+    // @RequestParam(required = false) UUID genreId,
+    // @RequestParam String targetType,
+    // @RequestParam LocalDate startDate,
+    // @RequestParam LocalDate endDate) {
+    // List<Award> awards = awardService.getPastAwards(targetType, startDate, endDate, jurisdictionId, genreId);
+    // return ResponseEntity.ok(awards);
+    // }
 
 }

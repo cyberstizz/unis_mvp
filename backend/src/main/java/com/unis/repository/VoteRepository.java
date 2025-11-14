@@ -45,4 +45,15 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
 
     @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.target_type = 'artist' AND v.vote_date = :voteDate GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)
     List<Object[]> findTopArtistVoteCountsForDate(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("voteDate") LocalDate voteDate);
+
+    // Top vote counts for range (for multi-interval cron)
+    @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.target_type = 'song' AND v.vote_date BETWEEN :startDate AND :endDate GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)
+    List<Object[]> findTopVoteCountsForRange(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate);
+
+    @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.target_type = 'artist' AND v.vote_date BETWEEN :startDate AND :endDate GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)
+    List<Object[]> findTopArtistVoteCountsForRange(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate);
+
 }
+
+
+

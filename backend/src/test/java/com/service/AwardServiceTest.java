@@ -82,7 +82,7 @@ class AwardServiceTest {
         List<Award> mockAwards = List.of(Award.builder().votesCount(5).build());
         when(awardRepository.findTopByPeriod(testJurisdictionId, null, start, end)).thenReturn(mockAwards);
 
-        List<Award> result = awardService.getPastAwards("song", start, end, testJurisdictionId);
+        List<Award> result = awardService.getPastAwards("song", start, end, testJurisdictionId, testGenreId);
 
         assertEquals(1, result.size());
         verify(awardRepository).findTopByPeriod(testJurisdictionId, null, start, end);

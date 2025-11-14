@@ -52,4 +52,7 @@ public class Award {
 
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    @Column(name = "caption")
+    private String caption;
 }

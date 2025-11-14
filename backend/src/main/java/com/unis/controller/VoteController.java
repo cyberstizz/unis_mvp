@@ -11,10 +11,13 @@ import com.unis.repository.UserRepository;
 import com.unis.repository.GenreRepository;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.VotingIntervalRepository;
+import com.unis.service.AwardService;
 import com.unis.service.VoteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -23,6 +26,9 @@ import java.util.UUID;
 public class VoteController {
     @Autowired
     private VoteService voteService;
+
+    @Autowired
+    private AwardService awardService;
 
     @Autowired
     private UserRepository userRepository;
@@ -138,4 +144,10 @@ public class VoteController {
         List<LeaderboardDto> leaderboard = voteService.getLeaderboard(targetType, genreId, jurisdictionId, intervalId, limit);  // Pass playsOnly to service
         return ResponseEntity.ok(leaderboard);
 }
+    @PostMapping("/awards/compute")
+    public ResponseEntity<String> computeAwards(@RequestParam UUID intervalId, @RequestParam(required = false) LocalDate date) {
+    LocalDate cronDate = date != null ? date : LocalDate.now();
+    awardService.computeForInterval(intervalId, cronDate);
+    return ResponseEntity.ok("Computed for " + cronDate);
+    }
 }
