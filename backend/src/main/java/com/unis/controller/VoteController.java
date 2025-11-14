@@ -1,5 +1,6 @@
 package com.unis.controller;
 
+import com.unis.dto.LeaderboardDto;
 import com.unis.dto.VoteRequest;
 import com.unis.entity.Vote;
 import com.unis.entity.VotingInterval;
@@ -124,4 +125,17 @@ public class VoteController {
         boolean canVote = voteService.canUserVoteInJurisdiction(userId, jurisdictionId);
         return ResponseEntity.ok(canVote);
     }
+
+   @GetMapping("/leaderboards")
+    public ResponseEntity<List<LeaderboardDto>> getLeaderboards(
+        @RequestParam UUID jurisdictionId,
+        @RequestParam UUID genreId,
+        @RequestParam String targetType,
+        @RequestParam UUID intervalId,
+        @RequestParam(defaultValue = "50") int limit,
+        @RequestParam(required = false) boolean playsOnly) {  // For fallback
+        System.out.println("Leaderboards hit: jur=" + jurisdictionId + ", genre=" + genreId + ", type=" + targetType + ", interval=" + intervalId + ", limit=" + limit + ", playsOnly=" + playsOnly);  // Debug
+        List<LeaderboardDto> leaderboard = voteService.getLeaderboard(targetType, genreId, jurisdictionId, intervalId, limit);  // Pass playsOnly to service
+        return ResponseEntity.ok(leaderboard);
+}
 }

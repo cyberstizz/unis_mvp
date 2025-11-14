@@ -7,7 +7,9 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "awards")
+@Table(name = "awards", uniqueConstraints = {
+  @UniqueConstraint(columnNames = {"target_type", "target_id", "jurisdiction_id", "interval_id", "award_date"})
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

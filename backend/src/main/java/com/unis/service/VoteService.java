@@ -2,6 +2,9 @@ package com.unis.service;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
+import lombok.Builder;
+import lombok.Data;
+
 import com.unis.entity.Song;
 import com.unis.entity.User;
 import com.unis.entity.Jurisdiction;
@@ -9,6 +12,7 @@ import com.unis.repository.UserRepository;
 import java.time.DayOfWeek;
 import com.unis.entity.Vote;
 import com.unis.entity.VotingInterval;
+import com.unis.dto.LeaderboardDto;
 import com.unis.entity.Award;
 import com.unis.repository.VoteRepository;
 import com.unis.repository.SongRepository;
@@ -328,4 +332,147 @@ public List<?> getNominees(String targetType, UUID genreId, UUID jurisdictionId,
         
         return false;
     }
+
+   // GET /v1/leaderboards - Live rankings (votes + plays, interval range, fallback top plays)
+    @SuppressWarnings("unchecked")
+    public List<LeaderboardDto> getLeaderboard(String targetType, UUID genreId, UUID jurisdictionId, UUID intervalId, int limit) {
+        LocalDate startDate = getIntervalStartDate(intervalId);
+        LocalDate endDate = LocalDate.now();
+        List<UUID> jurisdictionIds = getJurisdictionHierarchy(jurisdictionId);
+
+        if ("artist".equalsIgnoreCase(targetType)) {
+            String query = """
+            WITH RECURSIVE jurisdiction_hierarchy AS (
+                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+                UNION ALL
+                SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            )
+            SELECT u.user_id, u.username, COALESCE(COUNT(v.vote_id), 0) + COALESCE(COUNT(sp.play_id), 0) as score, u.photo_url
+            FROM users u LEFT JOIN votes v ON v.target_id = u.user_id AND v.target_type = 'artist' AND v.genre_id = :genreId AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId AND v.vote_date BETWEEN :startDate AND :endDate
+            LEFT JOIN song_plays sp ON sp.song_id IN (SELECT s.song_id FROM songs s WHERE s.artist_id = u.user_id) AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+            JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
+            WHERE u.role = 'artist' AND u.genre_id = :genreId
+            GROUP BY u.user_id, u.username, u.photo_url
+            ORDER BY score DESC, COUNT(v.vote_id) DESC
+            LIMIT :limit
+            """;
+            Query q = entityManager.createNativeQuery(query);
+            q.setParameter("jurisdictionId", jurisdictionId);
+            q.setParameter("genreId", genreId);
+            q.setParameter("jurisdictionIds", jurisdictionIds);
+            q.setParameter("intervalId", intervalId);
+            q.setParameter("startDate", startDate);
+            q.setParameter("endDate", endDate);
+            q.setParameter("limit", limit);
+            List<Object[]> results = q.getResultList();
+
+            // Fallback if <5: Top by plays only (no :jurisdictionIds needed)
+            if (results.size() < 5) {
+            String fallbackQuery = """
+                WITH RECURSIVE jurisdiction_hierarchy AS (
+                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+                UNION ALL
+                SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+                )
+                SELECT u.user_id, u.username, COALESCE(COUNT(sp.play_id), 0) as score, u.photo_url
+                FROM users u LEFT JOIN song_plays sp ON sp.song_id IN (SELECT s.song_id FROM songs s WHERE s.artist_id = u.user_id) AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
+                WHERE u.role = 'artist' AND u.genre_id = :genreId
+                GROUP BY u.user_id, u.username, u.photo_url
+                ORDER BY score DESC
+                LIMIT :fallbackLimit
+            """;
+            Query fq = entityManager.createNativeQuery(fallbackQuery);
+            fq.setParameter("jurisdictionId", jurisdictionId);
+            fq.setParameter("genreId", genreId);
+            fq.setParameter("startDate", startDate);
+            fq.setParameter("endDate", endDate);
+            fq.setParameter("fallbackLimit", 5 - results.size());
+            // No fq.setParameter("jurisdictionIds", jurisdictionIds); — not used
+            List<Object[]> fallback = fq.getResultList();
+            results.addAll(fallback);
+            }
+
+            // Normalize
+            List<LeaderboardDto> leaderboard = new ArrayList<>();
+            for (int i = 0; i < results.size(); i++) {
+            Object[] row = results.get(i);
+            leaderboard.add(LeaderboardDto.builder()
+                .rank(i + 1)
+                .name(row[1].toString())
+                .votes((Long) row[2])
+                .artwork(row[3] != null ? row[3].toString() : null)
+                .build());
+            }
+            return leaderboard;
+        } else {  // song branch
+            String query = """
+            WITH RECURSIVE jurisdiction_hierarchy AS (
+                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+                UNION ALL
+                SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            )
+            SELECT s.song_id, s.title, COALESCE(COUNT(v.vote_id), 0) + COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist
+            FROM songs s LEFT JOIN votes v ON v.target_id = s.song_id AND v.target_type = 'song' AND v.genre_id = :genreId AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId AND v.vote_date BETWEEN :startDate AND :endDate
+            LEFT JOIN song_plays sp ON sp.song_id = s.song_id AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+            INNER JOIN users a ON s.artist_id = a.user_id JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
+            WHERE s.genre_id = :genreId
+            GROUP BY s.song_id, s.title, s.artwork_url, a.username
+            ORDER BY score DESC, COUNT(v.vote_id) DESC
+            LIMIT :limit
+            """;
+            Query q = entityManager.createNativeQuery(query);
+            q.setParameter("jurisdictionId", jurisdictionId);
+            q.setParameter("genreId", genreId);
+            q.setParameter("jurisdictionIds", jurisdictionIds);
+            q.setParameter("intervalId", intervalId);
+            q.setParameter("startDate", startDate);
+            q.setParameter("endDate", endDate);
+            q.setParameter("limit", limit);
+            List<Object[]> results = q.getResultList();
+
+            // Fallback if <5: Top by plays only
+            if (results.size() < 5) {
+            String fallbackQuery = """
+                WITH RECURSIVE jurisdiction_hierarchy AS (
+                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+                UNION ALL
+                SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+                )
+                SELECT s.song_id, s.title, COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist
+                FROM songs s LEFT JOIN song_plays sp ON sp.song_id = s.song_id AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                INNER JOIN users a ON s.artist_id = a.user_id JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
+                WHERE s.genre_id = :genreId
+                GROUP BY s.song_id, s.title, s.artwork_url, a.username
+                ORDER BY score DESC
+                LIMIT :fallbackLimit
+            """;
+            Query fq = entityManager.createNativeQuery(fallbackQuery);
+            fq.setParameter("jurisdictionId", jurisdictionId);
+            fq.setParameter("genreId", genreId);
+            fq.setParameter("startDate", startDate);
+            fq.setParameter("endDate", endDate);
+            fq.setParameter("fallbackLimit", 5 - results.size());
+            // No fq.setParameter("jurisdictionIds", jurisdictionIds); — not used
+            List<Object[]> fallback = fq.getResultList();
+            results.addAll(fallback);
+            }
+
+            // Normalize
+            List<LeaderboardDto> leaderboard = new ArrayList<>();
+            for (int i = 0; i < results.size(); i++) {
+            Object[] row = results.get(i);
+            leaderboard.add(LeaderboardDto.builder()
+                .rank(i + 1)
+                .name(row[1].toString())
+                .votes((Long) row[2])
+                .artwork(row[3] != null ? row[3].toString() : null)
+                .artist(row[4] != null ? row[4].toString() : null)
+                .build());
+            }
+            return leaderboard;
+        }
+    }
+
 }
+

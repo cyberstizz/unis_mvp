@@ -43,4 +43,13 @@ public class AwardController {
         awardService.computeDailyAwardsForDate(cronDate);  // Add method to service
         return ResponseEntity.ok("Cron triggered for " + cronDate + "—check DB awards");
     }
+
+    // Manual endpoint in VoteController
+    @PostMapping("/awards/compute")
+    public ResponseEntity<String> computeAwards(@RequestParam UUID intervalId, @RequestParam(required = false) LocalDate date) {
+        LocalDate cronDate = date != null ? date : LocalDate.now();
+        awardService.computeForInterval(intervalId, cronDate);
+        return ResponseEntity.ok("Computed for " + cronDate);
+    }
+
 }
