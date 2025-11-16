@@ -50,4 +50,8 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
 
     @Query("SELECT s FROM Song s JOIN s.artist a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY s.score DESC")
     List<Song> findTopByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId);
+
+    @Query("SELECT s FROM Song s WHERE s.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY s.score DESC")
+    List<Song> findByJurisdictionOrderByScoreDesc(@Param("jurisdictionId") UUID jurisdictionId);
+
 }

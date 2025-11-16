@@ -1,8 +1,6 @@
 package com.unis.controller;
 
-import com.unis.dto.AwardDto;
 import com.unis.entity.Award;
-import com.unis.repository.AwardRepository;
 import com.unis.service.AwardService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -18,9 +16,6 @@ public class AwardController {
     @Autowired
     private AwardService awardService;
 
-    @Autowired
-    private AwardRepository awardRepository;
-
     // GET /api/v1/awards/leaderboards?type={type}&intervalId={id}&jurisdictionId={id} (page 4 current leaderboards)
     @GetMapping("/leaderboards")
     public ResponseEntity<List<Award>> getLeaderboards(
@@ -31,7 +26,7 @@ public class AwardController {
         return ResponseEntity.ok(awards);
     }
 
-    // GET /api/v1/awards/past?type={type}&startDate={date}&endDate={date}&jurisdictionId={id} (page 5 past milestones)
+    // GET /api/v1/awards/past?type={type}&startDate={date}&endDate={date}&jurisdictionId={id}&genreId={id} (page 5 past milestones)
     @GetMapping("/past")
     public ResponseEntity<List<Award>> getPastAwards(
             @RequestParam String type,
@@ -47,27 +42,19 @@ public class AwardController {
     @GetMapping("/cron/manual")
     public ResponseEntity<String> manualCron(@RequestParam(required = false) String date) {
         LocalDate cronDate = date != null ? LocalDate.parse(date) : LocalDate.now();
-        awardService.computeDailyAwardsForDate(cronDate);  // Add method to service
+        awardService.computeDailyAwardsForDate(cronDate);
         return ResponseEntity.ok("Cron triggered for " + cronDate + "—check DB awards");
     }
 
-    // Manual endpoint in VoteController
+    // FIXED: Now passes all 4 required parameters
     @PostMapping("/awards/compute")
-    public ResponseEntity<String> computeAwards(@RequestParam UUID intervalId, @RequestParam(required = false) LocalDate date) {
+    public ResponseEntity<String> computeAwards(
+            @RequestParam UUID intervalId, 
+            @RequestParam(required = false) UUID jurisdictionId,
+            @RequestParam(required = false) UUID genreId,
+            @RequestParam(required = false) LocalDate date) {
         LocalDate cronDate = date != null ? date : LocalDate.now();
-        awardService.computeForInterval(intervalId, cronDate);
-        return ResponseEntity.ok("Computed for " + cronDate);
+        awardService.computeForInterval(intervalId, jurisdictionId, genreId, cronDate);
+        return ResponseEntity.ok("Computed for interval " + intervalId + " on " + cronDate);
     }
-
-    // @GetMapping
-    // public ResponseEntity<List<Award>> getMilestones(
-    // @RequestParam UUID jurisdictionId,
-    // @RequestParam(required = false) UUID genreId,
-    // @RequestParam String targetType,
-    // @RequestParam LocalDate startDate,
-    // @RequestParam LocalDate endDate) {
-    // List<Award> awards = awardService.getPastAwards(targetType, startDate, endDate, jurisdictionId, genreId);
-    // return ResponseEntity.ok(awards);
-    // }
-
 }

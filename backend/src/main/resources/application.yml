@@ -47,3 +47,7 @@ logging:
     com.unis: DEBUG
     org.springframework.security: DEBUG
     org.springframework.web.multipart: DEBUG
+
+# New configuration property added here
+unis:
+  auto-populate-awards: true

@@ -136,9 +136,19 @@ public class ScoreUpdateService {
         return "silver";
     }
 
-    public void onAward(UUID targetId, int i) {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'onAward'");
+    // Fixed: Implement onAward (increment target score/level on win)
+    @Transactional
+    public void onAward(UUID targetId, int weight) {
+        User target = userRepository.findById(targetId).orElse(null);
+        if (target != null) {
+            int newScore = target.getScore() + weight;  // e.g., 100 for daily win
+            String level = getLevel(newScore);
+            target.setScore(newScore);
+            target.setLevel(level);
+            userRepository.save(target);
+            System.out.println("Award score updated for " + target.getUsername() + ": + " + weight + " (new " + newScore + ")");
+        } else {
+            System.out.println("Target not found for award score update: " + targetId);
+        }
     }
-
 }

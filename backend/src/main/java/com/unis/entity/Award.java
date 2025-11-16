@@ -55,4 +55,11 @@ public class Award {
 
     @Column(name = "caption")
     private String caption;
+
+    // Transient fields for frontend (populated by service layer)
+    @Transient
+    private Song song;
+
+    @Transient
+    private User user;
 }

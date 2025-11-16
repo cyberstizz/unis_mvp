@@ -145,9 +145,13 @@ public class VoteController {
         return ResponseEntity.ok(leaderboard);
 }
     @PostMapping("/awards/compute")
-    public ResponseEntity<String> computeAwards(@RequestParam UUID intervalId, @RequestParam(required = false) LocalDate date) {
+    public ResponseEntity<String> computeAwards(
+        @RequestParam UUID intervalId,
+        @RequestParam UUID jurisdictionId,
+        @RequestParam UUID genreId,
+        @RequestParam(required = false) LocalDate date) {
     LocalDate cronDate = date != null ? date : LocalDate.now();
-    awardService.computeForInterval(intervalId, cronDate);
+    awardService.computeForInterval(intervalId, jurisdictionId, genreId, cronDate);
     return ResponseEntity.ok("Computed for " + cronDate);
     }
 }
