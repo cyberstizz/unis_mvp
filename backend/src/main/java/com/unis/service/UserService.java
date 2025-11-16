@@ -1,12 +1,12 @@
 package com.unis.service;
 
 import com.unis.entity.User;
+import com.unis.entity.Song;
 import com.unis.entity.Supporter;
 import com.unis.repository.UserRepository;
-
+import com.unis.repository.SongRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
-
 import com.unis.repository.SupporterRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,12 +28,13 @@ public class UserService {
     private SupporterRepository supporterRepository;
 
     @Autowired
+    private SongRepository songRepository;
+
+    @Autowired
     private PasswordEncoder passwordEncoder;
 
     @Autowired 
     private EntityManager entityManager;
-
-    
 
     // Register new user (mandatory supported_artist_id for listeners only)
     public User register(User newUser, UUID supportedArtistId) {
@@ -64,11 +65,24 @@ public class UserService {
         return savedUser;
     }
 
-    // Fetch profile (full with jurisdiction)
+    // Fetch profile (full with jurisdiction and default song if artist)
+    // In UserService.java - Update the getProfile method
     public User getProfile(UUID userId) {
         Optional<User> optionalUser = userRepository.findByIdWithJurisdiction(userId);
-        return optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
-    }
+        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
+        
+        // Populate default song if artist
+        if ("artist".equals(user.getRole().toString()) && user.getDefaultSongId() != null) {
+            songRepository.findById(user.getDefaultSongId()).ifPresent(user::setDefaultSong);
+        }
+        
+        // CRITICAL: Force load jurisdiction to avoid lazy load issues
+        if (user.getJurisdiction() != null) {
+            user.getJurisdiction().getName(); // Trigger lazy load
+        }
+        
+        return user;
+}
 
     // Update photo
     public User updatePhoto(UUID userId, String photoUrl) {
@@ -86,6 +100,29 @@ public class UserService {
         return userRepository.save(user);
     }
 
+    // NEW: Update default song (artists only)
+    public User updateDefaultSong(UUID userId, UUID defaultSongId) {
+        Optional<User> optionalUser = userRepository.findById(userId);
+        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
+        
+        if (!"artist".equals(user.getRole().toString())) {
+            throw new RuntimeException("Only artists can set a default song");
+        }
+        
+        // Verify song exists and belongs to this artist
+        if (defaultSongId != null) {
+            Optional<Song> optionalSong = songRepository.findById(defaultSongId);
+            Song song = optionalSong.orElseThrow(() -> new RuntimeException("Song not found"));
+            
+            if (!song.getArtist().getUserId().equals(userId)) {
+                throw new RuntimeException("Song must belong to the artist");
+            }
+        }
+        
+        user.setDefaultSongId(defaultSongId);
+        return userRepository.save(user);
+    }
+
     // Update password (validate old)
     public User updatePassword(UUID userId, String oldPassword, String newPassword) {
         Optional<User> optionalUser = userRepository.findById(userId);
@@ -97,15 +134,19 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // Artist page fetch (user + media/awards count)
+    // Artist page fetch (user + media/awards count + default song)
     public User getArtistProfile(UUID artistId) {
         Optional<User> optionalArtist = userRepository.findByIdWithJurisdiction(artistId);
         User artist = optionalArtist.orElseThrow(() -> new RuntimeException("Artist not found"));
         if (!"artist".equals(artist.getRole().toString())) {
             throw new RuntimeException("Not an artist");
         }
-        // Add counts if needed (e.g., via repo queries)
-        // artist.setSupporterCount(supporterRepository.countByArtist(artist));
+        
+        // Populate default song
+        if (artist.getDefaultSongId() != null) {
+            songRepository.findById(artist.getDefaultSongId()).ifPresent(artist::setDefaultSong);
+        }
+        
         return artist;
     }
 
@@ -123,11 +164,11 @@ public class UserService {
             SELECT j.jurisdiction_id FROM jurisdictions j
             INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
             )
-            SELECT DISTINCT u.user_id, u.username, COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) as total_score
+            SELECT DISTINCT u.user_id, u.username, u.default_song_id, COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) as total_score
             FROM users u
             LEFT JOIN songs s ON s.artist_id = u.user_id AND s.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
             LEFT JOIN videos v ON v.artist_id = u.user_id AND v.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
-            GROUP BY u.user_id, u.username
+            GROUP BY u.user_id, u.username, u.default_song_id
             HAVING COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) > 0  -- Only scored artists
             ORDER BY total_score DESC
             LIMIT :limit
@@ -144,10 +185,16 @@ public class UserService {
                     User artist = new User();
                     artist.setUserId((UUID) row[0]);
                     artist.setUsername((String) row[1]);
-                    // Optional: artist.setTotalScore(((Number) row[2]).intValue()); if adding field
+                    UUID defaultSongId = (UUID) row[2];
+                    artist.setDefaultSongId(defaultSongId);
+                    
+                    // Populate default song if exists
+                    if (defaultSongId != null) {
+                        songRepository.findById(defaultSongId).ifPresent(artist::setDefaultSong);
+                    }
+                    
                     return artist;
                 })
                 .collect(Collectors.toList());
     }
-   
 }

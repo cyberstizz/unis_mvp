@@ -62,6 +62,13 @@ public class User {
     @JoinColumn(name = "genre_id")
     private Genre genre;
 
+    @Column(name = "default_song_id")
+    private UUID defaultSongId;
+
+    // Transient field to hold the actual Song object when needed (populated by service layer)
+    @Transient
+    private Song defaultSong;
+
     public enum Role {
         listener, artist
     }

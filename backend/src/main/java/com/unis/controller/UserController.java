@@ -4,14 +4,18 @@ import com.unis.dto.UserDto;
 import com.unis.entity.User;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.GenreRepository;
+import com.unis.repository.UserRepository;
+import com.unis.repository.SongRepository;
 import com.unis.entity.Genre;
-import com.unis.entity.Jurisdiction;  
+import com.unis.entity.Jurisdiction;
+import com.unis.entity.Song;
 import com.unis.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @RestController
@@ -25,6 +29,12 @@ public class UserController {
 
     @Autowired
     private GenreRepository genreRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private SongRepository songRepository;
 
     // POST /api/v1/users/register (page 6 signup)
     @PostMapping("/register")
@@ -53,10 +63,11 @@ public class UserController {
     }
 
     // GET /api/v1/users/profile/{id} (page 6 dashboard)
-    @GetMapping("/profile/{userId}")
+   @GetMapping("/profile/{userId}")
     public ResponseEntity<User> getProfile(@PathVariable UUID userId) {
-        User profile = userService.getProfile(userId);
-        return ResponseEntity.ok(profile);
+    Optional<User> optUser = userRepository.findByIdWithAssociations(userId);
+    if (optUser.isEmpty()) return ResponseEntity.notFound().build();
+    return ResponseEntity.ok(optUser.get());  // Full with jurisdiction/defaultSong
     }
 
     // PUT /api/v1/users/profile/{id}/photo (edit photo)
@@ -92,5 +103,13 @@ public class UserController {
         // Use native query in UserService: SUM(s.score) GROUP BY artist_id ORDER DESC (JOIN songs/videos)
         List<User> tops = userService.getTopArtistsByJurisdiction(jurisdictionId, limit);
         return ResponseEntity.ok(tops);
+    }
+
+    @GetMapping("/{userId}/default-song")
+    public ResponseEntity<Song> getDefaultSong(@PathVariable UUID userId) {
+    Optional<User> optUser = userRepository.findById(userId);
+    if (optUser.isEmpty() || optUser.get().getDefaultSongId() == null) return ResponseEntity.notFound().build();
+    Optional<Song> optSong = songRepository.findById(optUser.get().getDefaultSongId());
+    return optSong.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
     }
 }
