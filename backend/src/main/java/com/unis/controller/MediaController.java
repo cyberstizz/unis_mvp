@@ -3,6 +3,7 @@ package com.unis.controller;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
 import com.unis.service.MediaService;
+import lombok.extern.slf4j.Slf4j;  // For log.error (add to pom.xml if needed: lombok)
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -15,6 +16,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/media")
 public class MediaController {
@@ -108,16 +110,27 @@ public class MediaController {
         return ResponseEntity.ok(mixed.stream().limit(limit).collect(Collectors.toList()));  // Mix + limit
     }
 
-    @GetMapping("/new")
-    public ResponseEntity<List<Object>> getNewMedia(@RequestParam UUID jurisdictionId, @RequestParam(defaultValue = "5") int limit) {
-        // TODO: Implement by created_at DESC (add to MediaService: @Query native "SELECT * FROM songs WHERE jurisdiction_id = ?1 ORDER BY created_at DESC LIMIT ?2")
-        // Fallback: Top for MVP
-        return getTrendingMedia(jurisdictionId, limit);  // Reuse until new impl
-    }
-
     @GetMapping("/song/{songId}")
     public ResponseEntity<Song> getSong(@PathVariable UUID songId) {
         Song song = mediaService.getSongById(songId);
         return ResponseEntity.ok(song);
+    }
+
+    @GetMapping("/new")
+    public ResponseEntity<List<Song>> getNewMedia(@RequestParam UUID jurisdictionId, @RequestParam(defaultValue = "5") int limit) {
+        try {
+            List<Song> newSongs = mediaService.getNewSongsByJurisdiction(jurisdictionId, limit);  // Songs-only, recency-based
+            return ResponseEntity.ok(newSongs);
+        } catch (Exception e) {
+            log.error("New media query failed, falling back to trending:", e);  // FIXED: Java logging
+            // Fallback: Get trending, filter to songs only
+            List<Object> trendingMixed = getTrendingMedia(jurisdictionId, limit).getBody();
+            List<Song> fallbackSongs = trendingMixed.stream()
+                .filter(o -> o instanceof Song)
+                .map(o -> (Song) o)
+                .limit(limit)
+                .collect(Collectors.toList());
+            return ResponseEntity.ok(fallbackSongs);
+        }
     }
 }

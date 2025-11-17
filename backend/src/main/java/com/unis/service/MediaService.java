@@ -344,4 +344,29 @@ public class MediaService {
         return videoRepository.findById(videoId)
             .orElseThrow(() -> new RuntimeException("Video not found: " + videoId));
     }
+
+        // Get newest songs by created_at in jurisdiction + hierarchy (for feed new releases)
+    public List<Song> getNewSongsByJurisdiction(UUID jurisdictionId, int limit) {
+        String query = """
+            WITH RECURSIVE jurisdiction_hierarchy AS (
+            SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+            UNION ALL
+            SELECT j.jurisdiction_id FROM jurisdictions j
+            INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            )
+            SELECT s.* FROM songs s
+            INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
+            ORDER BY COALESCE(s.created_at, '1900-01-01T00:00:00') DESC
+            LIMIT :limit
+            """;
+        
+        Query q = entityManager.createNativeQuery(query, Song.class);
+        q.setParameter("jurisdictionId", jurisdictionId);
+        q.setParameter("limit", limit);
+        
+        @SuppressWarnings("unchecked")
+        List<Song> results = q.getResultList();
+        return results.isEmpty() ? getFallbackSongs(limit) : results;  // Same fallback
+    }
+
 }
