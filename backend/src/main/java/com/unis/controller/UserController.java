@@ -112,4 +112,5 @@ public class UserController {
     Optional<Song> optSong = songRepository.findById(optUser.get().getDefaultSongId());
     return optSong.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
     }
+
 }
