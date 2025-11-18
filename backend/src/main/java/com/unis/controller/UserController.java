@@ -12,6 +12,8 @@ import com.unis.entity.Song;
 import com.unis.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -111,6 +113,13 @@ public class UserController {
     if (optUser.isEmpty() || optUser.get().getDefaultSongId() == null) return ResponseEntity.notFound().build();
     Optional<Song> optSong = songRepository.findById(optUser.get().getDefaultSongId());
     return optSong.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/me")
+    public ResponseEntity<Void> deleteMyAccount(Authentication auth) {
+        UUID userId = UUID.fromString(auth.getName());
+        userService.deleteCurrentUserAndAllData(userId);
+        return ResponseEntity.ok().build();
     }
 
 }

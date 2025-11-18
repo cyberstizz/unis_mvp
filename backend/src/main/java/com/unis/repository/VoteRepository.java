@@ -2,6 +2,7 @@ package com.unis.repository;
 
 import com.unis.entity.Vote;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -53,6 +54,13 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
     @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.target_type = 'artist' AND v.vote_date BETWEEN :startDate AND :endDate GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)
     List<Object[]> findTopArtistVoteCountsForRange(@Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("startDate") LocalDate startDate, @Param("endDate") LocalDate endDate);
 
+    @Modifying
+    @Query("DELETE FROM Vote v WHERE v.user.userId = :userId")
+    void deleteByUserUserId(@Param("userId") UUID userId);
+
+    @Modifying
+    @Query("DELETE FROM Vote v WHERE v.targetType = 'artist' AND v.targetId = :artistId")
+    void deleteByTargetArtistId(@Param("artistId") UUID artistId);
 }
 
 

@@ -2,6 +2,7 @@ package com.unis.repository;
 
 import com.unis.entity.AdView;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -23,4 +24,8 @@ public interface AdViewRepository extends JpaRepository<AdView, UUID> {
     // For earnings aggregate (last 30 days)
     @Query("SELECT DATE(a.viewedAt) as day, SUM(a.revenueShare) as total FROM AdView a WHERE a.supportedArtist.userId = :artistId AND a.viewedAt >= :startDate GROUP BY day ORDER BY day")
     List<Object[]> getEarningsLastDays(@Param("artistId") UUID artistId, @Param("startDate") LocalDateTime startDate);
+
+    @Modifying
+    @Query("DELETE FROM AdView av WHERE av.user.userId = :userId")
+    void deleteByUserUserId(@Param("userId") UUID userId);
 }

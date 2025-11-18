@@ -3,6 +3,7 @@ package com.unis.repository;
 import com.unis.entity.Supporter;
 import com.unis.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -25,4 +26,8 @@ public interface SupporterRepository extends JpaRepository<Supporter, UUID> {
 
     // Check if listener supports artist (for validation)
     boolean existsByListenerAndArtist(User listener, User artist);
+
+    @Modifying
+    @Query("DELETE FROM Supporter s WHERE s.artist.userId = :artistId")
+    void deleteByArtistUserId(@Param("artistId") UUID artistId);
 }

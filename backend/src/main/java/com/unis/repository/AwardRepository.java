@@ -42,4 +42,8 @@ public interface AwardRepository extends JpaRepository<Award, UUID> {
 
     @Query(value = "SELECT COUNT(*) FROM awards a WHERE a.target_type = :targetType AND a.target_id = :targetId AND a.jurisdiction_id = :jurisdictionId AND a.interval_id = :intervalId AND a.award_date = :awardDate", nativeQuery = true)
     Long existsByTargetTypeAndTargetIdAndJurisdictionIdAndIntervalIdAndAwardDate(@Param("targetType") String targetType, @Param("targetId") UUID targetId, @Param("jurisdictionId") UUID jurisdictionId, @Param("intervalId") UUID intervalId, @Param("awardDate") LocalDate awardDate);
+
+    @Modifying
+    @Query("DELETE FROM Award a WHERE a.targetType = 'artist' AND a.targetId = :artistId")
+    void deleteByTargetArtistId(@Param("artistId") UUID artistId);
 }

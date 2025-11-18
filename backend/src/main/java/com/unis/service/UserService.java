@@ -197,4 +197,43 @@ public class UserService {
                 })
                 .collect(Collectors.toList());
     }
+
+
+        // NEW: Permanently delete the authenticated user + ALL their data
+    @Transactional
+    public void deleteCurrentUserAndAllData(UUID currentUserId) {
+        // 1. Delete all songs by this artist (if artist)
+        songRepository.deleteByArtistUserId(currentUserId);
+
+        // 2. Delete all videos by this artist (if you ever add Video entity, it's already safe)
+        videoRepository.deleteByArtistUserId(currentUserId);
+
+        // 3. Delete all votes cast BY this user
+        voteRepository.deleteByUserUserId(currentUserId);
+
+        // 4. Delete all votes cast ON this user's songs (if artist)
+        voteRepository.deleteByTargetArtistId(currentUserId);
+
+        // 5. Delete all awards this user ever received
+        awardRepository.deleteByTargetArtistId(currentUserId);
+
+        // 6. Delete all song plays / video plays
+        songPlayRepository.deleteByUserUserId(currentUserId);
+        videoPlayRepository.deleteByUserUserId(currentUserId);
+
+        // 7. Delete all likes (if you have a Like entity)
+        likeRepository.deleteByUserUserId(currentUserId);
+
+        // 8. Delete all ad views (if tracked per user)
+        adViewRepository.deleteByUserUserId(currentUserId);
+
+        // 9. Clean up supporter relationships
+        // - If this user was a listener supporting someone → remove the link
+        userRepository.nullifySupportedArtistForListeners(currentUserId);
+        // - If this user was an artist being supported → remove all Supporter rows pointing to them
+        supporterRepository.deleteByArtistUserId(currentUserId);
+
+        // 10. Finally delete the user record itself
+        userRepository.deleteById(currentUserId);
+    }
 }

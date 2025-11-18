@@ -54,4 +54,7 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Query("SELECT s FROM Song s WHERE s.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY s.score DESC")
     List<Song> findByJurisdictionOrderByScoreDesc(@Param("jurisdictionId") UUID jurisdictionId);
 
+    @Modifying
+    @Query("DELETE FROM Song s WHERE s.artist.userId = :artistId")
+    void deleteByArtistUserId(@Param("artistId") UUID artistId);
 }

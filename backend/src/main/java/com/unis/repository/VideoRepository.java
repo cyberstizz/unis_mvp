@@ -50,4 +50,9 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Modifying
     @Query("UPDATE Video v SET v.score = v.score + :increment WHERE v.videoId = :id")
     void incrementScore(@Param("id") UUID id, @Param("increment") int increment);
+
+    @Modifying
+    @Query("DELETE FROM Video v WHERE v.artist.userId = :artistId")
+    void deleteByArtistUserId(@Param("artistId") UUID artistId);
 }
+

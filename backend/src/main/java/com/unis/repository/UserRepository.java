@@ -53,4 +53,8 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     @Modifying
     @Query("UPDATE User u SET u.score = u.score + :increment WHERE u.userId = :id")
     void incrementScore(@Param("id") UUID id, @Param("increment") int increment);
+
+    @Modifying
+    @Query("UPDATE User u SET u.supportedArtistId = NULL WHERE u.supportedArtistId = :artistId")
+    void nullifySupportedArtistForListeners(@Param("artistId") UUID artistId);
 }

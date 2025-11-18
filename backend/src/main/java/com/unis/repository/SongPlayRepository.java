@@ -2,6 +2,7 @@ package com.unis.repository;
 
 import com.unis.entity.SongPlay;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -20,4 +21,8 @@ public interface SongPlayRepository extends JpaRepository<SongPlay, UUID> {
     // Trending songs by jurisdiction (page 8; top by plays today DESC)
     @Query(value = "SELECT sp.song_id, COUNT(*) as play_count FROM song_plays sp JOIN songs s ON sp.song_id = s.song_id JOIN users u ON s.artist_id = u.user_id WHERE u.jurisdiction_id = :jurisdictionId AND DATE(sp.played_at) = CURRENT_DATE GROUP BY sp.song_id ORDER BY play_count DESC LIMIT :limit", nativeQuery = true)
     List<Object[]> findTrendingByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
+
+    @Modifying
+    @Query("DELETE FROM SongPlay sp WHERE sp.user.userId = :userId")
+    void deleteByUserUserId(@Param("userId") UUID userId);
 }
