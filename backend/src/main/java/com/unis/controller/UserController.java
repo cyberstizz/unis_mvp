@@ -2,6 +2,7 @@ package com.unis.controller;
 
 import com.unis.dto.UserDto;
 import com.unis.entity.User;
+import com.unis.entity.User.Role;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.GenreRepository;
 import com.unis.repository.UserRepository;
@@ -10,21 +11,33 @@ import com.unis.entity.Genre;
 import com.unis.entity.Jurisdiction;
 import com.unis.entity.Song;
 import com.unis.service.UserService;
+import com.unis.service.FileStorageService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+import jakarta.servlet.http.HttpServletRequest;
+
+
 
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Map;
+import java.util.HashMap;
+import java.io.IOException;
+
 
 @RestController
 @RequestMapping("/api/v1/users")  // Base path
 public class UserController {
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private FileStorageService fileStorageService;
 
     @Autowired
     private JurisdictionRepository jurisdictionRepository;
@@ -120,6 +133,57 @@ public class UserController {
         UUID userId = UUID.fromString(auth.getName());
         userService.deleteCurrentUserAndAllData(userId);
         return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/artists/active")
+    public ResponseEntity<List<User>> getActiveArtists() {
+    List<User> artists = userRepository.findByRoleOrderByScoreDesc(User.Role.artist);
+    return ResponseEntity.ok(artists);
+}
+
+        // TEMP endpoint for CreateAccountWizard photo upload (anonymous allowed)
+   @PatchMapping("/profile/photo")
+    public ResponseEntity<Map<String, String>> uploadSignupPhoto(
+                HttpServletRequest request,
+                @RequestParam("photo") MultipartFile file) throws IOException {
+
+            // Save file (reuse your existing upload logic)
+            String photoUrl = fileStorageService.storeFile(file); // your existing method
+
+            Map<String, String> response = new HashMap<>();
+            response.put("photoUrl", photoUrl);
+            return ResponseEntity.ok(response);
+        }
+
+    // PATCH /api/v1/users/profile — FINAL WORKING VERSION
+    @PatchMapping("/profile")
+    public ResponseEntity<Map<String, String>> updateProfile(
+        Authentication auth,
+        @RequestParam(value = "photo", required = false) MultipartFile photo,
+        @RequestParam(value = "bio", required = false) String bio) throws IOException {
+
+        // FIX: Get user by email from token, then get UUID
+        String email = auth.getName();  // this is the email
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+
+        UUID userId = user.getUserId();
+
+        Map<String, String> response = new HashMap<>();
+
+        if (photo != null && !photo.isEmpty()) {
+            String photoUrl = fileStorageService.storeFile(photo);
+            userService.updatePhoto(userId, photoUrl);
+            response.put("photoUrl", photoUrl);
+        }
+
+        if (bio != null && !bio.isBlank()) {
+            userService.updateBio(userId, bio.trim());
+            response.put("bio", bio.trim());
+        }
+
+        response.put("message", "Profile updated successfully");
+        return ResponseEntity.ok(response);
     }
 
 }

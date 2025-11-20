@@ -5,6 +5,13 @@ import com.unis.entity.Song;
 import com.unis.entity.Supporter;
 import com.unis.repository.UserRepository;
 import com.unis.repository.SongRepository;
+import com.unis.repository.VideoRepository;
+import com.unis.repository.VoteRepository;
+import com.unis.repository.AwardRepository;
+import com.unis.repository.SongPlayRepository;
+import com.unis.repository.VideoPlayRepository;
+import com.unis.repository.LikeRepository;
+import com.unis.repository.AdViewRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import com.unis.repository.SupporterRepository;
@@ -29,6 +36,27 @@ public class UserService {
 
     @Autowired
     private SongRepository songRepository;
+
+    @Autowired
+    private VideoRepository videoRepository;
+
+    @Autowired
+    private VoteRepository voteRepository;
+
+    @Autowired
+    private AwardRepository awardRepository;
+
+    @Autowired
+    private SongPlayRepository songPlayRepository;
+
+    @Autowired
+    private VideoPlayRepository videoPlayRepository;
+
+    @Autowired
+    private LikeRepository likeRepository;
+
+    @Autowired
+    private AdViewRepository adViewRepository;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -219,6 +247,7 @@ public class UserService {
 
         // 6. Delete all song plays / video plays
         songPlayRepository.deleteByUserUserId(currentUserId);
+        
         videoPlayRepository.deleteByUserUserId(currentUserId);
 
         // 7. Delete all likes (if you have a Like entity)

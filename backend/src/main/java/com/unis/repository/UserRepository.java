@@ -9,6 +9,8 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.io.IOException;
+
 
 @Repository
 public interface UserRepository extends JpaRepository<User, UUID> {
@@ -57,4 +59,9 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     @Modifying
     @Query("UPDATE User u SET u.supportedArtistId = NULL WHERE u.supportedArtistId = :artistId")
     void nullifySupportedArtistForListeners(@Param("artistId") UUID artistId);
+
+    @Query("SELECT u FROM User u WHERE u.role = :role ORDER BY u.score DESC")
+    List<User> findByRoleOrderByScoreDesc(@Param("role") User.Role role);
+
+    List<User> findAllByRole(User.Role role);
 }

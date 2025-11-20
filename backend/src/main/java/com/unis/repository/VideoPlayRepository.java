@@ -3,6 +3,7 @@ package com.unis.repository;
 import com.unis.entity.VideoPlay;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import java.time.LocalDate;
@@ -20,4 +21,8 @@ public interface VideoPlayRepository extends JpaRepository<VideoPlay, UUID> {
     // Trending videos by jurisdiction (page 8; top by plays today DESC)
     @Query(value = "SELECT vp.video_id, COUNT(*) as play_count FROM video_plays vp JOIN videos v ON vp.video_id = v.video_id JOIN users u ON v.artist_id = u.user_id WHERE u.jurisdiction_id = :jurisdictionId AND DATE(vp.played_at) = CURRENT_DATE GROUP BY vp.video_id ORDER BY play_count DESC LIMIT :limit", nativeQuery = true)
     List<Object[]> findTrendingByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
+
+    @Modifying
+    @Query("DELETE FROM VideoPlay vp WHERE vp.user.userId = :userId")
+    void deleteByUserUserId(@Param("userId") UUID userId);
 }

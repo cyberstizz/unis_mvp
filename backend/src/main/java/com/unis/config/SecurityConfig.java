@@ -58,6 +58,10 @@ public class SecurityConfig {
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/v1/users/register").permitAll()  // Open register
                 .requestMatchers("/api/v1/users/login").permitAll()  // Open login
+                .requestMatchers("/api/v1/users/artists/active").permitAll()
+                .requestMatchers("/api/v1/users/profile").permitAll() 
+                .requestMatchers("/api/v1/users/profile/photo").permitAll() 
+                .requestMatchers(HttpMethod.POST, "/api/v1/media/song").permitAll()   
                 .requestMatchers("/api/v1/**").authenticated()  // Protect rest
                 .requestMatchers("/uploads/**").permitAll()  // Open uploads
                 .requestMatchers("/actuator/**").permitAll()
