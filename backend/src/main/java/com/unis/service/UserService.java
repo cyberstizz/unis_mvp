@@ -261,6 +261,8 @@ public class UserService {
         userRepository.nullifySupportedArtistForListeners(currentUserId);
         // - If this user was an artist being supported → remove all Supporter rows pointing to them
         supporterRepository.deleteByArtistUserId(currentUserId);
+        // and the same if they were just a listener
+        supporterRepository.deleteByListenerUserId(currentUserId);
 
         // 10. Finally delete the user record itself
         userRepository.deleteById(currentUserId);

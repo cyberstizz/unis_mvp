@@ -30,4 +30,8 @@ public interface SupporterRepository extends JpaRepository<Supporter, UUID> {
     @Modifying
     @Query("DELETE FROM Supporter s WHERE s.artist.userId = :artistId")
     void deleteByArtistUserId(@Param("artistId") UUID artistId);
+
+    @Modifying
+    @Query("DELETE FROM Supporter s WHERE s.listener.userId = :listenerId")
+    void deleteByListenerUserId(@Param("listenerId") UUID listenerId);
 }

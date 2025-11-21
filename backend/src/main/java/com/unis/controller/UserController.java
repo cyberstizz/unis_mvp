@@ -129,10 +129,32 @@ public class UserController {
     }
 
     @DeleteMapping("/me")
-    public ResponseEntity<Void> deleteMyAccount(Authentication auth) {
-        UUID userId = UUID.fromString(auth.getName());
-        userService.deleteCurrentUserAndAllData(userId);
-        return ResponseEntity.ok().build();
+    public ResponseEntity<Map<String, String>> deleteMyAccount(Authentication auth) {
+        // FIX: Get email from token, then find user
+        String email = auth.getName();  // This is the email, NOT userId!
+        
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+        
+        UUID userId = user.getUserId();
+        
+        try {
+            // Call service to cascade delete everything
+            userService.deleteCurrentUserAndAllData(userId);
+            
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "Account deleted successfully");
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            // Log the actual error
+            System.err.println("Failed to delete user " + userId + ": " + e.getMessage());
+            e.printStackTrace();
+            
+            Map<String, String> errorResponse = new HashMap<>();
+            errorResponse.put("error", "Failed to delete account: " + e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
     }
 
     @GetMapping("/artists/active")
@@ -184,6 +206,21 @@ public class UserController {
 
         response.put("message", "Profile updated successfully");
         return ResponseEntity.ok(response);
+    }
+
+    @PatchMapping("/default-song")
+    public ResponseEntity<Map<String, String>> setDefaultSong(
+        Authentication auth,
+        @RequestBody Map<String, UUID> payload) {
+        
+        String email = auth.getName();
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+        
+        UUID songId = payload.get("defaultSongId");
+        userService.updateDefaultSong(user.getUserId(), songId);
+        
+        return ResponseEntity.ok(Map.of("message", "Default song set"));
     }
 
 }
