@@ -8,7 +8,7 @@ spring:
     resources:
       static-locations: classpath:/static,classpath:/uploads
   datasource:
-    url: jdbc:postgresql://localhost:5432/unisjdbc:postgresql://db.bxpiryjdhxruzokseehh.supabase.co:5432/postgres?user=postgres&password="$ucce$$7"
+    url: jdbc:postgresql://db.bxpiryjdhxruzokseehh.supabase.co:5432/postgres?user=postgres&password=eXzT4BFduA._!?W
     username: postgres
     password: "eXzT4BFduA._!?W"
     driver-class-name: org.postgresql.Driver
