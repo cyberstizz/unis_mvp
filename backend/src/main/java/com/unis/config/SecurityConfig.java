@@ -38,7 +38,8 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {  // Original: Your CORS bean
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.addAllowedOriginPattern("http://localhost:5173");  // Add Vite port
+        configuration.addAllowedOriginPattern("http://localhost:5173");  // the Vite port
+        configuration.addAllowedOriginPattern("https://unisprototypetwo.netlify.app");  // the netlify port
         configuration.addAllowedOriginPattern("http://localhost:3000");  // Backup
         configuration.addAllowedOriginPattern("http://127.0.0.1:5173");
         configuration.addAllowedOriginPattern("http://127.0.0.1:3000");
