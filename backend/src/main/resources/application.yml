@@ -9,7 +9,7 @@ spring:
       static-locations: classpath:/static,classpath:/uploads
   datasource:
     url: jdbc:postgresql://aws-1-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require
-    username: postgres
+    username: postgres.bxpiryjdhxruzokseehh
     password: zuRvSkWkE9lSCPqn
     driver-class-name: org.postgresql.Driver
   jpa:
