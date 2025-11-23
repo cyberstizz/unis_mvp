@@ -8,8 +8,8 @@ spring:
     resources:
       static-locations: classpath:/static,classpath:/uploads
   datasource:
-    url: jdbc:postgresql://aws-1-us-east-1.supabase.com:5432/postgres?sslmode=require
-    username: postgres.bxpiryjdhxruzokseehh
+    url: jdbc:postgresql://db.bxpiryjdhxruzokseehh.supabase.co:5432/postgres?sslmode=require
+    username: postgres
     password: zuRvSkWkE9lSCPqn
     driver-class-name: org.postgresql.Driver
   jpa:
