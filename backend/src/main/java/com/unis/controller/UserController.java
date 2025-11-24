@@ -171,7 +171,7 @@ public class UserController {
                 @RequestParam("photo") MultipartFile file) throws IOException {
 
             // Save file (reuse your existing upload logic)
-            String photoUrl = fileStorageService.storeFile(file); // your existing method
+            String photoUrl = fileStorageService.storeFile(file);
 
             Map<String, String> response = new HashMap<>();
             response.put("photoUrl", photoUrl);

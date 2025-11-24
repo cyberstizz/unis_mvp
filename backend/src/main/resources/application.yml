@@ -1,3 +1,11 @@
+cloudflare:
+  r2:
+    access-key: ${R2_ACCESS_KEY}
+    secret-key: ${R2_SECRET_KEY}
+    endpoint: ${R2_ENDPOINT}
+    bucket-name: ${R2_BUCKET_NAME}
+    public-url: ${R2_PUBLIC_URL}
+
 file:
   upload-dir: uploads
 
@@ -7,11 +15,13 @@ spring:
   web:
     resources:
       static-locations: classpath:/static,classpath:/uploads
+
   datasource:
-    url: jdbc:postgresql://aws-1-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require
-    username: postgres.bxpiryjdhxruzokseehh
-    password: zuRvSkWkE9lSCPqn
+    url: jdbc:postgresql://localhost:5432/unis
+    username: unis_user
+    password: "$ucce$$7"
     driver-class-name: org.postgresql.Driver
+
   jpa:
     hibernate:
       ddl-auto: none
@@ -19,20 +29,24 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
+
   sql:
     init:
       mode: never
+
   task:
     scheduling:
       pool:
         size: 2
+
   servlet:
     multipart:
       max-file-size: 50MB
       max-request-size: 50MB
+
   jwt:
     secret: unis-super-secret-key-change-this-in-production-should-be-at-least-256-bits-long
-    expiration: 86400000  # 24 hours
+    expiration: 86400000
 
 server:
   port: 8080
@@ -48,6 +62,5 @@ logging:
     org.springframework.security: DEBUG
     org.springframework.web.multipart: DEBUG
 
-# New configuration property added here
 unis:
   auto-populate-awards: true
