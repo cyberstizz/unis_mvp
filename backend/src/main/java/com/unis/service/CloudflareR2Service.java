@@ -1,6 +1,7 @@
 package com.unis.service;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -17,7 +18,8 @@ import java.net.URI;
 import java.util.UUID;
 
 @Service
-public class CloudflareR2Service {
+@Profile("prod")
+public class CloudflareR2Service implements FileStorageService  {
 
     @Value("${cloudflare.r2.access-key}")
     private String accessKey;
@@ -71,6 +73,15 @@ public class CloudflareR2Service {
                     .build();
 
             s3Client.deleteObject(deleteObjectRequest);
+        }
+    }
+
+    @Override
+    public String storeFile(MultipartFile file) {
+        try {
+            return uploadFile(file, "uploads"); 
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to upload to R2", e);
         }
     }
 }

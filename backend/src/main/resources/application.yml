@@ -8,10 +8,13 @@ cloudflare:
 
 file:
   upload-dir: uploads
+  storage-mode: local   
 
 spring:
   application:
     name: unis
+  profiles:
+    active: local
   web:
     resources:
       static-locations: classpath:/static,classpath:/uploads
