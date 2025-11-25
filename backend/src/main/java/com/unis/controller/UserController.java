@@ -60,6 +60,7 @@ public class UserController {
             .email(dto.getEmail())
             .passwordHash(dto.getPassword())
             .role(User.Role.valueOf(dto.getRole()))
+            .bio(dto.getBio())
             .build();
         
         // Fetch jurisdiction entity and set
