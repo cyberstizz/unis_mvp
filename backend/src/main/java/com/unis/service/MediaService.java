@@ -23,8 +23,10 @@ import com.unis.repository.GenreRepository;
 import com.unis.repository.JurisdictionRepository;
 
 import org.apache.tika.metadata.Metadata;
+import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.audio.AudioParser;
+import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -148,23 +150,53 @@ public class MediaService {
     }
 }
 
-    private Integer computeDuration(MultipartFile file) {
-    if (file == null || file.isEmpty()) {
-        return 180000;  // 3 min fallback
-    }
-    try (InputStream is = file.getInputStream()) {
-        Metadata metadata = new Metadata();
-        new AudioParser().parse(is, new DefaultHandler(), metadata, new ParseContext());
-        String durStr = metadata.get("duration");
-        if (durStr != null && !durStr.isEmpty()) {
-            double seconds = Double.parseDouble(durStr);
-            return (int) (seconds * 1000);  
+        private Integer computeDuration(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            System.err.println("File is null or empty, returning fallback duration");
+            return 180000;  // 3 min fallback
         }
-    } catch (Exception e) {
-        System.err.println("Duration parse failed for " + file.getOriginalFilename() + ": " + e.getMessage());
+        
+        try (InputStream is = file.getInputStream()) {
+            Metadata metadata = new Metadata();
+            AutoDetectParser parser = new AutoDetectParser();
+            BodyContentHandler handler = new BodyContentHandler(-1); // No write limit
+            ParseContext context = new ParseContext();
+            
+            parser.parse(is, handler, metadata, context);
+            
+            // Log all metadata to see what's available
+            System.out.println("=== Audio Metadata for: " + file.getOriginalFilename() + " ===");
+            for (String name : metadata.names()) {
+                System.out.println(name + ": " + metadata.get(name));
+            }
+            
+            // Try multiple possible duration keys
+            String durStr = metadata.get("xmpDM:duration");  // Most common for audio
+            if (durStr == null) durStr = metadata.get("duration");
+            if (durStr == null) durStr = metadata.get("Content-Duration");
+            if (durStr == null) durStr = metadata.get("xmpDM:audioSampleRate");
+            
+            if (durStr != null && !durStr.isEmpty()) {
+                try {
+                    double seconds = Double.parseDouble(durStr);
+                    int milliseconds = (int) (seconds * 1000);
+                    System.out.println("Parsed duration: " + milliseconds + "ms (" + seconds + "s)");
+                    return milliseconds;
+                } catch (NumberFormatException e) {
+                    System.err.println("Could not parse duration value: " + durStr);
+                }
+            } else {
+                System.err.println("No duration metadata found in file");
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Duration parse failed for " + file.getOriginalFilename());
+            e.printStackTrace();  // Print full stack trace to diagnose
+        }
+        
+        System.err.println("Returning fallback duration of 180000ms (3 min)");
+        return 180000;  // Fallback on error
     }
-    return 180000;  // Fallback on error
-}
 
     // Add video (page 7 artist dashboard)
     public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {
