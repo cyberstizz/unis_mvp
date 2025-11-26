@@ -73,6 +73,7 @@ public class UserService {
 
         // Save user
         User savedUser = userRepository.save(newUser);
+        
 
         // For listeners: Validate and set supported artist + create Supporter
         if ("listener".equals(savedUser.getRole().toString()) && supportedArtistId != null) {
