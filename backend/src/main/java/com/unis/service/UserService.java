@@ -88,7 +88,7 @@ public class UserService {
                 .artist(supportedArtist)
                 .build();
             supporterRepository.save(supporter);
-        }  // Artists skip (no supported, no Supporter)
+        }  // Artists skip
 
         return savedUser;
     }
