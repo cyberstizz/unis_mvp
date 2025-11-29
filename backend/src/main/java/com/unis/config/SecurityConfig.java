@@ -1,6 +1,6 @@
 package com.unis.config;
 
-import com.unis.config.JwtRequestFilter;  // Your filter (swap if JwtRequestFilter)
+import com.unis.config.JwtRequestFilter; 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,7 +23,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfig {
 
     @Autowired
-    private JwtRequestFilter jwtRequestFilter;  // Your filter
+    private JwtRequestFilter jwtRequestFilter; 
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -36,11 +36,11 @@ public class SecurityConfig {
     }
 
     @Bean
-    public CorsConfigurationSource corsConfigurationSource() {  // Original: Your CORS bean
+    public CorsConfigurationSource corsConfigurationSource() {  
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.addAllowedOriginPattern("http://localhost:5173");  // the Vite port
-        configuration.addAllowedOriginPattern("https://unisprototypetwo.netlify.app");  // the netlify port
-        configuration.addAllowedOriginPattern("http://localhost:3000");  // Backup
+        configuration.addAllowedOriginPattern("http://localhost:5173");  
+        configuration.addAllowedOriginPattern("https://unisprototypetwo.netlify.app"); 
+        configuration.addAllowedOriginPattern("http://localhost:3000");  
         configuration.addAllowedOriginPattern("http://127.0.0.1:5173");
         configuration.addAllowedOriginPattern("http://127.0.0.1:3000");
         configuration.setAllowCredentials(true);
@@ -55,27 +55,27 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
             .authorizeHttpRequests(authz -> authz
-                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()  // New: Permit OPTIONS preflight
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()  
                 .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/api/v1/users/register").permitAll()  // Open register
-                .requestMatchers("/api/v1/users/login").permitAll()  // Open login
+                .requestMatchers("/api/v1/users/register").permitAll()  
+                .requestMatchers("/api/v1/users/login").permitAll()  
                 .requestMatchers("/api/v1/users/artists/active").permitAll()
                 .requestMatchers("/api/v1/users/profile").permitAll() 
                 .requestMatchers("/api/v1/users/profile/photo").permitAll() 
                 .requestMatchers("/api/v1/users/me").permitAll() 
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song").permitAll()   
-                .requestMatchers("/api/v1/**").authenticated()  // Protect rest
-                .requestMatchers("/uploads/**").permitAll()  // Open uploads
+                .requestMatchers("/api/v1/**").authenticated()  
+                .requestMatchers("/uploads/**").permitAll()  
                 .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/error/**").permitAll()
                 .anyRequest().authenticated()
             )
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))  // Original: Wire CORS bean
-            .csrf(csrf -> csrf.disable())  // Disable CSRF
-            .httpBasic(basic -> basic.disable())  // Disable basic auth
-            .formLogin(form -> form.disable()) // Disable form login
+            .cors(cors -> cors.configurationSource(corsConfigurationSource())) 
+            .csrf(csrf -> csrf.disable())  
+            .httpBasic(basic -> basic.disable())  
+            .formLogin(form -> form.disable()) 
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);  // Original: Add JWT filter
+            .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class); 
 
         return http.build();
     }

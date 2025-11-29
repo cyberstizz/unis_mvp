@@ -78,6 +78,7 @@ public class CloudflareR2Service implements FileStorageService  {
 
     @Override
     public String storeFile(MultipartFile file) {
+            System.out.println(" USING CLOUDFLARE R2 SERVICE");
         try {
             return uploadFile(file, "uploads"); 
         } catch (IOException e) {

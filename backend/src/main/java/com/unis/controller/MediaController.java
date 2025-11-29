@@ -3,7 +3,7 @@ package com.unis.controller;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
 import com.unis.service.MediaService;
-import lombok.extern.slf4j.Slf4j;  // For log.error (add to pom.xml if needed: lombok)
+import lombok.extern.slf4j.Slf4j;  
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;

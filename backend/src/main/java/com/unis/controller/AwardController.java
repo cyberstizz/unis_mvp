@@ -38,7 +38,7 @@ public class AwardController {
         return ResponseEntity.ok(awards);
     }
 
-    // Temp for testing cron (manual for past dates; remove in prod)
+    // Temp for testing cron
     @GetMapping("/cron/manual")
     public ResponseEntity<String> manualCron(@RequestParam(required = false) String date) {
         LocalDate cronDate = date != null ? LocalDate.parse(date) : LocalDate.now();
@@ -46,7 +46,7 @@ public class AwardController {
         return ResponseEntity.ok("Cron triggered for " + cronDate + "—check DB awards");
     }
 
-    // FIXED: Now passes all 4 required parameters
+    
     @PostMapping("/awards/compute")
     public ResponseEntity<String> computeAwards(
             @RequestParam UUID intervalId, 

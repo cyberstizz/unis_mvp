@@ -84,7 +84,7 @@ public class JwtUtil {
         return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
     }
 
-    // Simple validation (without UserDetails)
+    // Simple validation 
     public Boolean validateToken(String token) {
         try {
             return !isTokenExpired(token);

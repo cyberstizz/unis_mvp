@@ -11,7 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.UUID;
-//just a comment as a test
+
 @Service
 @Profile("local")
 public class LocalFileStorageService implements FileStorageService {
