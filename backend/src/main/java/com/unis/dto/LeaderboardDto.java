@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.UUID;
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -14,5 +16,6 @@ public class LeaderboardDto {
     private String name;
     private Long votes;
     private String artwork;
-    private String artist;  
+    private String artist;
+    private UUID targetId;  
 }
