@@ -277,7 +277,7 @@ public class MediaService {
         SongPlay play = SongPlay.builder()
             .song(song)
             .user(user)
-            .durationSecs(180)  // Placeholder
+            .durationSecs(180)  // Placeholder that i will change later
             .build();
         songPlayRepository.save(play);
         scoreUpdateService.onPlay(userId, songId, "song");
