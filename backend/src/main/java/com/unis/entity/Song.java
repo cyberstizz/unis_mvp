@@ -57,4 +57,7 @@ public class Song {
 
     @Column
     private Integer duration;
+
+    @Transient  
+    private Long playCount;
 }

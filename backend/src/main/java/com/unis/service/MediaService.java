@@ -25,14 +25,12 @@ import com.unis.repository.JurisdictionRepository;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
-import org.apache.tika.parser.audio.AudioParser;
 import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import org.xml.sax.helpers.DefaultHandler;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -76,60 +74,59 @@ public class MediaService {
 
     @Autowired
     private FileStorageService fileStorageService;
-    // for json parse
-    private final ObjectMapper objectMapper = new ObjectMapper();  
+    
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     // Add song (page 7 artist dashboard)
     public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {
         try {
-        SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
-        
-        // Guards 
-        if (req.getTitle() == null || req.getTitle().trim().isEmpty()) {
-            throw new IllegalArgumentException("Title is required");
-        }
-        if (req.getArtistId() == null) {
-            throw new IllegalArgumentException("Artist ID is required and cannot be null");
-        }
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("Audio file is required");
-        }
+            SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
+            
+            // Guards 
+            if (req.getTitle() == null || req.getTitle().trim().isEmpty()) {
+                throw new IllegalArgumentException("Title is required");
+            }
+            if (req.getArtistId() == null) {
+                throw new IllegalArgumentException("Artist ID is required and cannot be null");
+            }
+            if (file == null || file.isEmpty()) {
+                throw new IllegalArgumentException("Audio file is required");
+            }
 
-        // Resolve artist
-        User artist = userRepository.findById(req.getArtistId())
-                .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+            // Resolve artist
+            User artist = userRepository.findById(req.getArtistId())
+                    .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
 
-        // Resolve genre (optional)
-        Genre genre = null;
-        if (req.getGenreId() != null) {
-            genre = genreRepository.findById(req.getGenreId()).orElse(null);
-        }
+            // Resolve genre (optional)
+            Genre genre = null;
+            if (req.getGenreId() != null) {
+                genre = genreRepository.findById(req.getGenreId()).orElse(null);
+            }
 
-        // Resolve jurisdiction
-        Jurisdiction jurisdiction = null;
-        if (req.getJurisdictionId() != null) {
-            jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
-                    .orElseThrow(() -> new IllegalArgumentException("Jurisdiction not found: " + req.getJurisdictionId()));
-        } else if (artist.getJurisdiction() != null) {
-            jurisdiction = artist.getJurisdiction();
-        } else {
-            // Fallback: Default to Harlem root (000...000001)
-            jurisdiction = jurisdictionRepository.findById(UUID.fromString("00000000-0000-0000-0000-000000000001"))
-                    .orElseThrow(() -> new IllegalArgumentException("Default jurisdiction not found"));
-        }
+            // Resolve jurisdiction
+            Jurisdiction jurisdiction = null;
+            if (req.getJurisdictionId() != null) {
+                jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
+                        .orElseThrow(() -> new IllegalArgumentException("Jurisdiction not found: " + req.getJurisdictionId()));
+            } else if (artist.getJurisdiction() != null) {
+                jurisdiction = artist.getJurisdiction();
+            } else {
+                jurisdiction = jurisdictionRepository.findById(UUID.fromString("00000000-0000-0000-0000-000000000001"))
+                        .orElseThrow(() -> new IllegalArgumentException("Default jurisdiction not found"));
+            }
 
-        // File storage
-        String fileUrl = fileStorageService.storeFile(file);
-        String artworkUrl = null;
-        if (artwork != null && !artwork.isEmpty()) {
-            artworkUrl = fileStorageService.storeFile(artwork);
-        }
+            // File storage
+            String fileUrl = fileStorageService.storeFile(file);
+            String artworkUrl = null;
+            if (artwork != null && !artwork.isEmpty()) {
+                artworkUrl = fileStorageService.storeFile(artwork);
+            }
 
-        // Duration 
-        Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
+            // Duration 
+            Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
 
-        // Build & save
-        Song song = new Song();
+            // Build & save
+            Song song = new Song();
             song.setTitle(req.getTitle());
             song.setArtist(artist);
             song.setGenre(genre);
@@ -143,35 +140,33 @@ public class MediaService {
             song.setCreatedAt(LocalDateTime.now());  
 
             return songRepository.save(song);
-    } catch (IOException e) {
-        throw new RuntimeException("JSON parse or file upload failed", e);
-    } catch (IllegalArgumentException e) {
-        throw new RuntimeException("Invalid upload data: " + e.getMessage(), e);
+        } catch (IOException e) {
+            throw new RuntimeException("JSON parse or file upload failed", e);
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Invalid upload data: " + e.getMessage(), e);
+        }
     }
-}
 
-        private Integer computeDuration(MultipartFile file) {
+    private Integer computeDuration(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             System.err.println("File is null or empty, returning fallback duration");
-            return 180000;  // 3 min fallback
+            return 180000;
         }
         
         try (InputStream is = file.getInputStream()) {
             Metadata metadata = new Metadata();
             AutoDetectParser parser = new AutoDetectParser();
-            BodyContentHandler handler = new BodyContentHandler(-1); // No write limit
+            BodyContentHandler handler = new BodyContentHandler(-1);
             ParseContext context = new ParseContext();
             
             parser.parse(is, handler, metadata, context);
             
-            // Log all metadata to see what's available
             System.out.println("=== Audio Metadata for: " + file.getOriginalFilename() + " ===");
             for (String name : metadata.names()) {
                 System.out.println(name + ": " + metadata.get(name));
             }
             
-            // Try multiple possible duration keys
-            String durStr = metadata.get("xmpDM:duration");  // Most common for audio
+            String durStr = metadata.get("xmpDM:duration");
             if (durStr == null) durStr = metadata.get("duration");
             if (durStr == null) durStr = metadata.get("Content-Duration");
             if (durStr == null) durStr = metadata.get("xmpDM:audioSampleRate");
@@ -191,29 +186,27 @@ public class MediaService {
             
         } catch (Exception e) {
             System.err.println("Duration parse failed for " + file.getOriginalFilename());
-            e.printStackTrace();  // Print full stack trace to diagnose
+            e.printStackTrace();
         }
         
         System.err.println("Returning fallback duration of 180000ms (3 min)");
-        return 180000;  // Fallback on error
+        return 180000;
     }
 
     // Add video (page 7 artist dashboard)
     public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {
         try {
             VideoUploadRequest req = objectMapper.readValue(videoJson, VideoUploadRequest.class);
-            // Resolve artist
+            
             User artist = userRepository.findById(req.getArtistId())
                     .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
 
-            // Resolve genre 
             Genre genre = null;
             if (req.getGenreId() != null) {
                 genre = genreRepository.findById(req.getGenreId())
                         .orElseThrow(() -> new IllegalArgumentException("Genre not found: " + req.getGenreId()));
             }
 
-             // Resolve jurisdiction
             Jurisdiction jurisdiction = null;
             if (req.getJurisdictionId() != null) {
                 jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
@@ -221,74 +214,69 @@ public class MediaService {
             } else if (artist.getJurisdiction() != null) {
                 jurisdiction = artist.getJurisdiction();
             } else {
-                // Fallback: Default to Harlem root (000...000001)
                 jurisdiction = jurisdictionRepository.findById(UUID.fromString("00000000-0000-0000-0000-000000000001"))
                         .orElseThrow(() -> new IllegalArgumentException("Default jurisdiction not found"));
             }
 
-            // Save video file and get URL
             String videoUrl = fileStorageService.storeFile(file);
 
-            // Save artwork file if present and get URL
             String artworkUrl = null;
             if (artwork != null && !artwork.isEmpty()) {
                 artworkUrl = fileStorageService.storeFile(artwork);
             }
 
-            // Duration 
             Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
 
-            // Build Video entity
             Video video = new Video();
-                video.setTitle(req.getTitle());
-                video.setArtist(artist);
-                video.setGenre(genre);
-                video.setJurisdiction(jurisdiction);
-                video.setDescription(req.getDescription());
-                video.setDuration(duration);
-                video.setVideoUrl(videoUrl);
-                video.setArtworkUrl(artworkUrl);
-                video.setScore(0);  // Explicit
-                video.setLevel("silver");  // Explicit
-                video.setCreatedAt(LocalDateTime.now());  // Explicit
+            video.setTitle(req.getTitle());
+            video.setArtist(artist);
+            video.setGenre(genre);
+            video.setJurisdiction(jurisdiction);
+            video.setDescription(req.getDescription());
+            video.setDuration(duration);
+            video.setVideoUrl(videoUrl);
+            video.setArtworkUrl(artworkUrl);
+            video.setScore(0);
+            video.setLevel("silver");
+            video.setCreatedAt(LocalDateTime.now());
 
-                return videoRepository.save(video);
+            return videoRepository.save(video);
         } catch (IOException e) {
             throw new RuntimeException("JSON parse or file upload failed", e);
         }
     }
 
-    // Delete song (page 7)
     public void deleteSong(UUID songId) {
         songRepository.deleteById(songId);
     }
 
-    // Delete video (page 7)
     public void deleteVideo(UUID videoId) {
         videoRepository.deleteById(videoId);
     }
 
-    // Play song (pages 1,3,11—inserts play, triggers score +1)
+    // Play song - inserts play, triggers score +1
     public void playSong(UUID songId, UUID userId) {
         Optional<Song> optionalSong = songRepository.findById(songId);
         Optional<User> optionalUser = userRepository.findById(userId);
         Song song = optionalSong.orElseThrow(() -> new RuntimeException("Song not found"));
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
+        
         SongPlay play = SongPlay.builder()
             .song(song)
             .user(user)
-            .durationSecs(180)  // Placeholder that i will change later
+            .durationSecs(180)
             .build();
         songPlayRepository.save(play);
         scoreUpdateService.onPlay(userId, songId, "song");
     }
 
-    // Play video (pages 1,3,11—inserts play, triggers score +1)
+    // Play video - inserts play, triggers score +1
     public void playVideo(UUID videoId, UUID userId) {
         Optional<Video> optionalVideo = videoRepository.findById(videoId);
         Optional<User> optionalUser = userRepository.findById(userId);
         Video video = optionalVideo.orElseThrow(() -> new RuntimeException("Video not found"));
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
+        
         VideoPlay play = VideoPlay.builder()
             .video(video)
             .user(user)
@@ -298,7 +286,7 @@ public class MediaService {
         scoreUpdateService.onPlay(userId, videoId, "video");
     }
 
-    // Get top songs by score in jurisdiction + hierarchy (page 3, feed trending/new)
+    // UPDATED: Get top songs by score in jurisdiction + hierarchy
     public List<Song> getTopSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -319,10 +307,20 @@ public class MediaService {
         
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
-        return results.isEmpty() ? getFallbackSongs(limit) : results;  // Fallback if no data
+        
+        // NEW: Add play counts to each song
+        results.forEach(song -> {
+            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+            song.setPlayCount(playCount != null ? playCount : 0L);
+        });
+        
+        if (results.isEmpty()) {
+            return getFallbackSongs(limit);
+        }
+        
+        return results;
     }
 
-    // Symmetric for videos
     public List<Video> getTopVideosByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -343,41 +341,67 @@ public class MediaService {
         
         @SuppressWarnings("unchecked")
         List<Video> results = q.getResultList();
-        return results.isEmpty() ? getFallbackVideos(limit) : results;  // Fallback if no data
+        return results.isEmpty() ? getFallbackVideos(limit) : results;
     }
 
-    // Private helpers: Fallback to first N by ID (for launch sparsity)
+    // UPDATED: Fallback with play counts
     private List<Song> getFallbackSongs(int limit) {
-        return songRepository.findAll(Sort.by(Sort.Direction.ASC, "songId")).stream().limit(limit).collect(Collectors.toList());
+        List<Song> songs = songRepository.findAll(Sort.by(Sort.Direction.ASC, "songId"))
+            .stream()
+            .limit(limit)
+            .collect(Collectors.toList());
+        
+        // Add play counts
+        songs.forEach(song -> {
+            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+            song.setPlayCount(playCount != null ? playCount : 0L);
+        });
+        
+        return songs;
     }
 
     private List<Video> getFallbackVideos(int limit) {
-        return videoRepository.findAll(Sort.by(Sort.Direction.ASC, "videoId")).stream().limit(limit).collect(Collectors.toList());
+        return videoRepository.findAll(Sort.by(Sort.Direction.ASC, "videoId"))
+            .stream()
+            .limit(limit)
+            .collect(Collectors.toList());
     }
 
-    // Artist's songs (page 7 dashboard)
+    // UPDATED: Artist's songs with play counts
     public List<Song> getSongsByArtist(UUID artistId) {
-        return songRepository.findByArtistId(artistId);
+        List<Song> songs = songRepository.findByArtistId(artistId);
+        
+        // Add play counts to each song
+        songs.forEach(song -> {
+            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+            song.setPlayCount(playCount != null ? playCount : 0L);
+        });
+        
+        return songs;
     }
 
-    // Artist's videos (page 7 dashboard)
     public List<Video> getVideosByArtist(UUID artistId) {
         return videoRepository.findByArtistId(artistId);
     }
 
-    // Get single song by ID (for song detail page)
+    // UPDATED: Get single song by ID with play count
     public Song getSongById(UUID songId) {
-        return songRepository.findById(songId)
+        Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
+        
+        // Calculate actual play count
+        Long playCount = songPlayRepository.countTotalPlaysBySongId(songId);
+        song.setPlayCount(playCount != null ? playCount : 0L);
+        
+        return song;
     }
 
-    // Get single video by ID (for video detail page)
     public Video getVideoById(UUID videoId) {
         return videoRepository.findById(videoId)
             .orElseThrow(() -> new RuntimeException("Video not found: " + videoId));
     }
 
-        // Get newest songs by created_at in jurisdiction + hierarchy (for feed new releases)
+    // UPDATED: Get newest songs with play counts
     public List<Song> getNewSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -398,7 +422,17 @@ public class MediaService {
         
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
-        return results.isEmpty() ? getFallbackSongs(limit) : results;  // Same fallback
+        
+        // NEW: Add play counts to each song
+        results.forEach(song -> {
+            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+            song.setPlayCount(playCount != null ? playCount : 0L);
+        });
+        
+        if (results.isEmpty()) {
+            return getFallbackSongs(limit);
+        }
+        
+        return results;
     }
-
 }

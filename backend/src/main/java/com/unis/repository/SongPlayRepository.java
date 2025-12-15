@@ -25,4 +25,7 @@ public interface SongPlayRepository extends JpaRepository<SongPlay, UUID> {
     @Modifying
     @Query("DELETE FROM SongPlay sp WHERE sp.user.userId = :userId")
     void deleteByUserUserId(@Param("userId") UUID userId);
+
+    @Query(value = "SELECT COUNT(*) FROM song_plays WHERE song_id = :songId", nativeQuery = true)
+    Long countTotalPlaysBySongId(@Param("songId") UUID songId);
 }
