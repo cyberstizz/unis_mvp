@@ -261,10 +261,15 @@ public class MediaService {
         Song song = optionalSong.orElseThrow(() -> new RuntimeException("Song not found"));
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         
+        // Convert milliseconds to seconds, fallback to 180 if duration is null
+        int durationInSeconds = song.getDuration() != null 
+            ? song.getDuration() / 1000 
+            : 180;
+        
         SongPlay play = SongPlay.builder()
             .song(song)
             .user(user)
-            .durationSecs(180)
+            .durationSecs(durationInSeconds)
             .build();
         songPlayRepository.save(play);
         scoreUpdateService.onPlay(userId, songId, "song");
@@ -277,10 +282,15 @@ public class MediaService {
         Video video = optionalVideo.orElseThrow(() -> new RuntimeException("Video not found"));
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         
+        // Convert milliseconds to seconds, fallback to 180 if duration is null
+        int durationInSeconds = video.getDuration() != null 
+            ? video.getDuration() / 1000 
+            : 180;
+        
         VideoPlay play = VideoPlay.builder()
             .video(video)
             .user(user)
-            .durationSecs(180)
+            .durationSecs(durationInSeconds)
             .build();
         videoPlayRepository.save(play);
         scoreUpdateService.onPlay(userId, videoId, "video");
