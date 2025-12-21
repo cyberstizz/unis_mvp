@@ -440,12 +440,11 @@ public class MediaService {
     }
 
     // Get single song by ID with play count
-    @Transactional(readOnly = true)
     public Song getSongById(UUID songId) {
+        entityManager.clear();
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
         
-        // Force JPA to refresh from database
         entityManager.refresh(song);
         
         ensurePlaysCurrentForSong(song);
