@@ -441,14 +441,18 @@ public class MediaService {
 
     // Get single song by ID with play count
     public Song getSongById(UUID songId) {
-        entityManager.clear();
-        Song song = songRepository.findById(songId)
-            .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
+        String query = "SELECT * FROM songs WHERE song_id = :songId";
+    
+        Query q = entityManager.createNativeQuery(query, Song.class);
+        q.setParameter("songId", songId);
         
-        entityManager.refresh(song);
-        
-        ensurePlaysCurrentForSong(song);
-        return song;
+        try {
+            Song song = (Song) q.getSingleResult();
+            ensurePlaysCurrentForSong(song);
+            return song;
+        } catch (Exception e) {
+            throw new RuntimeException("Song not found: " + songId);
+        }
     }
 
     public Video getVideoById(UUID videoId) {
