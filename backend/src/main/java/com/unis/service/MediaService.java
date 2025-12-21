@@ -273,15 +273,15 @@ public class MediaService {
             song.setLastPlayResetDate(today);
         }
 
-        //set the plays for today
+        // Increment plays_today (ONCE!)
         song.setPlaysToday(song.getPlaysToday() + 1);
         songRepository.save(song);
         
-        // Increment
-        song.setPlaysToday(song.getPlaysToday() + 1);
-        songRepository.save(song); 
+        // IMPORTANT: Flush and clear to ensure DB writes complete
+        entityManager.flush();
+        entityManager.clear();
         
-        // Rest of method...
+        // Create play record
         int durationInSeconds = song.getDuration() != null ? song.getDuration() / 1000 : 180;
         
         SongPlay play = SongPlay.builder()
@@ -431,11 +431,7 @@ public class MediaService {
         List<Song> songs = songRepository.findByArtistId(artistId);
         
         // Add play counts to each song
-        songs.forEach(song -> {
-            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
-            song.setPlayCount(playCount != null ? playCount : 0L);
-        });
-        
+        songs.forEach(this::ensurePlaysCurrentForSong);
         return songs;
     }
 
@@ -444,9 +440,13 @@ public class MediaService {
     }
 
     // Get single song by ID with play count
+    @Transactional(readOnly = true)
     public Song getSongById(UUID songId) {
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
+        
+        // Force JPA to refresh from database
+        entityManager.refresh(song);
         
         ensurePlaysCurrentForSong(song);
         return song;
