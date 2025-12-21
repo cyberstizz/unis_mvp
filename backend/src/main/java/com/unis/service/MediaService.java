@@ -261,19 +261,24 @@ public class MediaService {
 
     // Play song - inserts play, triggers score +1
     public void playSong(UUID songId, UUID userId) {
-        Optional<Song> optionalSong = songRepository.findById(songId);
-        Optional<User> optionalUser = userRepository.findById(userId);
-        Song song = optionalSong.orElseThrow(() -> new RuntimeException("Song not found"));
-        User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
+        Song song = songRepository.findById(songId)
+            .orElseThrow(() -> new RuntimeException("Song not found"));
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found"));
         
-        // Increment plays_today (with automatic reset if needed)
-        song.incrementPlaysToday();
-        songRepository.save(song); // Save the updated plays_today count
+        // Check and reset for new day
+        LocalDate today = LocalDate.now();
+        if (song.getLastPlayResetDate() == null || !song.getLastPlayResetDate().isEqual(today)) {
+            song.setPlaysToday(0);
+            song.setLastPlayResetDate(today);
+        }
         
-        // Convert milliseconds to seconds, fallback to 180 if duration is null
-        int durationInSeconds = song.getDuration() != null 
-            ? song.getDuration() / 1000 
-            : 180;
+        // Increment
+        song.setPlaysToday(song.getPlaysToday() + 1);
+        songRepository.save(song); 
+        
+        // Rest of method...
+        int durationInSeconds = song.getDuration() != null ? song.getDuration() / 1000 : 180;
         
         SongPlay play = SongPlay.builder()
             .song(song)
@@ -390,7 +395,6 @@ public class MediaService {
 
 
     private void ensurePlaysCurrentForSong(Song song) {
-        song.checkAndResetPlaysToday();
         Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
         song.setPlayCount(playCount != null ? playCount : 0L);
     }

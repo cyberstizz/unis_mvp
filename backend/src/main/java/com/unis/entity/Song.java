@@ -69,18 +69,4 @@ public class Song {
     @Transient
     private Long playCount;
 
-    // Helper method to check if plays_today needs reset
-    public void checkAndResetPlaysToday() {
-        LocalDate today = LocalDate.now();
-        if (lastPlayResetDate == null || !lastPlayResetDate.isEqual(today)) {
-            this.playsToday = 0;
-            this.lastPlayResetDate = today;
-        }
-    }
-
-    // Increment plays_today
-    public void incrementPlaysToday() {
-        checkAndResetPlaysToday();
-        this.playsToday++;
-    }
 }
