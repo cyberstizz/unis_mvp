@@ -42,7 +42,7 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     List<Object[]> computeSongScores();
 
     // Additional: Increment score (for events)
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Song s SET s.score = s.score + :increment WHERE s.songId = :id")
     void incrementScore(@Param("id") UUID id, @Param("increment") int increment);
 

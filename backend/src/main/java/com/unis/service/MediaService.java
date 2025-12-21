@@ -261,27 +261,31 @@ public class MediaService {
 
     // Play song - inserts play, triggers score +1
     public void playSong(UUID songId, UUID userId) {
-        Song song = songRepository.findById(songId)
-            .orElseThrow(() -> new RuntimeException("Song not found"));
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
         
-        // Check and reset for new day
+        // Update plays_today directly with native query - NO entity loading
         LocalDate today = LocalDate.now();
-        if (song.getLastPlayResetDate() == null || !song.getLastPlayResetDate().isEqual(today)) {
-            song.setPlaysToday(0);
-            song.setLastPlayResetDate(today);
-        }
-
-        // Increment plays_today (ONCE!)
-        song.setPlaysToday(song.getPlaysToday() + 1);
-        songRepository.save(song);
         
-        // IMPORTANT: Flush and clear to ensure DB writes complete
-        entityManager.flush();
-        entityManager.clear();
+        String updateQuery = """
+            UPDATE songs 
+            SET plays_today = CASE 
+                WHEN last_play_reset_date < :today THEN 1
+                ELSE plays_today + 1
+            END,
+            last_play_reset_date = :today
+            WHERE song_id = :songId
+            """;
         
-        // Create play record
+        Query q = entityManager.createNativeQuery(updateQuery);
+        q.setParameter("today", today);
+        q.setParameter("songId", songId);
+        q.executeUpdate();
+        
+        // Get song info for building SongPlay (read-only)
+        Song song = songRepository.findById(songId)
+            .orElseThrow(() -> new RuntimeException("Song not found"));
+        
         int durationInSeconds = song.getDuration() != null ? song.getDuration() / 1000 : 180;
         
         SongPlay play = SongPlay.builder()
@@ -291,7 +295,7 @@ public class MediaService {
             .build();
         songPlayRepository.save(play);
         scoreUpdateService.onPlay(userId, songId, "song");
-    }
+}
 
     // Play video - inserts play, triggers score +1
     public void playVideo(UUID videoId, UUID userId) {
@@ -442,12 +446,20 @@ public class MediaService {
     // Get single song by ID with play count
     public Song getSongById(UUID songId) {
         String query = "SELECT * FROM songs WHERE song_id = :songId";
-    
+
         Query q = entityManager.createNativeQuery(query, Song.class);
         q.setParameter("songId", songId);
         
         try {
             Song song = (Song) q.getSingleResult();
+            
+            // DEBUG: Print what came from the database
+            System.out.println("=== DEBUG getSongById ===");
+            System.out.println("Song ID: " + song.getSongId());
+            System.out.println("Title: " + song.getTitle());
+            System.out.println("playsToday from native query: " + song.getPlaysToday());
+            System.out.println("========================");
+            
             ensurePlaysCurrentForSong(song);
             return song;
         } catch (Exception e) {
