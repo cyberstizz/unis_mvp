@@ -236,7 +236,16 @@ public class AwardService {
     // Daily awards cron (midnight; top by votes for songs/artists per jurisdiction/genre/interval)
     @Scheduled(cron = "0 0 0 * * ?")
     public void computeDailyAwards() {
-        computeDailyAwardsForDate(LocalDate.now());
+
+        LocalDate yesterday = LocalDate.now().minusDays(1);
+        LocalDate today = LocalDate.now();
+    
+        // Compute awards for YESTERDAY's data
+        computeDailyAwardsForDate(yesterday);
+    
+        // Reset plays_today for the new day
+        songRepository.resetPlaysToday(today);
+
     }
 
     // Manual/past cron (for testing/retroactive; processes votes/plays for given date)

@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -57,4 +59,9 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Modifying
     @Query("DELETE FROM Song s WHERE s.artist.userId = :artistId")
     void deleteByArtistUserId(@Param("artistId") UUID artistId);
+
+    @Modifying
+    @Query("UPDATE Song s SET s.playsToday = 0, s.lastPlayResetDate = :today " +
+           "WHERE s.lastPlayResetDate < :today OR s.lastPlayResetDate IS NULL")
+    int resetPlaysToday(@Param("today") LocalDate today);
 }

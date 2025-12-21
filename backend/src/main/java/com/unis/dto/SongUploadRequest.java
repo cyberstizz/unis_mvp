@@ -17,4 +17,6 @@ public class SongUploadRequest {
     private String description;
     private UUID jurisdictionId;  
     private Integer duration;  
+    private Boolean explicit = false;
+    private String lyrics;
 }

@@ -34,6 +34,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -77,7 +78,7 @@ public class MediaService {
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Add song (page 7 artist dashboard)
+    // Add song 
     public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {
         try {
             SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
@@ -125,7 +126,7 @@ public class MediaService {
             // Duration 
             Integer duration = req.getDuration() != null ? req.getDuration() : computeDuration(file);
 
-            // Build & save
+            // Build & save 
             Song song = new Song();
             song.setTitle(req.getTitle());
             song.setArtist(artist);
@@ -135,9 +136,13 @@ public class MediaService {
             song.setDuration(duration);
             song.setFileUrl(fileUrl);
             song.setArtworkUrl(artworkUrl);
-            song.setScore(0);  
-            song.setLevel("silver");  
-            song.setCreatedAt(LocalDateTime.now());  
+            song.setScore(0);
+            song.setLevel("silver");
+            song.setCreatedAt(LocalDateTime.now());
+            song.setExplicit(req.getExplicit() != null ? req.getExplicit() : false);
+            song.setLyrics(req.getLyrics());
+            song.setPlaysToday(0);
+            song.setLastPlayResetDate(LocalDate.now());
 
             return songRepository.save(song);
         } catch (IOException e) {
@@ -261,6 +266,10 @@ public class MediaService {
         Song song = optionalSong.orElseThrow(() -> new RuntimeException("Song not found"));
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         
+        // Increment plays_today (with automatic reset if needed)
+        song.incrementPlaysToday();
+        songRepository.save(song); // Save the updated plays_today count
+        
         // Convert milliseconds to seconds, fallback to 180 if duration is null
         int durationInSeconds = song.getDuration() != null 
             ? song.getDuration() / 1000 
@@ -318,11 +327,7 @@ public class MediaService {
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
         
-        // NEW: Add play counts to each song
-        results.forEach(song -> {
-            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
-            song.setPlayCount(playCount != null ? playCount : 0L);
-        });
+        results.forEach(this::ensurePlaysCurrentForSong);
         
         if (results.isEmpty()) {
             return getFallbackSongs(limit);
@@ -330,6 +335,35 @@ public class MediaService {
         
         return results;
     }
+
+
+
+    // For trending in the feed carousel
+    public List<Song> getTrendingSongsByJurisdiction(UUID jurisdictionId, int limit) {
+            String query = """
+                WITH RECURSIVE jurisdiction_hierarchy AS (
+                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+                UNION ALL
+                SELECT j.jurisdiction_id FROM jurisdictions j
+                INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+                )
+                SELECT s.* FROM songs s
+                INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
+                ORDER BY COALESCE(s.plays_today, 0) DESC, s.created_at DESC
+                LIMIT :limit
+                """;
+            
+            Query q = entityManager.createNativeQuery(query, Song.class);
+            q.setParameter("jurisdictionId", jurisdictionId);
+            q.setParameter("limit", limit);
+            
+            @SuppressWarnings("unchecked")
+            List<Song> results = q.getResultList();
+            
+            results.forEach(this::ensurePlaysCurrentForSong);
+            
+            return results.isEmpty() ? getFallbackSongs(limit) : results;
+        }
 
     public List<Video> getTopVideosByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
@@ -354,7 +388,14 @@ public class MediaService {
         return results.isEmpty() ? getFallbackVideos(limit) : results;
     }
 
-    // UPDATED: Fallback with play counts
+
+    private void ensurePlaysCurrentForSong(Song song) {
+        song.checkAndResetPlaysToday();
+        Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+        song.setPlayCount(playCount != null ? playCount : 0L);
+    }
+
+    // Fallback with play counts
     private List<Song> getFallbackSongs(int limit) {
         List<Song> songs = songRepository.findAll(Sort.by(Sort.Direction.ASC, "songId"))
             .stream()
@@ -394,15 +435,12 @@ public class MediaService {
         return videoRepository.findByArtistId(artistId);
     }
 
-    // UPDATED: Get single song by ID with play count
+    // Get single song by ID with play count
     public Song getSongById(UUID songId) {
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
         
-        // Calculate actual play count
-        Long playCount = songPlayRepository.countTotalPlaysBySongId(songId);
-        song.setPlayCount(playCount != null ? playCount : 0L);
-        
+        ensurePlaysCurrentForSong(song);
         return song;
     }
 
