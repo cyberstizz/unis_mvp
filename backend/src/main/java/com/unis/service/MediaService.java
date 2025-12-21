@@ -272,6 +272,10 @@ public class MediaService {
             song.setPlaysToday(0);
             song.setLastPlayResetDate(today);
         }
+
+        //set the plays for today
+        song.setPlaysToday(song.getPlaysToday() + 1);
+        songRepository.save(song);
         
         // Increment
         song.setPlaysToday(song.getPlaysToday() + 1);
