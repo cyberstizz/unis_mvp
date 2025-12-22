@@ -15,6 +15,17 @@ spring:
     name: unis
   profiles:
     active: local
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=1000,expireAfterWrite=5m
+    cache-names:
+      - songs
+      - artists
+      - jurisdictions
+      - genres
+      - trending
+      - userProfiles
   web:
     resources:
       static-locations: classpath:/static,classpath:/uploads

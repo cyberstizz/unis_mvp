@@ -27,6 +27,8 @@ import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,7 +80,8 @@ public class MediaService {
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Add song 
+    // Add song - EVICTS cache because new content affects trending/artist lists
+    @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
     public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {
         try {
             SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
@@ -152,6 +155,7 @@ public class MediaService {
         }
     }
 
+    // NOT CACHED - private helper method
     private Integer computeDuration(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             System.err.println("File is null or empty, returning fallback duration");
@@ -198,7 +202,7 @@ public class MediaService {
         return 180000;
     }
 
-    // Add video (page 7 artist dashboard)
+    // NOT CACHED - Video methods (you said video is coming later)
     public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {
         try {
             VideoUploadRequest req = objectMapper.readValue(videoJson, VideoUploadRequest.class);
@@ -251,20 +255,24 @@ public class MediaService {
         }
     }
 
+    // Delete song - EVICTS cache
+    @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
     public void deleteSong(UUID songId) {
         songRepository.deleteById(songId);
     }
 
+    // NOT CACHED - video delete
     public void deleteVideo(UUID videoId) {
         videoRepository.deleteById(videoId);
     }
 
-    // Play song - inserts play, triggers score +1
+    // Play song - EVICTS song cache and trending cache because playsToday changes
+    @CacheEvict(value = {"songs", "trending"}, allEntries = true)
     public void playSong(UUID songId, UUID userId) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
         
-        // Update plays_today directly with native query - NO entity loading
+        // Update plays_today directly with native query
         LocalDate today = LocalDate.now();
         
         String updateQuery = """
@@ -282,7 +290,7 @@ public class MediaService {
         q.setParameter("songId", songId);
         q.executeUpdate();
         
-        // Get song info for building SongPlay (read-only)
+        // Get song info for building SongPlay
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found"));
         
@@ -295,16 +303,15 @@ public class MediaService {
             .build();
         songPlayRepository.save(play);
         scoreUpdateService.onPlay(userId, songId, "song");
-}
+    }
 
-    // Play video - inserts play, triggers score +1
+    // NOT CACHED - video play
     public void playVideo(UUID videoId, UUID userId) {
         Optional<Video> optionalVideo = videoRepository.findById(videoId);
         Optional<User> optionalUser = userRepository.findById(userId);
         Video video = optionalVideo.orElseThrow(() -> new RuntimeException("Video not found"));
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
         
-        // Convert milliseconds to seconds, fallback to 180 if duration is null
         int durationInSeconds = video.getDuration() != null 
             ? video.getDuration() / 1000 
             : 180;
@@ -318,7 +325,9 @@ public class MediaService {
         scoreUpdateService.onPlay(userId, videoId, "video");
     }
 
-    // UPDATED: Get top songs by score in jurisdiction + hierarchy
+    // CACHED: Top songs by score (5 min TTL via CacheConfig)
+    // Cache key includes jurisdiction + limit so different queries are cached separately
+    @Cacheable(value = "songs", key = "'top-score-' + #jurisdictionId + '-' + #limit")
     public List<Song> getTopSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -349,35 +358,36 @@ public class MediaService {
         return results;
     }
 
-
-
-    // For trending in the feed carousel
+    // CACHED: Trending songs by plays_today (shorter 1 min TTL via "trending" cache)
+    // This changes frequently so we use the "trending" cache which has shorter TTL
+    @Cacheable(value = "trending", key = "'plays-today-' + #jurisdictionId + '-' + #limit")
     public List<Song> getTrendingSongsByJurisdiction(UUID jurisdictionId, int limit) {
-            String query = """
-                WITH RECURSIVE jurisdiction_hierarchy AS (
-                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
-                UNION ALL
-                SELECT j.jurisdiction_id FROM jurisdictions j
-                INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
-                )
-                SELECT s.* FROM songs s
-                INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
-                ORDER BY COALESCE(s.plays_today, 0) DESC, s.created_at DESC
-                LIMIT :limit
-                """;
-            
-            Query q = entityManager.createNativeQuery(query, Song.class);
-            q.setParameter("jurisdictionId", jurisdictionId);
-            q.setParameter("limit", limit);
-            
-            @SuppressWarnings("unchecked")
-            List<Song> results = q.getResultList();
-            
-            results.forEach(this::ensurePlaysCurrentForSong);
-            
-            return results.isEmpty() ? getFallbackSongs(limit) : results;
-        }
+        String query = """
+            WITH RECURSIVE jurisdiction_hierarchy AS (
+            SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+            UNION ALL
+            SELECT j.jurisdiction_id FROM jurisdictions j
+            INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            )
+            SELECT s.* FROM songs s
+            INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
+            ORDER BY COALESCE(s.plays_today, 0) DESC, s.created_at DESC
+            LIMIT :limit
+            """;
+        
+        Query q = entityManager.createNativeQuery(query, Song.class);
+        q.setParameter("jurisdictionId", jurisdictionId);
+        q.setParameter("limit", limit);
+        
+        @SuppressWarnings("unchecked")
+        List<Song> results = q.getResultList();
+        
+        results.forEach(this::ensurePlaysCurrentForSong);
+        
+        return results.isEmpty() ? getFallbackSongs(limit) : results;
+    }
 
+    // NOT CACHED - video methods
     public List<Video> getTopVideosByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -401,20 +411,19 @@ public class MediaService {
         return results.isEmpty() ? getFallbackVideos(limit) : results;
     }
 
-
+    // NOT CACHED - private helper method
     private void ensurePlaysCurrentForSong(Song song) {
         Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
         song.setPlayCount(playCount != null ? playCount : 0L);
     }
 
-    // Fallback with play counts
+    // NOT CACHED - private fallback method
     private List<Song> getFallbackSongs(int limit) {
         List<Song> songs = songRepository.findAll(Sort.by(Sort.Direction.ASC, "songId"))
             .stream()
             .limit(limit)
             .collect(Collectors.toList());
         
-        // Add play counts
         songs.forEach(song -> {
             Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
             song.setPlayCount(playCount != null ? playCount : 0L);
@@ -423,6 +432,7 @@ public class MediaService {
         return songs;
     }
 
+    // NOT CACHED - private fallback method
     private List<Video> getFallbackVideos(int limit) {
         return videoRepository.findAll(Sort.by(Sort.Direction.ASC, "videoId"))
             .stream()
@@ -430,20 +440,21 @@ public class MediaService {
             .collect(Collectors.toList());
     }
 
-    // UPDATED: Artist's songs with play counts
+    // CACHED: Artist's songs (5 min TTL via "artists" cache)
+    @Cacheable(value = "artists", key = "'songs-' + #artistId")
     public List<Song> getSongsByArtist(UUID artistId) {
         List<Song> songs = songRepository.findByArtistId(artistId);
-        
-        // Add play counts to each song
         songs.forEach(this::ensurePlaysCurrentForSong);
         return songs;
     }
 
+    // NOT CACHED - video methods
     public List<Video> getVideosByArtist(UUID artistId) {
         return videoRepository.findByArtistId(artistId);
     }
 
-    // Get single song by ID with play count
+    // CACHED: Individual song lookup (5 min TTL)
+    @Cacheable(value = "songs", key = "#songId")
     public Song getSongById(UUID songId) {
         String query = "SELECT * FROM songs WHERE song_id = :songId";
 
@@ -452,14 +463,6 @@ public class MediaService {
         
         try {
             Song song = (Song) q.getSingleResult();
-            
-            // DEBUG: Print what came from the database
-            System.out.println("=== DEBUG getSongById ===");
-            System.out.println("Song ID: " + song.getSongId());
-            System.out.println("Title: " + song.getTitle());
-            System.out.println("playsToday from native query: " + song.getPlaysToday());
-            System.out.println("========================");
-            
             ensurePlaysCurrentForSong(song);
             return song;
         } catch (Exception e) {
@@ -467,12 +470,14 @@ public class MediaService {
         }
     }
 
+    // NOT CACHED - video method
     public Video getVideoById(UUID videoId) {
         return videoRepository.findById(videoId)
             .orElseThrow(() -> new RuntimeException("Video not found: " + videoId));
     }
 
-    // UPDATED: Get newest songs with play counts
+    // CACHED: New releases (5 min TTL)
+    @Cacheable(value = "songs", key = "'new-' + #jurisdictionId + '-' + #limit")
     public List<Song> getNewSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -494,7 +499,6 @@ public class MediaService {
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
         
-        // NEW: Add play counts to each song
         results.forEach(song -> {
             Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
             song.setPlayCount(playCount != null ? playCount : 0L);

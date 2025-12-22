@@ -16,6 +16,8 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import com.unis.repository.SupporterRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,17 +66,16 @@ public class UserService {
     @Autowired 
     private EntityManager entityManager;
 
-    // Register new user (mandatory supported_artist_id for listeners only)
+    // Register new user - NOT CACHED (write operation)
     public User register(User newUser, UUID supportedArtistId) {
         // Hash password
         newUser.setPasswordHash(passwordEncoder.encode(newUser.getPasswordHash()));
         newUser.setCreatedAt(LocalDateTime.now());
-        newUser.setScore(0);  // Init score
+        newUser.setScore(0);
 
         // Save user
         User savedUser = userRepository.save(newUser);
         
-
         // For listeners: Validate and set supported artist + create Supporter
         if ("listener".equals(savedUser.getRole().toString()) && supportedArtistId != null) {
             Optional<User> optionalArtist = userRepository.findById(supportedArtistId);
@@ -89,13 +90,13 @@ public class UserService {
                 .artist(supportedArtist)
                 .build();
             supporterRepository.save(supporter);
-        }  // Artists skip
+        }
 
         return savedUser;
     }
 
-    // Fetch profile (full with jurisdiction and default song if artist)
-    // In UserService.java - Update the getProfile method
+    // CACHED: Fetch user profile (5 min TTL via "userProfiles" cache)
+    @Cacheable(value = "userProfiles", key = "#userId")
     public User getProfile(UUID userId) {
         Optional<User> optionalUser = userRepository.findByIdWithJurisdiction(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -105,15 +106,16 @@ public class UserService {
             songRepository.findById(user.getDefaultSongId()).ifPresent(user::setDefaultSong);
         }
         
-        // CRITICAL: Force load jurisdiction to avoid lazy load issues
+        // Force load jurisdiction to avoid lazy load issues
         if (user.getJurisdiction() != null) {
-            user.getJurisdiction().getName(); // Trigger lazy load
+            user.getJurisdiction().getName();
         }
         
         return user;
-}
+    }
 
-    // Update photo
+    // Update photo - EVICTS user profile cache
+    @CacheEvict(value = {"userProfiles", "artists"}, key = "#userId")
     public User updatePhoto(UUID userId, String photoUrl) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -121,7 +123,8 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // Update bio
+    // Update bio - EVICTS user profile cache
+    @CacheEvict(value = {"userProfiles", "artists"}, key = "#userId")
     public User updateBio(UUID userId, String bio) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -129,7 +132,8 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // NEW: Update default song (artists only)
+    // Update default song - EVICTS user profile and artist cache
+    @CacheEvict(value = {"userProfiles", "artists"}, key = "#userId")
     public User updateDefaultSong(UUID userId, UUID defaultSongId) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -152,7 +156,8 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // Update password (validate old)
+    // Update password - EVICTS user profile cache (even though password not visible)
+    @CacheEvict(value = "userProfiles", key = "#userId")
     public User updatePassword(UUID userId, String oldPassword, String newPassword) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -163,7 +168,8 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // Artist page fetch (user + media/awards count + default song)
+    // CACHED: Artist profile page (5 min TTL via "artists" cache)
+    @Cacheable(value = "artists", key = "'profile-' + #artistId")
     public User getArtistProfile(UUID artistId) {
         Optional<User> optionalArtist = userRepository.findByIdWithJurisdiction(artistId);
         User artist = optionalArtist.orElseThrow(() -> new RuntimeException("Artist not found"));
@@ -179,12 +185,15 @@ public class UserService {
         return artist;
     }
 
+    // NOT CACHED - Used for authentication, needs fresh data
     public User findByEmail(String email) {
         return userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
     }
 
-    // Get top artists by total score in jurisdiction + hierarchy (for popular artists)
+    // CACHED: Top artists by jurisdiction (5 min TTL)
+    // Expensive query with joins and aggregations
+    @Cacheable(value = "artists", key = "'top-' + #jurisdictionId + '-' + #limit")
     public List<User> getTopArtistsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -198,7 +207,7 @@ public class UserService {
             LEFT JOIN songs s ON s.artist_id = u.user_id AND s.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
             LEFT JOIN videos v ON v.artist_id = u.user_id AND v.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
             GROUP BY u.user_id, u.username, u.default_song_id
-            HAVING COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) > 0  -- Only scored artists
+            HAVING COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) > 0
             ORDER BY total_score DESC
             LIMIT :limit
             """;
@@ -227,20 +236,20 @@ public class UserService {
                 .collect(Collectors.toList());
     }
 
-
-        // NEW: Permanently delete the authenticated user + ALL their data
+    // Delete user - EVICTS all relevant caches
     @Transactional
+    @CacheEvict(value = {"userProfiles", "artists"}, allEntries = true)
     public void deleteCurrentUserAndAllData(UUID currentUserId) {
-        // 1. Delete all songs by this artist (if artist)
+        // 1. Delete all songs by this artist
         songRepository.deleteByArtistUserId(currentUserId);
 
-        // 2. Delete all videos by this artist (if you ever add Video entity, it's already safe)
+        // 2. Delete all videos by this artist
         videoRepository.deleteByArtistUserId(currentUserId);
 
         // 3. Delete all votes cast BY this user
         voteRepository.deleteByUserUserId(currentUserId);
 
-        // 4. Delete all votes cast ON this user's songs (if artist)
+        // 4. Delete all votes cast ON this user's songs
         voteRepository.deleteByTargetArtistId(currentUserId);
 
         // 5. Delete all awards this user ever received
@@ -248,21 +257,17 @@ public class UserService {
 
         // 6. Delete all song plays / video plays
         songPlayRepository.deleteByUserUserId(currentUserId);
-        
         videoPlayRepository.deleteByUserUserId(currentUserId);
 
-        // 7. Delete all likes (if you have a Like entity)
+        // 7. Delete all likes
         likeRepository.deleteByUserUserId(currentUserId);
 
-        // 8. Delete all ad views (if tracked per user)
+        // 8. Delete all ad views
         adViewRepository.deleteByUserUserId(currentUserId);
 
         // 9. Clean up supporter relationships
-        // - If this user was a listener supporting someone → remove the link
         userRepository.nullifySupportedArtistForListeners(currentUserId);
-        // - If this user was an artist being supported → remove all Supporter rows pointing to them
         supporterRepository.deleteByArtistUserId(currentUserId);
-        // and the same if they were just a listener
         supporterRepository.deleteByListenerUserId(currentUserId);
 
         // 10. Finally delete the user record itself
