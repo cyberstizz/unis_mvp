@@ -13,6 +13,8 @@ import com.unis.repository.SongRepository;
 import com.unis.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,7 +56,10 @@ public class AwardService {
     @Value("${unis.auto-populate-awards:true}")
     private boolean autoPopulateAwards;
 
-    // Get current leaderboards (page 4; top by votes for period)
+    // CACHED: Current leaderboards (2 min TTL via "leaderboards" cache)
+    // This changes frequently as votes come in, so uses shorter TTL
+    // Cache key includes all parameters so different queries cache separately
+    @Cacheable(value = "leaderboards", key = "'leaderboard-' + #type + '-' + #intervalId + '-' + #jurisdictionId")
     public List<Award> getLeaderboards(String type, UUID intervalId, UUID jurisdictionId) {
         // Default to Daily interval if null
         if (intervalId == null) {
@@ -87,7 +92,10 @@ public class AwardService {
         return populateAwardEntities(awards);
     }
 
-    // Get past awards/milestones (page 5; top for date range, genreId optional)
+    // CACHED: Past awards/milestones (10 min TTL via "awards" cache)
+    // Historical data changes rarely (only when cron creates new awards), so longer TTL
+    // Cache key includes all parameters for proper cache separation
+    @Cacheable(value = "awards", key = "'past-' + #type + '-' + #startDate + '-' + #endDate + '-' + #jurisdictionId + '-' + #genreId")
     public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, UUID jurisdictionId, UUID genreId) {
         // Determine interval based on date range
         Optional<VotingInterval> intervalOpt = determineIntervalFromDateRange(startDate, endDate);
@@ -140,7 +148,8 @@ public class AwardService {
         return populateAwardEntities(awards);
     }
 
-    // FALLBACK: Create awards from existing songs/artists when no votes exist
+    // NOT CACHED - Private fallback method
+    // Creates awards from existing songs/artists when no votes exist
     private List<Award> createFallbackAwards(String type, UUID jurisdictionId, UUID intervalId, LocalDate awardDate) {
         List<Award> fallbackAwards = new ArrayList<>();
         
@@ -196,7 +205,8 @@ public class AwardService {
         return fallbackAwards;
     }
 
-    // Helper: Populate Song/User entities for frontend
+    // NOT CACHED - Private helper method
+    // Populate Song/User entities for frontend (triggers additional DB queries)
     private List<Award> populateAwardEntities(List<Award> awards) {
         for (Award award : awards) {
             if ("song".equals(award.getTargetType())) {
@@ -214,7 +224,8 @@ public class AwardService {
         return awards;
     }
 
-    // Helper: Determine interval from date range
+    // NOT CACHED - Private helper method
+    // Determine interval from date range
     private Optional<VotingInterval> determineIntervalFromDateRange(LocalDate startDate, LocalDate endDate) {
         long daysBetween = java.time.temporal.ChronoUnit.DAYS.between(startDate, endDate);
         
@@ -233,6 +244,7 @@ public class AwardService {
         }
     }
 
+    // NOT CACHED - Scheduled cron job (runs once daily at midnight)
     // Daily awards cron (midnight; top by votes for songs/artists per jurisdiction/genre/interval)
     @Scheduled(cron = "0 0 0 * * ?")
     public void computeDailyAwards() {
@@ -248,7 +260,7 @@ public class AwardService {
 
     }
 
-    // Manual/past cron (for testing/retroactive; processes votes/plays for given date)
+    // NOT CACHED - Manual/past cron (for testing/retroactive; processes votes/plays for given date)
     public void computeDailyAwardsForDate(LocalDate cronDate) {
         Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
         if (dailyInterval.isEmpty()) return;
@@ -316,7 +328,7 @@ public class AwardService {
         }
     }
 
-    // Multi-interval crons (call computeForInterval)
+    // NOT CACHED - Scheduled cron jobs (run on schedule)
     @Scheduled(cron = "0 1 0 * * MON")  // Weekly Monday 12:01 AM
     public void computeWeeklyAwards() {
         Optional<VotingInterval> weekly = votingIntervalRepository.findByName("Weekly");
@@ -362,7 +374,9 @@ public class AwardService {
         computeForInterval(annual.get().getIntervalId(), null, null, LocalDate.now());
     }
 
-    // General computeForInterval (dynamic range, targeted jur/genre or all)
+    // EVICTS both award caches - called when new awards are created
+    // This ensures cached leaderboards and past awards refresh to show new data
+    @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
     public void computeForInterval(UUID intervalId, UUID jurisdictionId, UUID genreId, LocalDate cronDate) {
         LocalDate startDate = getIntervalStartDate(intervalId, cronDate);
         List<UUID> jurisdictions = jurisdictionId != null ? List.of(jurisdictionId) : jurisdictionRepository.findAllJurisdictionIds();
@@ -427,6 +441,7 @@ public class AwardService {
         }
     }
 
+    // NOT CACHED - Private helper method
     // getIntervalStartDate (full, relative to cronDate)
     private LocalDate getIntervalStartDate(UUID intervalId, LocalDate cronDate) {
         VotingInterval interval = votingIntervalRepository.findById(intervalId).orElseThrow();
