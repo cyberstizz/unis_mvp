@@ -1,5 +1,6 @@
 package com.unis.service;
 
+import com.unis.entity.Song;
 import com.unis.entity.User;
 import com.unis.repository.UserRepository;
 import com.unis.repository.SongRepository;
@@ -46,8 +47,13 @@ public class ScoreUpdateService {
         // +1 to media (song/video score)
         if ("song".equals(type)) {
             songRepository.incrementScore(mediaId, 1);
-        } // Similar for video
-        // Artist gets +1 (join artist_id)
+
+            Song song = songRepository.findById(mediaId).orElse(null);
+        if (song != null && song.getArtist() != null) {
+            updateUserScoreIncrement(song.getArtist().getUserId(), 1);
+        }
+
+        } 
     }
 
     // Event-driven: On vote (call from VoteService)
@@ -58,9 +64,15 @@ public class ScoreUpdateService {
         // +3 to target (artist/song)
         if ("artist".equals(targetType)) {
             updateArtistScoreIncrement(targetId, 3);
-        } else {
-            // Song/Video: +3
+        } else if ("song".equals(targetType)) {
+        songRepository.incrementScore(targetId, 3);
+
+
+        Song song = songRepository.findById(targetId).orElse(null);
+        if (song != null && song.getArtist() != null) {
+            updateUserScoreIncrement(song.getArtist().getUserId(), 3);
         }
+      }
     }
 
     // Batch for age/referrals (hourly, not 10 min—lighter)
