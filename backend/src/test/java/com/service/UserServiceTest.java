@@ -84,7 +84,7 @@ class UserServiceTest {
             .jurisdiction(Jurisdiction.builder().jurisdictionId(testJurisdictionId).build())
             .build();
 
-        User registered = userService.register(newUser, testArtistId);
+        User registered = userService.register(newUser, testArtistId, testReferralCode);
 
         assertNotNull(registered);
         assertEquals("newuser", registered.getUsername());
@@ -105,7 +105,7 @@ class UserServiceTest {
             .jurisdiction(Jurisdiction.builder().jurisdictionId(testJurisdictionId).build())
             .build();
 
-        assertThrows(RuntimeException.class, () -> userService.register(newUser, testArtistId));
+        assertThrows(RuntimeException.class, () -> userService.register(newUser, testArtistId, testReferralCode));
     }
 
     @Test

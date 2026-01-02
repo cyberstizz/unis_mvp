@@ -82,4 +82,140 @@ public class JurisdictionService {
         }
         return new ArrayList<>();
     }
+
+    // =====================================================================
+    // NEW METHODS FOR HIERARCHY NAVIGATION (FindPage map drill-down)
+    // =====================================================================
+
+    /**
+     * Get all direct children of a jurisdiction
+     * Used for map drill-down: clicking a jurisdiction shows its children
+     */
+    @Cacheable(value = "jurisdictions", key = "'children-' + #parentJurisdictionId")
+    public List<Jurisdiction> getChildren(UUID parentJurisdictionId) {
+        return jurisdictionRepository.findByParentJurisdictionId(parentJurisdictionId);
+    }
+
+    /**
+     * Get root jurisdictions (no parent - typically just "Unis")
+     * For the very top level of the hierarchy
+     */
+    @Cacheable(value = "jurisdictions", key = "'roots'")
+    public List<Jurisdiction> getRootJurisdictions() {
+        return jurisdictionRepository.findTopLevelJurisdictions();
+    }
+
+    /**
+     * Check if a jurisdiction has children (for UI - show drill-down indicator)
+     */
+    @Cacheable(value = "jurisdictions", key = "'hasChildren-' + #jurisdictionId")
+    public boolean hasChildren(UUID jurisdictionId) {
+        return jurisdictionRepository.hasChildren(jurisdictionId);
+    }
+
+    /**
+     * Get the parent chain for breadcrumb navigation
+     * Returns list from root down to the specified jurisdiction
+     */
+    @Cacheable(value = "jurisdictions", key = "'parentChain-' + #jurisdictionId")
+    public List<Map<String, Object>> getParentChain(UUID jurisdictionId) {
+        List<Object[]> rawResults = jurisdictionRepository.findParentChain(jurisdictionId);
+        List<Map<String, Object>> chain = new ArrayList<>();
+        
+        for (Object[] row : rawResults) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("jurisdictionId", row[0]);
+            item.put("name", row[1]);
+            item.put("parentJurisdictionId", row[2]);
+            item.put("polygon", row[3]);
+            item.put("bio", row[4]);
+            item.put("symbolUrl", row[5]);
+            chain.add(item);
+        }
+        
+        return chain;
+    }
+
+    /**
+     * Get children with additional metadata for the map
+     * Includes hasChildren flag and active status
+     */
+    @Cacheable(value = "jurisdictions", key = "'childrenWithMeta-' + #parentJurisdictionId")
+    public List<Map<String, Object>> getChildrenWithMetadata(UUID parentJurisdictionId) {
+        List<Jurisdiction> children = jurisdictionRepository.findByParentJurisdictionId(parentJurisdictionId);
+        List<Map<String, Object>> result = new ArrayList<>();
+        
+        // Define active jurisdictions (only Harlem and its children for launch)
+        List<String> activeJurisdictions = List.of("Harlem", "Uptown Harlem", "Downtown Harlem");
+        
+        for (Jurisdiction child : children) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("jurisdictionId", child.getJurisdictionId());
+            item.put("name", child.getName());
+            item.put("polygon", child.getPolygon());
+            item.put("bio", child.getBio());
+            item.put("symbolUrl", child.getSymbolUrl());
+            item.put("hasChildren", jurisdictionRepository.hasChildren(child.getJurisdictionId()));
+            item.put("isActive", activeJurisdictions.contains(child.getName()));
+            
+            // Get parent info
+            if (child.getParentJurisdiction() != null) {
+                item.put("parentJurisdictionId", child.getParentJurisdiction().getJurisdictionId());
+                item.put("parentName", child.getParentJurisdiction().getName());
+            }
+            
+            result.add(item);
+        }
+        
+        return result;
+    }
+
+    /**
+     * Find the most specific jurisdiction containing a geographic point
+     * Used for user signup to auto-assign jurisdiction based on location
+     * Returns the deepest (most specific) jurisdiction that contains the point
+     */
+    public Optional<Jurisdiction> findJurisdictionByLocation(double lat, double lng) {
+        List<Object[]> results = jurisdictionRepository.findJurisdictionsContainingPoint(lat, lng);
+        
+        if (results.isEmpty()) {
+            return Optional.empty();
+        }
+        
+        // Find the most specific (deepest) jurisdiction
+        // The one with the most parents in its chain is the most specific
+        UUID mostSpecificId = null;
+        int maxDepth = 0;
+        
+        for (Object[] row : results) {
+            UUID jurisdictionId = (UUID) row[0];
+            List<Map<String, Object>> chain = getParentChain(jurisdictionId);
+            if (chain.size() > maxDepth) {
+                maxDepth = chain.size();
+                mostSpecificId = jurisdictionId;
+            }
+        }
+        
+        if (mostSpecificId != null) {
+            return jurisdictionRepository.findById(mostSpecificId);
+        }
+        
+        return Optional.empty();
+    }
+
+    /**
+     * Get all states (Tier 2) - direct children of Unis
+     * Used for the US map view
+     */
+    @Cacheable(value = "jurisdictions", key = "'states'")
+    public List<Jurisdiction> getAllStates() {
+        // First find Unis
+        Optional<Jurisdiction> unis = jurisdictionRepository.findByName("Unis");
+        if (unis.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        // Return children of Unis (all states)
+        return jurisdictionRepository.findByParentJurisdictionId(unis.get().getJurisdictionId());
+    }
 }
