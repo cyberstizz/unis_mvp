@@ -69,6 +69,18 @@ public class User {
     @Transient
     private Song defaultSong;
 
+    @Column(name = "instagram_url")
+    private String instagramUrl;
+
+    @Column(name = "twitter_url")
+    private String twitterUrl;
+
+    @Column(name = "tiktok_url")
+    private String tiktokUrl;
+
+    @Column(name = "referral_code", unique = true, nullable = false, length = 50)
+    private String referralCode;
+
     public enum Role {
         listener, artist
     }

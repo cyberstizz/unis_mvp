@@ -16,7 +16,11 @@ import java.io.IOException;
 public interface UserRepository extends JpaRepository<User, UUID> {
     User findByUsername(String username);  // For auth
 
-    Optional<User> findByEmail(String email);  // Basic for UserDetailsService
+    Optional<User> findByEmail(String email);
+
+    Optional<User> findByReferralCode(String referralCode);
+    
+    boolean existsByReferralCode(String referralCode);
 
     // Your original: FETCH jurisdiction only
     @Query("SELECT u FROM User u LEFT JOIN FETCH u.jurisdiction WHERE u.userId = :id")

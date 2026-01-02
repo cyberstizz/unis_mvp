@@ -17,4 +17,5 @@ public class UserDto {
     private String newPassword;  // For password update
     private UUID genreId;  // for artist registration
     private UUID defaultSongId;  // Default song  when clicking "play" on artist card)
+    private String referralCode;
 }

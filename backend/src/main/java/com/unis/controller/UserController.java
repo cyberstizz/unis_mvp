@@ -14,6 +14,7 @@ import com.unis.entity.Song;
 import com.unis.service.UserService;
 import com.unis.service.FileStorageService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -53,31 +54,38 @@ public class UserController {
     private SongRepository songRepository;
 
     // POST /api/v1/users/register (page 6 signup)
-    @PostMapping("/register")
-    public ResponseEntity<User> register(@RequestBody UserDto dto) {
-        User user = User.builder()
-            .username(dto.getUsername())
-            .email(dto.getEmail())
-            .passwordHash(dto.getPassword())
-            .role(User.Role.valueOf(dto.getRole()))
-            .bio(dto.getBio())
-            .build();
-        
-        // Fetch jurisdiction entity and set
-        Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
-            .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
-        user.setJurisdiction(jurisdiction);
-        
-        // ADD THIS: Set genre for artists
-        if (dto.getGenreId() != null) {
-            Genre genre = genreRepository.findById(dto.getGenreId())
-                .orElseThrow(() -> new RuntimeException("Genre not found"));
-            user.setGenre(genre);
-        }
-        
-        User registered = userService.register(user, dto.getSupportedArtistId());
-        return ResponseEntity.ok(registered);
+    // POST /api/v1/users/register (page 6 signup)
+@PostMapping("/register")
+public ResponseEntity<User> register(@RequestBody UserDto dto) {
+    User user = User.builder()
+        .username(dto.getUsername())
+        .email(dto.getEmail())
+        .passwordHash(dto.getPassword())
+        .role(User.Role.valueOf(dto.getRole()))
+        .bio(dto.getBio())
+        .build();
+    
+    // Fetch jurisdiction entity and set
+    Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
+        .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
+    user.setJurisdiction(jurisdiction);
+    
+    // Set genre for artists
+    if (dto.getGenreId() != null) {
+        Genre genre = genreRepository.findById(dto.getGenreId())
+            .orElseThrow(() -> new RuntimeException("Genre not found"));
+        user.setGenre(genre);
     }
+    
+    // Pass referral code to register method
+    User registered = userService.register(
+        user, 
+        dto.getSupportedArtistId(),
+        dto.getReferralCode()  
+    );
+    
+    return ResponseEntity.ok(registered);
+}
 
     // GET /api/v1/users/profile/{id} (page 6 dashboard)
    @GetMapping("/profile/{userId}")
@@ -223,6 +231,23 @@ public class UserController {
         userService.updateDefaultSong(user.getUserId(), songId);
         
         return ResponseEntity.ok(Map.of("message", "Default song set"));
+    }
+
+  
+    @GetMapping("/referral-code/{userId}")
+    public ResponseEntity<Map<String, String>> getReferralCode(@PathVariable UUID userId) {
+        try {
+            User user = userService.getProfile(userId);
+            
+            Map<String, String> response = new HashMap<>();
+            response.put("username", user.getUsername());
+            response.put("referralCode", user.getReferralCode());
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
     }
 
 }

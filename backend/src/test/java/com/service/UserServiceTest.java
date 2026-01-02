@@ -39,10 +39,12 @@ class UserServiceTest {
     private UUID testUserId;
     private UUID testJurisdictionId;
     private UUID testArtistId;
+    private String testReferralCode;
 
     @BeforeEach
     void setUp() {
         testUserId = UUID.randomUUID();
+        testReferralCode = "someTest-3845";
         testJurisdictionId = UUID.randomUUID();
         testArtistId = UUID.randomUUID();
 
@@ -50,6 +52,7 @@ class UserServiceTest {
             .userId(testUserId)
             .username("testuser")
             .email("test@example.com")
+            .referralCode(testReferralCode)
             .passwordHash("hashedpass")
             .role(User.Role.listener)
             .jurisdiction(Jurisdiction.builder().jurisdictionId(testJurisdictionId).build())

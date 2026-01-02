@@ -1,6 +1,7 @@
 package com.unis.service;
 
 import com.unis.entity.User;
+import com.unis.entity.Referral;
 import com.unis.entity.Song;
 import com.unis.entity.Supporter;
 import com.unis.repository.UserRepository;
@@ -12,6 +13,9 @@ import com.unis.repository.SongPlayRepository;
 import com.unis.repository.VideoPlayRepository;
 import com.unis.repository.LikeRepository;
 import com.unis.repository.AdViewRepository;
+import com.unis.service.ScoreUpdateService;
+import com.unis.util.ReferralCodeGenerator;
+import com.unis.repository.ReferralRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import com.unis.repository.SupporterRepository;
@@ -35,6 +39,9 @@ public class UserService {
 
     @Autowired
     private SupporterRepository supporterRepository;
+
+    @Autowired
+    private ReferralRepository referralRepository;
 
     @Autowired
     private SongRepository songRepository;
@@ -66,15 +73,53 @@ public class UserService {
     @Autowired 
     private EntityManager entityManager;
 
+    @Autowired 
+    private ScoreUpdateService scoreUpdateService;
+
     // Register new user - NOT CACHED (write operation)
-    public User register(User newUser, UUID supportedArtistId) {
+    public User register(User newUser, UUID supportedArtistId, String referralCode) {
         // Hash password
         newUser.setPasswordHash(passwordEncoder.encode(newUser.getPasswordHash()));
         newUser.setCreatedAt(LocalDateTime.now());
         newUser.setScore(0);
+        newUser.setLevel("silver");
+
+        //generate a referral code for this user
+        String uniqueReferralCode = ReferralCodeGenerator.generateUnique(
+            newUser.getUsername(),
+            code -> userRepository.existsByReferralCode(code)
+        );
+        newUser.setReferralCode(uniqueReferralCode);
 
         // Save user
         User savedUser = userRepository.save(newUser);
+
+
+        if (referralCode != null && !referralCode.trim().isEmpty()) {
+            Optional<User> referrerOpt = userRepository.findByReferralCode(referralCode);
+            
+            if (referrerOpt.isPresent()) {
+                User referrer = referrerOpt.get();
+                
+                // Create referral record
+                Referral referral = Referral.builder()
+                        .referrer(referrer)
+                        .referred(savedUser)
+                        .createdAt(LocalDateTime.now())
+                        .build();
+                referralRepository.save(referral);
+                
+                //Award points to referrer (+5 for listeners, +2 for artists)
+                scoreUpdateService.onReferral(referrer.getUserId());
+                
+                System.out.println("Referral tracked: " + referrer.getUsername() + " referred " + savedUser.getUsername());
+            } else {
+                System.out.println("Warning: Referral code '" + referralCode + "' not found. Proceeding without referral.");
+                // Don't throw error - allow signup to continue even if referral code is invalid
+            }
+        }
+
+
         
         // For listeners: Validate and set supported artist + create Supporter
         if ("listener".equals(savedUser.getRole().toString()) && supportedArtistId != null) {
@@ -83,15 +128,22 @@ public class UserService {
             if (!"artist".equals(supportedArtist.getRole().toString())) {
                 throw new RuntimeException("Supported user must be an artist");
             }
+
             savedUser.setSupportedArtistId(supportedArtistId);
+            userRepository.save(savedUser);
 
             Supporter supporter = Supporter.builder()
                 .listener(savedUser)
                 .artist(supportedArtist)
+                .createdAt(LocalDateTime.now())
                 .build();
             supporterRepository.save(supporter);
+
+            scoreUpdateService.onSupporterAdded(supportedArtistId);
+            System.out.println("Supporter created: " + savedUser.getUsername() + " supports " + supportedArtist.getUsername());
         }
 
+        System.out.println("User registered successfully: " + savedUser.getUsername() + " (Referral Code: " + savedUser.getReferralCode() + ")");
         return savedUser;
     }
 
@@ -273,4 +325,49 @@ public class UserService {
         // 10. Finally delete the user record itself
         userRepository.deleteById(currentUserId);
     }
+
+
+    @Transactional
+    @CacheEvict(value = "userProfiles", key = "#userId")
+    public User changeSupportedArtist(UUID userId, UUID newArtistId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        
+        if (!"listener".equals(user.getRole().toString())) {
+            throw new RuntimeException("Only listeners can support artists");
+        }
+        
+        // Verify new artist exists and is actually an artist
+        User newArtist = userRepository.findById(newArtistId)
+                .orElseThrow(() -> new RuntimeException("Artist not found"));
+        if (!"artist".equals(newArtist.getRole().toString())) {
+            throw new RuntimeException("Supported user must be an artist");
+        }
+        
+        UUID oldArtistId = user.getSupportedArtistId();
+        
+        // Remove old supporter relationship
+        if (oldArtistId != null) {
+            supporterRepository.deleteByListenerUserIdAndArtistUserId(userId, oldArtistId);
+        }
+        
+        // Create new supporter relationship
+        Supporter newSupporter = Supporter.builder()
+                .listener(user)
+                .artist(newArtist)
+                .createdAt(LocalDateTime.now())
+                .build();
+        supporterRepository.save(newSupporter);
+        
+        // Update user's supported artist reference
+        user.setSupportedArtistId(newArtistId);
+        userRepository.save(user);
+        
+        // Award +5 points to the new artist
+        scoreUpdateService.onSupporterAdded(newArtistId);
+        
+        return user;
+    }
+
+
 }
