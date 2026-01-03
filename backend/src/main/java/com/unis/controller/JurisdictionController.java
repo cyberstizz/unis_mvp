@@ -32,12 +32,10 @@ public class JurisdictionController {
 
     // GET /api/v1/jurisdictions/byName/{name}
     @GetMapping("/byName/{name}")
-    public ResponseEntity<Map<String, Object>> getByName(@PathVariable String name) {
-        Optional<Jurisdiction> optJur = jurisdictionService.getByName(name);
-        if (optJur.isEmpty()) return ResponseEntity.notFound().build();
-        Jurisdiction jur = optJur.get();
-        return ResponseEntity.ok(Map.of("jurisdictionId", jur.getJurisdictionId(), "jurisdiction", jur));
-    }
+public ResponseEntity<List<Jurisdiction>> getByName(@PathVariable String name) {
+    List<Jurisdiction> jurisdictions = jurisdictionService.getByName(name);
+    return ResponseEntity.ok(jurisdictions);
+}
 
     // GET /api/v1/jurisdictions/{id}/trending?type=...&genreId=...&limit=... (genreId optional)
     @GetMapping("/{jurisdictionId}/trending")
@@ -49,10 +47,6 @@ public class JurisdictionController {
         List<Object[]> trending = jurisdictionService.getTrendingMediaByJurisdiction(jurisdictionId, type, genreId, limit);
         return ResponseEntity.ok((List<Object>) (Object) trending);
     }
-
-    // =====================================================================
-    // NEW ENDPOINTS FOR HIERARCHY NAVIGATION (FindPage map drill-down)
-    // =====================================================================
 
     /**
      * GET /api/v1/jurisdictions/{id}/children

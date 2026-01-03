@@ -36,8 +36,8 @@ public class JurisdictionService {
 
     // CACHED: Jurisdiction lookup by name (1 hour TTL - rarely changes)
     @Cacheable(value = "jurisdictions", key = "'name-' + #name")
-    public Optional<Jurisdiction> getByName(String name) {
-        return jurisdictionRepository.findByName(name);
+    public List<Jurisdiction> getByName(String name) {
+        return jurisdictionRepository.findAllByNameIgnoreCase(name);
     }
 
     // CACHED: Tops for a jurisdiction (5 min TTL - updates with song plays/votes)
@@ -210,12 +210,14 @@ public class JurisdictionService {
     @Cacheable(value = "jurisdictions", key = "'states'")
     public List<Jurisdiction> getAllStates() {
         // First find Unis
-        Optional<Jurisdiction> unis = jurisdictionRepository.findByName("Unis");
-        if (unis.isEmpty()) {
-            return new ArrayList<>();
+        List<Jurisdiction> unisList = jurisdictionRepository.findAllByNameIgnoreCase("Unis");
+        if (unisList.isEmpty()) {
+            return List.of();
         }
+
+        Jurisdiction unis = unisList.get(0);
         
         // Return children of Unis (all states)
-        return jurisdictionRepository.findByParentJurisdictionId(unis.get().getJurisdictionId());
+        return jurisdictionRepository.findByParentJurisdictionId(unis.getJurisdictionId());
     }
 }

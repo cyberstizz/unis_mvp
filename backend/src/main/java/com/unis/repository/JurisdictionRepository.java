@@ -12,7 +12,7 @@ import java.util.UUID;
 @Repository
 public interface JurisdictionRepository extends JpaRepository<Jurisdiction, UUID> {
     // Find by name (for dropdowns/searches)
-    Optional<Jurisdiction> findByName(String name);
+    List<Jurisdiction> findAllByNameIgnoreCase(String name);
 
     // Find with parent hierarchy (FETCH JOIN for nested jurisdictions)
     @Query("SELECT j FROM Jurisdiction j LEFT JOIN FETCH j.parentJurisdiction WHERE j.jurisdictionId = :id")
