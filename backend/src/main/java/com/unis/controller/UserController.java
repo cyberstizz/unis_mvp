@@ -27,6 +27,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.Map;
 import java.util.HashMap;
 import java.io.IOException;
@@ -249,5 +250,154 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
     }
+
+
+
+
+        /**
+     * Validate a referral code and return the referrer's username
+     * GET /api/v1/users/validate-referral/{code}
+     */
+    @GetMapping("/validate-referral/{code}")
+    public ResponseEntity<Map<String, Object>> validateReferralCode(@PathVariable String code) {
+        Map<String, Object> response = new HashMap<>();
+
+        // Master launch code - always valid
+        if ("UNIS-LAUNCH-2024".equals(code)) {
+            response.put("valid", true);
+            response.put("referrerUsername", "Unis");
+            response.put("referrerId", null);
+            return ResponseEntity.ok(response);
+        }
+        
+        try {
+            Optional<User> referrerOpt = userRepository.findByReferralCode(code);
+            
+            if (referrerOpt.isPresent()) {
+                User referrer = referrerOpt.get();
+                response.put("valid", true);
+                response.put("referrerUsername", referrer.getUsername());
+                response.put("referrerId", referrer.getUserId());
+                return ResponseEntity.ok(response);
+            } else {
+                response.put("valid", false);
+                response.put("message", "Invalid referral code");
+                return ResponseEntity.ok(response);
+            }
+        } catch (Exception e) {
+            response.put("valid", false);
+            response.put("message", "Error validating code");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    /**
+     * Check if an email is available for registration
+     * GET /api/v1/users/check-email?email=test@example.com
+     */
+    @GetMapping("/check-email")
+    public ResponseEntity<Map<String, Object>> checkEmailAvailability(@RequestParam String email) {
+        Map<String, Object> response = new HashMap<>();
+        
+        try {
+            boolean exists = userRepository.existsByEmail(email);
+            response.put("available", !exists);
+            response.put("email", email);
+            
+            if (exists) {
+                response.put("message", "Email already registered");
+            }
+            
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("available", false);
+            response.put("message", "Error checking email");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    /**
+     * Check if a username is available for registration
+     * GET /api/v1/users/check-username?username=johndoe
+     */
+    @GetMapping("/check-username")
+    public ResponseEntity<Map<String, Object>> checkUsernameAvailability(@RequestParam String username) {
+        Map<String, Object> response = new HashMap<>();
+        
+        try {
+            boolean exists = userRepository.existsByUsername(username);
+            response.put("available", !exists);
+            response.put("username", username);
+            
+            if (exists) {
+                response.put("message", "Username already taken");
+            }
+            
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("available", false);
+            response.put("message", "Error checking username");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    /**
+     * Get artists with their default song details for preview
+     * GET /api/v1/users/artists/with-preview
+     */
+    @GetMapping("/artists/with-preview")
+    public ResponseEntity<List<Map<String, Object>>> getArtistsWithPreview(
+            @RequestParam(required = false) UUID jurisdictionId) {
+        
+        try {
+            List<User> artists;
+            
+            if (jurisdictionId != null) {
+                artists = userRepository.findByRoleAndJurisdiction(
+                    User.Role.artist, 
+                    jurisdictionId
+                );
+            } else {
+                artists = userRepository.findByRoleOrderByScoreDesc(User.Role.artist);
+            }
+            
+            List<Map<String, Object>> result = artists.stream().map(artist -> {
+                Map<String, Object> artistData = new HashMap<>();
+                artistData.put("userId", artist.getUserId());
+                artistData.put("username", artist.getUsername());
+                artistData.put("photoUrl", artist.getPhotoUrl());
+                artistData.put("bio", artist.getBio());
+                artistData.put("score", artist.getScore());
+                artistData.put("defaultSongId", artist.getDefaultSongId());
+                
+                if (artist.getJurisdiction() != null) {
+                    Map<String, Object> jurisdiction = new HashMap<>();
+                    jurisdiction.put("jurisdictionId", artist.getJurisdiction().getJurisdictionId());
+                    jurisdiction.put("name", artist.getJurisdiction().getName());
+                    artistData.put("jurisdiction", jurisdiction);
+                }
+                
+                if (artist.getDefaultSongId() != null) {
+                    songRepository.findById(artist.getDefaultSongId()).ifPresent(song -> {
+                        Map<String, Object> songData = new HashMap<>();
+                        songData.put("songId", song.getSongId());
+                        songData.put("title", song.getTitle());
+                        songData.put("fileUrl", song.getFileUrl());
+                        songData.put("artworkUrl", song.getArtworkUrl());
+                        songData.put("duration", song.getDuration());
+                        artistData.put("defaultSong", songData);
+                    });
+                }
+                
+                return artistData;
+            }).collect(Collectors.toList());
+            
+            return ResponseEntity.ok(result);
+            
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(List.of());
+        }
+    }
+
 
 }

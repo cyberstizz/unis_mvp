@@ -84,7 +84,7 @@ public class UserService {
         newUser.setScore(0);
         newUser.setLevel("silver");
 
-        //generate a referral code for this user
+        // Generate a referral code for this user
         String uniqueReferralCode = ReferralCodeGenerator.generateUnique(
             newUser.getUsername(),
             code -> userRepository.existsByReferralCode(code)
@@ -94,7 +94,7 @@ public class UserService {
         // Save user
         User savedUser = userRepository.save(newUser);
 
-
+        // Handle referral tracking
         if (referralCode != null && !referralCode.trim().isEmpty()) {
             Optional<User> referrerOpt = userRepository.findByReferralCode(referralCode);
             
@@ -109,24 +109,27 @@ public class UserService {
                         .build();
                 referralRepository.save(referral);
                 
-                //Award points to referrer (+5 for listeners, +2 for artists)
+                // Award points to referrer (+5 for listeners, +2 for artists)
                 scoreUpdateService.onReferral(referrer.getUserId());
                 
                 System.out.println("Referral tracked: " + referrer.getUsername() + " referred " + savedUser.getUsername());
             } else {
                 System.out.println("Warning: Referral code '" + referralCode + "' not found. Proceeding without referral.");
-                // Don't throw error - allow signup to continue even if referral code is invalid
             }
         }
 
-
-        
-        // For listeners: Validate and set supported artist + create Supporter
-        if ("listener".equals(savedUser.getRole().toString()) && supportedArtistId != null) {
+        // For ALL users (listeners AND artists): Validate and set supported artist
+        if (supportedArtistId != null) {
             Optional<User> optionalArtist = userRepository.findById(supportedArtistId);
             User supportedArtist = optionalArtist.orElseThrow(() -> new RuntimeException("Supported artist not found"));
+            
             if (!"artist".equals(supportedArtist.getRole().toString())) {
                 throw new RuntimeException("Supported user must be an artist");
+            }
+            
+            // Artists cannot support themselves
+            if (supportedArtistId.equals(savedUser.getUserId())) {
+                throw new RuntimeException("Cannot support yourself");
             }
 
             savedUser.setSupportedArtistId(supportedArtistId);

@@ -18,7 +18,6 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     Optional<User> findByEmail(String email);
 
-    Optional<User> findByReferralCode(String referralCode);
     
     boolean existsByReferralCode(String referralCode);
 
@@ -68,4 +67,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> findByRoleOrderByScoreDesc(@Param("role") User.Role role);
 
     List<User> findAllByRole(User.Role role);
+
+    boolean existsByEmail(String email);
+    
+    boolean existsByUsername(String username);
+    
+    Optional<User> findByReferralCode(String referralCode);
+        
+    @Query("SELECT u FROM User u WHERE u.role = :role AND u.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY u.score DESC")
+    List<User> findByRoleAndJurisdiction(@Param("role") User.Role role, @Param("jurisdictionId") UUID jurisdictionId);
+
 }
