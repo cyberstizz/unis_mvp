@@ -64,6 +64,7 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
         .passwordHash(dto.getPassword())
         .role(User.Role.valueOf(dto.getRole()))
         .bio(dto.getBio())
+        .photoUrl(dto.getPhotoUrl())
         .build();
     
     // Fetch jurisdiction entity and set

@@ -147,7 +147,15 @@ public class MediaService {
             song.setPlaysToday(0);
             song.setLastPlayResetDate(LocalDate.now());
 
-            return songRepository.save(song);
+            Song savedSong = songRepository.save(song);
+
+            // If this is the artist's first song (no default song set), make it the default
+            if (artist.getDefaultSongId() == null) {
+                artist.setDefaultSongId(savedSong.getSongId());
+                userRepository.save(artist);
+            }
+
+            return savedSong;
         } catch (IOException e) {
             throw new RuntimeException("JSON parse or file upload failed", e);
         } catch (IllegalArgumentException e) {
