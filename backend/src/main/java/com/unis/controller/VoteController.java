@@ -1,13 +1,17 @@
 package com.unis.controller;
 
 import com.unis.dto.LeaderboardDto;
+import com.unis.dto.VoteHistoryDto;
 import com.unis.dto.VoteRequest;
 import com.unis.entity.Vote;
 import com.unis.entity.VotingInterval;
+import com.unis.entity.Song;
 import com.unis.entity.Genre;
 import com.unis.entity.Jurisdiction;
 import com.unis.entity.User;
 import com.unis.repository.UserRepository;
+import com.unis.repository.SongRepository;
+import com.unis.repository.VoteRepository;
 import com.unis.repository.GenreRepository;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.VotingIntervalRepository;
@@ -15,10 +19,13 @@ import com.unis.service.AwardService;
 import com.unis.service.VoteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @RestController
@@ -41,6 +48,12 @@ public class VoteController {
 
     @Autowired
     private VotingIntervalRepository votingIntervalRepository;
+
+    @Autowired
+    private VoteRepository voteRepository;
+
+    @Autowired
+    private SongRepository songRepository;
 
     // POST /api/v1/vote/submit (submit vote, page 2)
     @PostMapping("/submit")
@@ -153,5 +166,68 @@ public class VoteController {
     LocalDate cronDate = date != null ? date : LocalDate.now();
     awardService.computeForInterval(intervalId, jurisdictionId, genreId, cronDate);
     return ResponseEntity.ok("Computed for " + cronDate);
+    }
+
+    // GET /api/v1/vote/history - Get authenticated user's vote history
+    @GetMapping("/history")
+    public ResponseEntity<List<VoteHistoryDto>> getVoteHistory(
+            Authentication auth,
+            @RequestParam(defaultValue = "50") int limit) {
+
+        // Get user from auth token
+        String email = auth.getName();
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+
+        // Fetch user's votes
+        List<Vote> votes = voteRepository.findByUserUserIdOrderByVoteDateDesc(user.getUserId());
+
+        // Build DTOs with nominee details
+        List<VoteHistoryDto> history = new ArrayList<>();
+        int count = 0;
+
+        for (Vote vote : votes) {
+            if (count >= limit) break;
+
+            String nomineeName = "Unknown";
+            String nomineeImage = null;
+
+            // Fetch nominee details based on targetType
+            if ("song".equalsIgnoreCase(vote.getTargetType())) {
+                Optional<Song> songOpt = songRepository.findById(vote.getTargetId());
+                if (songOpt.isPresent()) {
+                    Song song = songOpt.get();
+                    nomineeName = song.getTitle();
+                    nomineeImage = song.getArtworkUrl();
+                }
+            } else if ("artist".equalsIgnoreCase(vote.getTargetType())) {
+                Optional<User> artistOpt = userRepository.findById(vote.getTargetId());
+                if (artistOpt.isPresent()) {
+                    User artist = artistOpt.get();
+                    nomineeName = artist.getUsername();
+                    nomineeImage = artist.getPhotoUrl();
+                }
+            }
+
+            // Get interval name
+            String intervalName = vote.getInterval() != null
+                ? vote.getInterval().getName()
+                : "day";
+
+            VoteHistoryDto dto = VoteHistoryDto.builder()
+                .voteId(vote.getVoteId())
+                .targetType(vote.getTargetType())
+                .targetId(vote.getTargetId())
+                .nomineeName(nomineeName)
+                .nomineeImage(nomineeImage)
+                .voteDate(vote.getVoteDate())
+                .interval(intervalName)
+                .build();
+
+            history.add(dto);
+            count++;
+        }
+
+        return ResponseEntity.ok(history);
     }
 }

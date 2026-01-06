@@ -111,6 +111,33 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
         return ResponseEntity.ok(updated);
     }
 
+    // PUT /api/v1/users/profile/{id} (update social media URLs)
+    @PutMapping("/profile/{userId}")
+    public ResponseEntity<Map<String, String>> updateSocialMedia(
+            @PathVariable UUID userId,
+            @RequestBody Map<String, String> payload) {
+
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+
+        // Update whichever social field is provided
+        if (payload.containsKey("instagramUrl")) {
+            user.setInstagramUrl(payload.get("instagramUrl"));
+        }
+        if (payload.containsKey("twitterUrl")) {
+            user.setTwitterUrl(payload.get("twitterUrl"));
+        }
+        if (payload.containsKey("tiktokUrl")) {
+            user.setTiktokUrl(payload.get("tiktokUrl"));
+        }
+
+        userRepository.save(user);
+
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "Social media updated successfully");
+        return ResponseEntity.ok(response);
+    }
+
     // PUT /api/v1/users/profile/{id}/password (update password)
     @PutMapping("/profile/{userId}/password")
     public ResponseEntity<User> updatePassword(@PathVariable UUID userId, @RequestBody UserDto dto) {

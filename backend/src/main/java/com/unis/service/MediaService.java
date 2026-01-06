@@ -269,6 +269,24 @@ public class MediaService {
         songRepository.deleteById(songId);
     }
 
+    // Update song (description and artwork only) - EVICTS cache
+    @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
+    public Song updateSong(UUID songId, String description, MultipartFile artwork) throws IOException {
+        Song song = songRepository.findById(songId)
+            .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
+
+        if (description != null && !description.isBlank()) {
+            song.setDescription(description.trim());
+        }
+
+        if (artwork != null && !artwork.isEmpty()) {
+            String artworkUrl = fileStorageService.storeFile(artwork);
+            song.setArtworkUrl(artworkUrl);
+        }
+
+        return songRepository.save(song);
+    }
+
     // NOT CACHED - video delete
     public void deleteVideo(UUID videoId) {
         videoRepository.deleteById(videoId);

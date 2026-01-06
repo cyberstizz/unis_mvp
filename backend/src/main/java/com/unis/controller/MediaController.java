@@ -53,6 +53,21 @@ public class MediaController {
         return ResponseEntity.ok().build();
     }
 
+    // PATCH /api/v1/media/song/{id} (update song description/artwork)
+    @PatchMapping(value = "/song/{songId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Song> updateSong(
+            @PathVariable UUID songId,
+            @RequestParam(value = "description", required = false) String description,
+            @RequestParam(value = "artwork", required = false) MultipartFile artwork) {
+        try {
+            Song updated = mediaService.updateSong(songId, description, artwork);
+            return ResponseEntity.ok(updated);
+        } catch (Exception e) {
+            log.error("Failed to update song {}: {}", songId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
     // DELETE /api/v1/media/video/{id} (delete video, page 7)
     @DeleteMapping("/video/{videoId}")
     public ResponseEntity<Void> deleteVideo(@PathVariable UUID videoId) {

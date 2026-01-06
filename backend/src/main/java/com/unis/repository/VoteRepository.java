@@ -58,6 +58,10 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
     @Query("DELETE FROM Vote v WHERE v.user.userId = :userId")
     void deleteByUserUserId(@Param("userId") UUID userId);
 
+    // Find votes by user for vote history
+    @Query("SELECT v FROM Vote v WHERE v.user.userId = :userId ORDER BY v.voteDate DESC")
+    List<Vote> findByUserUserIdOrderByVoteDateDesc(@Param("userId") UUID userId);
+
     @Modifying
     @Query("DELETE FROM Vote v WHERE v.targetType = 'artist' AND v.targetId = :artistId")
     void deleteByTargetArtistId(@Param("artistId") UUID artistId);
