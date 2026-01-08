@@ -34,6 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDate;
@@ -271,7 +272,7 @@ public class MediaService {
 
     // Update song (description and artwork only) - EVICTS cache
     @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
-    public Song updateSong(UUID songId, String description, MultipartFile artwork) throws IOException {
+    public Song updateSong(UUID songId, String description, MultipartFile artwork, String lyrics) {
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
 
@@ -280,8 +281,16 @@ public class MediaService {
         }
 
         if (artwork != null && !artwork.isEmpty()) {
-            String artworkUrl = fileStorageService.storeFile(artwork);
-            song.setArtworkUrl(artworkUrl);
+            try {
+                String artworkUrl = fileStorageService.storeFile(artwork);
+                song.setArtworkUrl(artworkUrl);
+            } catch (Exception e) {  // ← Changed to Exception (broader)
+                throw new RuntimeException("Failed to upload artwork", e);
+            }
+        }
+
+        if (lyrics != null) {
+            song.setLyrics(lyrics);
         }
 
         return songRepository.save(song);

@@ -77,4 +77,5 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     @Query("SELECT u FROM User u WHERE u.role = :role AND u.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY u.score DESC")
     List<User> findByRoleAndJurisdiction(@Param("role") User.Role role, @Param("jurisdictionId") UUID jurisdictionId);
 
+    long countBySupportedArtistId(UUID artistId);
 }

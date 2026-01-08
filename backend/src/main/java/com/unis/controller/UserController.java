@@ -8,6 +8,7 @@ import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.GenreRepository;
 import com.unis.repository.UserRepository;
 import com.unis.repository.SongRepository;
+import com.unis.repository.FollowRepository;
 import com.unis.entity.Genre;
 import com.unis.entity.Jurisdiction;
 import com.unis.entity.Song;
@@ -53,6 +54,9 @@ public class UserController {
 
     @Autowired
     private SongRepository songRepository;
+
+    @Autowired
+    private FollowRepository followRepository;
 
     // POST /api/v1/users/register (page 6 signup)
     // POST /api/v1/users/register (page 6 signup)
@@ -425,6 +429,73 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(List.of());
         }
+    }
+
+
+    // 1. GET SUPPORTERS COUNT
+    // Matches: /v1/users/{id}/supporters/count
+    @GetMapping("/{userId}/supporters/count")
+    public ResponseEntity<Map<String, Long>> getSupportersCount(@PathVariable UUID userId) {
+        long count = userRepository.countBySupportedArtistId(userId);
+        return ResponseEntity.ok(Map.of("count", count));
+    }
+
+    // 2. GET FOLLOWERS COUNT
+    // Matches: /v1/users/{id}/followers/count
+    @GetMapping("/{userId}/followers/count")
+    public ResponseEntity<Map<String, Long>> getFollowersCount(@PathVariable UUID userId) {
+        long count = followRepository.countByFollowed_UserId(userId);
+        return ResponseEntity.ok(Map.of("count", count));
+    }
+
+    // 3. FOLLOW ACTION (for the SongPage "Follow" button)
+    @PostMapping("/{artistId}/follow")
+    public ResponseEntity<Void> followUser(@PathVariable UUID artistId, Authentication auth) {
+        String email = auth.getName();
+        User currentUser = userRepository.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+        
+        // Prevent self-follow
+        if (currentUser.getUserId().equals(artistId)) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        // Check if already following
+        if (!followRepository.existsByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId)) {
+            User artistToFollow = userRepository.findById(artistId)
+                .orElseThrow(() -> new RuntimeException("Artist not found"));
+            
+            com.unis.entity.Follow follow = com.unis.entity.Follow.builder()
+                .follower(currentUser)
+                .followed(artistToFollow)
+                .build();
+            
+            followRepository.save(follow);
+        }
+        return ResponseEntity.ok().build();
+    }
+
+    // 4. UNFOLLOW ACTION
+    @DeleteMapping("/{artistId}/follow")
+    @jakarta.transaction.Transactional
+    public ResponseEntity<Void> unfollowUser(@PathVariable UUID artistId, Authentication auth) {
+        String email = auth.getName();
+        User currentUser = userRepository.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+            
+        followRepository.deleteByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId);
+        return ResponseEntity.ok().build();
+    }
+
+    // 5. CHECK IF FOLLOWING (for SongPage button state)
+    @GetMapping("/{artistId}/is-following")
+    public ResponseEntity<Map<String, Boolean>> isFollowing(@PathVariable UUID artistId, Authentication auth) {
+        String email = auth.getName();
+        User currentUser = userRepository.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+            
+        boolean isFollowing = followRepository.existsByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId);
+        return ResponseEntity.ok(Map.of("isFollowing", isFollowing));
     }
 
 

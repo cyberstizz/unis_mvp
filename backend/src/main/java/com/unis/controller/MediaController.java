@@ -58,9 +58,10 @@ public class MediaController {
     public ResponseEntity<Song> updateSong(
             @PathVariable UUID songId,
             @RequestParam(value = "description", required = false) String description,
-            @RequestParam(value = "artwork", required = false) MultipartFile artwork) {
+            @RequestParam(value = "artwork", required = false) MultipartFile artwork, 
+            @RequestParam(value = "lyrics", required = false) String lyrics) {
         try {
-            Song updated = mediaService.updateSong(songId, description, artwork);
+            Song updated = mediaService.updateSong(songId, description, artwork, lyrics);
             return ResponseEntity.ok(updated);
         } catch (Exception e) {
             log.error("Failed to update song {}: {}", songId, e.getMessage());
@@ -195,5 +196,14 @@ public class MediaController {
                 .collect(Collectors.toList());
             return ResponseEntity.ok(fallbackSongs);
         }
+    }
+
+    @PatchMapping("/song/{songId}/lyrics")
+    public ResponseEntity<Song> updateLyrics(
+            @PathVariable UUID songId,
+            @RequestBody Map<String, String> body) {
+        String lyrics = body.get("lyrics");
+        Song updated = mediaService.updateSong(songId, null, null, lyrics); 
+        return ResponseEntity.ok(updated);
     }
 }
