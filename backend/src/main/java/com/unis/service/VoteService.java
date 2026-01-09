@@ -106,6 +106,9 @@ public class VoteService {
             q.executeUpdate();
         }
 
+        entityManager.flush();
+        entityManager.clear();
+
         return saved;
     }
 

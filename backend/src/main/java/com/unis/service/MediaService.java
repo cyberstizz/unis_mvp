@@ -344,8 +344,7 @@ public class MediaService {
             .build();
         songPlayRepository.save(play);
 
-        // FIXED: Increment artist's total_plays using a single query that gets artist_id from the song
-        // This avoids lazy loading issues with song.getArtist()
+        // Increment artist's total_plays using a single query that gets artist_id from the song
         String incrementArtistPlays = """
             UPDATE users 
             SET total_plays = total_plays + 1 
@@ -354,8 +353,11 @@ public class MediaService {
         Query artistQuery = entityManager.createNativeQuery(incrementArtistPlays);
         artistQuery.setParameter("songId", songId);
         int rowsUpdated = artistQuery.executeUpdate();
-        
-        // Log for debugging (remove after confirming it works)
+
+        // CRITICAL: Flush and clear to prevent Hibernate from overwriting with stale data
+        entityManager.flush();
+        entityManager.clear();
+
         System.out.println(">>> total_plays increment: songId=" + songId + ", rowsUpdated=" + rowsUpdated);
 
         scoreUpdateService.onPlay(userId, songId, "song");
