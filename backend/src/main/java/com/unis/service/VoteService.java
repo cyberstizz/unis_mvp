@@ -19,6 +19,7 @@ import com.unis.repository.SongRepository;
 import com.unis.repository.AwardRepository;
 import com.unis.repository.VotingIntervalRepository;
 import com.unis.repository.JurisdictionRepository;
+import com.unis.repository.SongPlayRepository;
 import com.unis.repository.GenreRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
@@ -53,6 +54,9 @@ public class VoteService {
 
     @Autowired
     private SongRepository songRepository;
+
+    @Autowired
+    private SongPlayRepository songPlayRepository;
 
     @Autowired
     private GenreRepository genreRepository;
@@ -288,6 +292,11 @@ public class VoteService {
             }
             songs.sort(Comparator.comparingInt(s -> orderMap.getOrDefault(s.getSongId(), Integer.MAX_VALUE)));
             
+            for (Song song : songs) {
+            Long totalPlays = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+            song.setPlayCount(totalPlays != null ? totalPlays : 0L);
+        }
+
             return songs;
         }
     }
