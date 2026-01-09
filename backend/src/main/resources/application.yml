@@ -10,11 +10,16 @@ file:
   upload-dir: uploads
   storage-mode: local   
 
+resend:
+  api-key: ${RESEND_API_KEY}
+
 spring:
   application:
     name: unis
+
   profiles:
     active: local
+
   cache:
     type: caffeine
     caffeine:
@@ -26,6 +31,7 @@ spring:
       - genres
       - trending
       - userProfiles
+
   web:
     resources:
       static-locations: classpath:/static,classpath:/uploads
