@@ -69,4 +69,8 @@ public class Song {
     @Transient
     private Long playCount;
 
+     // NEW: Transient field for likes count (calculated on the fly)
+    @Transient
+    private Integer likes;
+
 }

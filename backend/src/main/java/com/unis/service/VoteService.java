@@ -89,6 +89,23 @@ public class VoteService {
         // Increment ongoing award if matching
         awardRepository.incrementAwardEngagement(vote.getTargetType(), vote.getTargetId(), vote.getJurisdiction().getJurisdictionId(), vote.getInterval().getIntervalId());
 
+        if ("artist".equals(vote.getTargetType())) {
+            // Direct vote for artist
+            String incrementVotes = "UPDATE users SET total_votes = total_votes + 1 WHERE user_id = :artistId";
+            Query q = entityManager.createNativeQuery(incrementVotes);
+            q.setParameter("artistId", vote.getTargetId());
+            q.executeUpdate();
+        } else if ("song".equals(vote.getTargetType())) {
+            // Vote for song - increment the song's artist's total_votes
+            String incrementVotes = """
+                UPDATE users SET total_votes = total_votes + 1 
+                WHERE user_id = (SELECT artist_id FROM songs WHERE song_id = :songId)
+                """;
+            Query q = entityManager.createNativeQuery(incrementVotes);
+            q.setParameter("songId", vote.getTargetId());
+            q.executeUpdate();
+        }
+
         return saved;
     }
 

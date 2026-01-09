@@ -2,6 +2,9 @@ package com.unis.controller;
 
 import com.unis.dto.UserDto;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import com.unis.entity.User;
 import com.unis.entity.User.Role;
 import com.unis.repository.JurisdictionRepository;
@@ -57,6 +60,9 @@ public class UserController {
 
     @Autowired
     private FollowRepository followRepository;
+
+    private static final Logger log = LoggerFactory.getLogger(UserController.class);
+
 
     // POST /api/v1/users/register (page 6 signup)
     // POST /api/v1/users/register (page 6 signup)
@@ -496,6 +502,51 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
             
         boolean isFollowing = followRepository.existsByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId);
         return ResponseEntity.ok(Map.of("isFollowing", isFollowing));
+    }
+
+    /**
+     * GET /api/v1/users/{userId}/total-plays
+     * Get total plays across all of an artist's songs
+     */
+    @GetMapping("/{userId}/total-plays")
+    public ResponseEntity<Map<String, Integer>> getTotalPlays(@PathVariable UUID userId) {
+        try {
+            int totalPlays = userService.getTotalPlaysForArtist(userId);
+            return ResponseEntity.ok(Map.of("totalPlays", totalPlays));
+        } catch (Exception e) {
+            log.error("Failed to get total plays for artist {}: {}", userId, e.getMessage());
+            return ResponseEntity.ok(Map.of("totalPlays", 0));
+        }
+    }
+    
+    /**
+     * GET /api/v1/users/{userId}/total-votes
+     * Get total votes (score) across all of an artist's songs
+     */
+    @GetMapping("/{userId}/total-votes")
+    public ResponseEntity<Map<String, Integer>> getTotalVotes(@PathVariable UUID userId) {
+        try {
+            int totalVotes = userService.getTotalVotesForArtist(userId);
+            return ResponseEntity.ok(Map.of("totalVotes", totalVotes));
+        } catch (Exception e) {
+            log.error("Failed to get total votes for artist {}: {}", userId, e.getMessage());
+            return ResponseEntity.ok(Map.of("totalVotes", 0));
+        }
+    }
+    
+    /**
+     * GET /api/v1/users/{userId}/total-likes
+     * Get total likes across all of an artist's songs
+     */
+    @GetMapping("/{userId}/total-likes")
+    public ResponseEntity<Map<String, Integer>> getTotalLikes(@PathVariable UUID userId) {
+        try {
+            int totalLikes = userService.getTotalLikesForArtist(userId);
+            return ResponseEntity.ok(Map.of("totalLikes", totalLikes));
+        } catch (Exception e) {
+            log.error("Failed to get total likes for artist {}: {}", userId, e.getMessage());
+            return ResponseEntity.ok(Map.of("totalLikes", 0));
+        }
     }
 
 

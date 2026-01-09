@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.jdbc.core.JdbcTemplate;
+
 
 @Service
 @Transactional
@@ -75,6 +77,9 @@ public class UserService {
 
     @Autowired 
     private ScoreUpdateService scoreUpdateService;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     // Register new user - NOT CACHED (write operation)
     public User register(User newUser, UUID supportedArtistId, String referralCode) {
@@ -370,6 +375,74 @@ public class UserService {
         scoreUpdateService.onSupporterAdded(newArtistId);
         
         return user;
+    }
+
+    /**
+     * Get total plays across all of an artist's songs
+     * Uses the song_plays table to count actual plays
+     * 
+     * @param artistId The artist's user ID
+     * @return Total number of plays
+     */
+    public int getTotalPlaysForArtist(UUID artistId) {
+        String sql = """
+            SELECT COALESCE(COUNT(sp.play_id), 0) as total_plays
+            FROM song_plays sp
+            JOIN songs s ON sp.song_id = s.song_id
+            WHERE s.artist_id = ?
+        """;
+        
+        Integer totalPlays = jdbcTemplate.queryForObject(sql, Integer.class, artistId);
+        return totalPlays != null ? totalPlays : 0;
+    }
+    
+    /**
+     * Get total votes (score sum) for all of an artist's songs
+     * Note: In your schema, votes have target_type and target_id
+     * where target_type can be 'artist' or 'song'
+     * 
+     * @param artistId The artist's user ID
+     * @return Total vote score
+     */
+    public int getTotalVotesForArtist(UUID artistId) {
+        // Get votes directly for the artist
+        String artistVotesSql = """
+            SELECT COALESCE(COUNT(*), 0)
+            FROM votes
+            WHERE target_id = ? AND target_type = 'artist'
+        """;
+        
+        Integer artistVotes = jdbcTemplate.queryForObject(artistVotesSql, Integer.class, artistId);
+        
+        // Get votes for all their songs
+        String songVotesSql = """
+            SELECT COALESCE(COUNT(*), 0)
+            FROM votes v
+            JOIN songs s ON v.target_id = s.song_id
+            WHERE s.artist_id = ? AND v.target_type = 'song'
+        """;
+        
+        Integer songVotes = jdbcTemplate.queryForObject(songVotesSql, Integer.class, artistId);
+        
+        return (artistVotes != null ? artistVotes : 0) + (songVotes != null ? songVotes : 0);
+    }
+    
+    /**
+     * Get total likes across all of an artist's songs
+     * 
+     * @param artistId The artist's user ID
+     * @return Total number of likes
+     */
+    public int getTotalLikesForArtist(UUID artistId) {
+        String sql = """
+            SELECT COALESCE(COUNT(l.like_id), 0) as total_likes
+            FROM likes l
+            JOIN songs s ON l.media_id = s.song_id
+            WHERE s.artist_id = ? AND l.media_type = 'song'
+        """;
+        
+        Integer totalLikes = jdbcTemplate.queryForObject(sql, Integer.class, artistId);
+        return totalLikes != null ? totalLikes : 0;
     }
 
 

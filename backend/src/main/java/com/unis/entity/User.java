@@ -81,6 +81,14 @@ public class User {
     @Column(name = "referral_code", unique = true, nullable = false, length = 50)
     private String referralCode;
 
+    @Builder.Default
+    @Column(name = "total_plays", nullable = false)
+    private Integer totalPlays = 0;
+
+    @Builder.Default
+    @Column(name = "total_votes", nullable = false)
+    private Integer totalVotes = 0;
+
     public enum Role {
         listener, artist
     }

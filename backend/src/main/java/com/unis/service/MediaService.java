@@ -30,13 +30,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-
 import java.io.IOException;
 import java.io.InputStream;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -72,6 +75,9 @@ public class MediaService {
 
     @Autowired 
     private EntityManager entityManager;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Autowired
     private ScoreUpdateService scoreUpdateService;
@@ -284,7 +290,7 @@ public class MediaService {
             try {
                 String artworkUrl = fileStorageService.storeFile(artwork);
                 song.setArtworkUrl(artworkUrl);
-            } catch (Exception e) {  // ← Changed to Exception (broader)
+            } catch (Exception e) {
                 throw new RuntimeException("Failed to upload artwork", e);
             }
         }
@@ -337,6 +343,21 @@ public class MediaService {
             .durationSecs(durationInSeconds)
             .build();
         songPlayRepository.save(play);
+
+        // FIXED: Increment artist's total_plays using a single query that gets artist_id from the song
+        // This avoids lazy loading issues with song.getArtist()
+        String incrementArtistPlays = """
+            UPDATE users 
+            SET total_plays = total_plays + 1 
+            WHERE user_id = (SELECT artist_id FROM songs WHERE song_id = :songId)
+            """;
+        Query artistQuery = entityManager.createNativeQuery(incrementArtistPlays);
+        artistQuery.setParameter("songId", songId);
+        int rowsUpdated = artistQuery.executeUpdate();
+        
+        // Log for debugging (remove after confirming it works)
+        System.out.println(">>> total_plays increment: songId=" + songId + ", rowsUpdated=" + rowsUpdated);
+
         scoreUpdateService.onPlay(userId, songId, "song");
     }
 
@@ -361,7 +382,6 @@ public class MediaService {
     }
 
     // CACHED: Top songs by score (5 min TTL via CacheConfig)
-    // Cache key includes jurisdiction + limit so different queries are cached separately
     @Cacheable(value = "songs", key = "'top-score-' + #jurisdictionId + '-' + #limit")
     public List<Song> getTopSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
@@ -394,7 +414,6 @@ public class MediaService {
     }
 
     // CACHED: Trending songs by plays_today (shorter 1 min TTL via "trending" cache)
-    // This changes frequently so we use the "trending" cache which has shorter TTL
     @Cacheable(value = "trending", key = "'plays-today-' + #jurisdictionId + '-' + #limit")
     public List<Song> getTrendingSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
@@ -475,12 +494,31 @@ public class MediaService {
             .collect(Collectors.toList());
     }
 
-    // CACHED: Artist's songs (5 min TTL via "artists" cache)
+    // ========== UPDATED: CACHED Artist's songs with likes and plays ==========
     @Cacheable(value = "artists", key = "'songs-' + #artistId")
     public List<Song> getSongsByArtist(UUID artistId) {
-        List<Song> songs = songRepository.findByArtistId(artistId);
-        songs.forEach(this::ensurePlaysCurrentForSong);
-        return songs;
+        String sql = """
+            SELECT 
+                s.*,
+                COALESCE(like_counts.likes, 0) as likes,
+                COALESCE(play_counts.plays, 0) as plays
+            FROM songs s
+            LEFT JOIN (
+                SELECT media_id, COUNT(*) as likes
+                FROM likes
+                WHERE media_type = 'song'
+                GROUP BY media_id
+            ) like_counts ON s.song_id = like_counts.media_id
+            LEFT JOIN (
+                SELECT song_id, COUNT(*) as plays
+                FROM song_plays
+                GROUP BY song_id
+            ) play_counts ON s.song_id = play_counts.song_id
+            WHERE s.artist_id = ?
+            ORDER BY s.created_at DESC
+        """;
+        
+        return jdbcTemplate.query(sql, new SongWithStatsRowMapper(), artistId);
     }
 
     // NOT CACHED - video methods
@@ -488,21 +526,20 @@ public class MediaService {
         return videoRepository.findByArtistId(artistId);
     }
 
-    // CACHED: Individual song lookup (5 min TTL)
-    @Cacheable(value = "songs", key = "#songId")
+    // ========== UPDATED: CACHED Individual song lookup with likes and plays ==========
     public Song getSongById(UUID songId) {
-        String query = "SELECT * FROM songs WHERE song_id = :songId";
-
-        Query q = entityManager.createNativeQuery(query, Song.class);
-        q.setParameter("songId", songId);
+        Song song = songRepository.findById(songId)
+            .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
         
-        try {
-            Song song = (Song) q.getSingleResult();
-            ensurePlaysCurrentForSong(song);
-            return song;
-        } catch (Exception e) {
-            throw new RuntimeException("Song not found: " + songId);
-        }
+        // Set the play count from the song_plays table
+        Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+        song.setPlayCount(playCount != null ? playCount : 0L);
+        
+        // Set likes count
+        int likesCount = getLikeCount(songId);
+        song.setLikes(likesCount);
+        
+        return song;
     }
 
     // NOT CACHED - video method
@@ -544,5 +581,132 @@ public class MediaService {
         }
         
         return results;
+    }
+
+    // ========== LIKES SERVICE METHODS (NEW) ==========
+    
+    /**
+     * Like a song
+     * @param songId The song to like
+     * @param userId The user liking the song
+     * @return true if liked, false if already liked
+     */
+    @Transactional
+    public boolean likeSong(UUID songId, UUID userId) {
+        // Check if already liked
+        String checkSql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
+        Integer count = jdbcTemplate.queryForObject(checkSql, Integer.class, userId, songId);
+        
+        if (count != null && count > 0) {
+            return false; // Already liked
+        }
+        
+        // Insert like
+        String insertSql = "INSERT INTO likes (user_id, media_id, media_type) VALUES (?, ?, 'song')";
+        jdbcTemplate.update(insertSql, userId, songId);
+        
+        return true;
+    }
+    
+    /**
+     * Unlike a song
+     * @param songId The song to unlike
+     * @param userId The user unliking the song
+     * @return true if unliked, false if wasn't liked
+     */
+    @Transactional
+    public boolean unlikeSong(UUID songId, UUID userId) {
+        String deleteSql = "DELETE FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
+        int rowsAffected = jdbcTemplate.update(deleteSql, userId, songId);
+        
+        return rowsAffected > 0;
+    }
+    
+    /**
+     * Check if a user has liked a song
+     * @param songId The song ID
+     * @param userId The user ID
+     * @return true if liked, false otherwise
+     */
+    public boolean isLiked(UUID songId, UUID userId) {
+        String sql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class, userId, songId);
+        return count != null && count > 0;
+    }
+    
+    /**
+     * Get the total like count for a song
+     * @param songId The song ID
+     * @return The number of likes
+     */
+    public int getLikeCount(UUID songId) {
+        String sql = "SELECT COUNT(*) FROM likes WHERE media_id = ? AND media_type = 'song'";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class, songId);
+        return count != null ? count : 0;
+    }
+    
+    // ========== END LIKES SERVICE METHODS ==========
+
+    // ========== ROW MAPPER FOR SONGS WITH STATS (NEW) ==========
+    
+    /**
+     * Custom RowMapper to map database results to Song entity with stats
+     */
+    private class SongWithStatsRowMapper implements RowMapper<Song> {
+        @Override
+        public Song mapRow(ResultSet rs, int rowNum) throws SQLException {
+            Song song = new Song();
+            
+            // Map all existing Song fields
+            song.setSongId((UUID) rs.getObject("song_id"));
+            song.setTitle(rs.getString("title"));
+            song.setDescription(rs.getString("description"));
+            song.setFileUrl(rs.getString("file_url"));
+            song.setArtworkUrl(rs.getString("artwork_url"));
+            song.setScore(rs.getInt("score"));
+            song.setLevel(rs.getString("level"));
+            song.setExplicit(rs.getBoolean("explicit"));
+            song.setLyrics(rs.getString("lyrics"));
+            song.setPlaysToday(rs.getInt("plays_today"));
+            
+            // Handle duration (might be null)
+            int duration = rs.getInt("duration");
+            if (!rs.wasNull()) {
+                song.setDuration(duration);
+            }
+            
+            // Handle LocalDate
+            java.sql.Date lastPlayResetDate = rs.getDate("last_play_reset_date");
+            if (lastPlayResetDate != null) {
+                song.setLastPlayResetDate(lastPlayResetDate.toLocalDate());
+            }
+            
+            // Handle LocalDateTime
+            java.sql.Timestamp createdAt = rs.getTimestamp("created_at");
+            if (createdAt != null) {
+                song.setCreatedAt(createdAt.toLocalDateTime());
+            }
+            
+            // Load relationships (@ManyToOne fields) using repository lookups
+            UUID artistId = (UUID) rs.getObject("artist_id");
+            UUID genreId = (UUID) rs.getObject("genre_id");
+            UUID jurisdictionId = (UUID) rs.getObject("jurisdiction_id");
+            
+            if (artistId != null) {
+                userRepository.findById(artistId).ifPresent(song::setArtist);
+            }
+            if (genreId != null) {
+                genreRepository.findById(genreId).ifPresent(song::setGenre);
+            }
+            if (jurisdictionId != null) {
+                jurisdictionRepository.findById(jurisdictionId).ifPresent(song::setJurisdiction);
+            }
+            
+            // Set the NEW transient fields for likes and plays
+            song.setLikes(rs.getInt("likes"));
+            song.setPlayCount((long) rs.getInt("plays"));
+            
+            return song;
+        }
     }
 }

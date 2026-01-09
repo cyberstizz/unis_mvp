@@ -90,6 +90,72 @@ public class MediaController {
         return ResponseEntity.ok().build();
     }
 
+    // ========== LIKES ENDPOINTS (NEW) ==========
+    
+    // POST /api/v1/media/song/{songId}/like - Like a song
+    @PostMapping("/song/{songId}/like")
+    public ResponseEntity<Map<String, Object>> likeSong(
+            @PathVariable UUID songId,
+            @RequestParam UUID userId) {
+        try {
+            boolean liked = mediaService.likeSong(songId, userId);
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", liked);
+            response.put("message", liked ? "Song liked" : "Already liked");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Failed to like song {}: {}", songId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("success", false, "message", "Failed to like song"));
+        }
+    }
+
+    // DELETE /api/v1/media/song/{songId}/like - Unlike a song
+    @DeleteMapping("/song/{songId}/like")
+    public ResponseEntity<Map<String, Object>> unlikeSong(
+            @PathVariable UUID songId,
+            @RequestParam UUID userId) {
+        try {
+            boolean unliked = mediaService.unlikeSong(songId, userId);
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", unliked);
+            response.put("message", unliked ? "Song unliked" : "Like not found");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Failed to unlike song {}: {}", songId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("success", false, "message", "Failed to unlike song"));
+        }
+    }
+
+    // GET /api/v1/media/song/{songId}/is-liked - Check if user liked a song
+    @GetMapping("/song/{songId}/is-liked")
+    public ResponseEntity<Map<String, Boolean>> isLiked(
+            @PathVariable UUID songId,
+            @RequestParam UUID userId) {
+        try {
+            boolean liked = mediaService.isLiked(songId, userId);
+            return ResponseEntity.ok(Map.of("isLiked", liked));
+        } catch (Exception e) {
+            log.error("Failed to check like status {}: {}", songId, e.getMessage());
+            return ResponseEntity.ok(Map.of("isLiked", false));
+        }
+    }
+
+    // GET /api/v1/media/song/{songId}/likes/count - Get like count for a song
+    @GetMapping("/song/{songId}/likes/count")
+    public ResponseEntity<Map<String, Integer>> getLikeCount(@PathVariable UUID songId) {
+        try {
+            int count = mediaService.getLikeCount(songId);
+            return ResponseEntity.ok(Map.of("count", count));
+        } catch (Exception e) {
+            log.error("Failed to get like count {}: {}", songId, e.getMessage());
+            return ResponseEntity.ok(Map.of("count", 0));
+        }
+    }
+
+    // ========== END LIKES ENDPOINTS ==========
+
     // GET /api/v1/media/songs/jurisdiction/{id}?limit=3 (top songs by SCORE, page 3)
     @GetMapping("/songs/jurisdiction/{jurisdictionId}")
     public ResponseEntity<List<Song>> getTopSongsByJurisdiction(
