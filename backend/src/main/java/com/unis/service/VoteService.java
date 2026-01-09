@@ -66,39 +66,43 @@ public class VoteService {
     @Autowired
     private UserRepository userRepository;
 
-    // EVICTS all vote-related caches - ensures immediate reflection of new votes
-    // Evicts: leaderboards (live rankings), nominees (voting page), and voteCounts
-    @CacheEvict(value = {"leaderboards", "nominees", "voteCounts"}, allEntries = true)
+  @CacheEvict(value = {"leaderboards", "nominees", "voteCounts"}, allEntries = true)
+    @Transactional
     public Vote submitVote(Vote vote) {
-        if (vote.getUser() == null) {
-            throw new RuntimeException("User must be set on Vote");
-        }
-        // Check unique constraint (songs/artists only)
+        // 1. GUARD CLAUSES: Validate required fields preventing NPE
+        if (vote.getUser() == null) throw new IllegalArgumentException("User is required");
+        if (vote.getGenre() == null) throw new IllegalArgumentException("Genre is required");
+        if (vote.getJurisdiction() == null) throw new IllegalArgumentException("Jurisdiction is required");
+        if (vote.getInterval() == null) throw new IllegalArgumentException("Interval is required");
+
+        // 2. Check unique constraint (Now safe because we know genre/jurisdiction are not null)
         Long existingCount = voteRepository.existsByUserUserIdAndTargetTypeAndTargetIdAndGenreGenreIdAndJurisdictionJurisdictionIdAndIntervalIntervalIdAndVoteDate(
-                vote.getUser().getUserId(), vote.getTargetType(), vote.getTargetId(), vote.getGenre().getGenreId(),
-                vote.getJurisdiction().getJurisdictionId(), vote.getInterval().getIntervalId(), vote.getVoteDate());
+                vote.getUser().getUserId(), vote.getTargetType(), vote.getTargetId(), 
+                vote.getGenre().getGenreId(),
+                vote.getJurisdiction().getJurisdictionId(), 
+                vote.getInterval().getIntervalId(), 
+                vote.getVoteDate());
+        
         if (existingCount > 0) {
             throw new RuntimeException("Vote already exists for this user/period");
         }
 
+        // 3. Save the vote
         Vote saved = voteRepository.save(vote);
 
-        // Update scores: +2 to voter, +3 to target (songs/artists only)
+        // 4. Update scores
         scoreUpdateService.onVote(vote.getUser().getUserId(), vote.getTargetId(), vote.getTargetType());
-
-        // Increment ongoing award if matching
         awardRepository.incrementAwardEngagement(vote.getTargetType(), vote.getTargetId(), vote.getJurisdiction().getJurisdictionId(), vote.getInterval().getIntervalId());
 
+        // 5. Update Total Votes (With NULL protection)
         if ("artist".equals(vote.getTargetType())) {
-            // Direct vote for artist
-            String incrementVotes = "UPDATE users SET total_votes = total_votes + 1 WHERE user_id = :artistId";
+            String incrementVotes = "UPDATE users SET total_votes = COALESCE(total_votes, 0) + 1 WHERE user_id = :artistId";
             Query q = entityManager.createNativeQuery(incrementVotes);
             q.setParameter("artistId", vote.getTargetId());
             q.executeUpdate();
         } else if ("song".equals(vote.getTargetType())) {
-            // Vote for song - increment the song's artist's total_votes
             String incrementVotes = """
-                UPDATE users SET total_votes = total_votes + 1 
+                UPDATE users SET total_votes = COALESCE(total_votes, 0) + 1 
                 WHERE user_id = (SELECT artist_id FROM songs WHERE song_id = :songId)
                 """;
             Query q = entityManager.createNativeQuery(incrementVotes);
@@ -106,14 +110,14 @@ public class VoteService {
             q.executeUpdate();
         }
 
-        entityManager.flush();
-        entityManager.clear();
+        if (saved.getJurisdiction() != null) { saved.getJurisdiction().getName(); }
+        if (saved.getGenre() != null) { saved.getGenre().getName(); }
+        if (saved.getInterval() != null) { saved.getInterval().getName(); }
 
         return saved;
     }
+   
 
-    // CACHED: Total votes for a target (1 min TTL via "voteCounts" cache)
-    // Simple COUNT query but called frequently on cards/pages
     @Cacheable(value = "voteCounts", key = "'total-' + #targetType + '-' + #targetId")
     public Long getTotalVotesForTarget(String targetType, UUID targetId) {
         if (!"song".equals(targetType) && !"artist".equals(targetType)) {
