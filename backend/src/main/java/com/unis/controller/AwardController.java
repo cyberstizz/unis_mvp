@@ -101,4 +101,13 @@ public class AwardController {
         }
         return ResponseEntity.ok(awards.get(0));
     }
+
+    @GetMapping("/artist/{artistId}")
+    public ResponseEntity<List<Award>> getArtistAwards(
+            @PathVariable UUID artistId,
+            @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        List<Award> awards = awardService.getArtistAwards(artistId, limit, offset);
+        return ResponseEntity.ok(awards);
+    }
 }

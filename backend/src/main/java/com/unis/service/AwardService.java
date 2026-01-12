@@ -17,8 +17,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.EntityManager;
@@ -29,14 +32,15 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
-@Transactional
 public class AwardService {
     @Autowired
     private AwardRepository awardRepository;
@@ -64,6 +68,12 @@ public class AwardService {
 
     @Autowired
     private EntityManager entityManager;
+    
+    // Self-injection to allow @Transactional to work on internal calls
+    // @Lazy breaks the circular dependency cycle
+    @Lazy
+    @Autowired
+    private AwardService self;
 
     @Value("${unis.auto-populate-awards:true}")
     private boolean autoPopulateAwards;
@@ -84,6 +94,7 @@ public class AwardService {
     // PUBLIC API METHODS
     // =========================================================================
 
+    @Transactional(readOnly = true)
     @Cacheable(value = "leaderboards", key = "'leaderboard-' + #type + '-' + #intervalId + '-' + #jurisdictionId")
     public List<Award> getLeaderboards(String type, UUID intervalId, UUID jurisdictionId) {
         if (intervalId == null) {
@@ -100,7 +111,8 @@ public class AwardService {
         List<Award> awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
         
         if (awards.isEmpty() && autoPopulateAwards) {
-            computeAwardsForDate(end, intervalId, jurisdictionId, null);
+            // Use self-reference to ensure @Transactional works
+            self.computeAwardsForDate(end, intervalId, jurisdictionId, null);
             awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
         }
         
@@ -113,10 +125,19 @@ public class AwardService {
 
     /**
      * Get past awards - AUTO-COMPUTES AND SAVES if none exist
+     * 
+     * MAIN VERSION - with intervalId parameter
+     * 
+     * This method starts as read-only for the initial query, then delegates to
+     * a separate read-write transaction if computation is needed.
      */
-    @CacheEvict(value = "awards", allEntries = true)  // Evict since we might save new awards
+    @Transactional(readOnly = true)
     public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, 
                                       UUID jurisdictionId, UUID genreId, UUID intervalId) {
+        System.out.println("=== getPastAwards CALLED ===");
+        System.out.println("Type: " + type + ", Start: " + startDate + ", End: " + endDate);
+        System.out.println("Jurisdiction: " + jurisdictionId + ", Genre: " + genreId + ", Interval: " + intervalId);
+        
         // Use provided interval or determine from date range
         if (intervalId == null) {
             Optional<VotingInterval> intervalOpt = determineIntervalFromDateRange(startDate, endDate);
@@ -131,20 +152,26 @@ public class AwardService {
         // Check if awards exist for this specific query
         List<Award> awards = awardRepository.findByFilters(type, jurisdictionId, genreId, intervalId, startDate, endDate);
         
+        System.out.println("Initial query found " + awards.size() + " awards");
+        
         // AUTO-COMPUTE AND SAVE if no awards exist
         if (awards.isEmpty() && autoPopulateAwards) {
-            System.out.println("No awards found - auto-computing for " + type + ", jurisdiction " + jurisdictionId + ", date " + endDate);
+            System.out.println("=== NO AWARDS FOUND - TRIGGERING COMPUTATION ===");
             
-            // Compute awards (this SAVES them to database)
-            computeAwardsForDate(endDate, intervalId, jurisdictionId, genreId);
+            // CRITICAL FIX: Call via self-reference to new method with REQUIRES_NEW transaction
+            // This ensures a fresh read-write transaction is created
+            UUID finalIntervalId = intervalId;
+            self.computeAndSaveAwardsInNewTransaction(endDate, finalIntervalId, jurisdictionId, genreId);
             
             // Fetch the newly created awards
-            awards = awardRepository.findByFilters(type, jurisdictionId, genreId, intervalId, startDate, endDate);
+            awards = awardRepository.findByFilters(type, jurisdictionId, genreId, finalIntervalId, startDate, endDate);
+            
+            System.out.println("=== AFTER COMPUTATION: Found " + awards.size() + " awards ===");
         }
         
         // If still empty after computation, create fallback (but don't save fallbacks)
         if (awards.isEmpty()) {
-            System.out.println("Still no awards after computation - creating fallback display");
+            System.out.println("Still no awards after computation - creating fallback display (NOT saved)");
             awards = createFallbackAwards(type, jurisdictionId, intervalId, endDate);
             if (genreId != null) {
                 UUID finalGenreId = genreId;
@@ -157,30 +184,67 @@ public class AwardService {
         return populateAwardEntities(awards);
     }
 
-    // Overload for backward compatibility (without intervalId)
+    /**
+     * Overload for backward compatibility (without intervalId)
+     * 
+     * NOTE: This just delegates to the main version above
+     */
     public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, 
                                       UUID jurisdictionId, UUID genreId) {
         return getPastAwards(type, startDate, endDate, jurisdictionId, genreId, null);
     }
 
     // =========================================================================
-    // CORE AWARD COMPUTATION - WITH VOTE AGGREGATION FROM CHILDREN
+    // TRANSACTION BOUNDARY FIX - NEW METHOD
+    // =========================================================================
+    
+    /**
+     * CRITICAL FIX: This method creates a NEW read-write transaction.
+     * 
+     * REQUIRES_NEW propagation means:
+     * - Suspends the current read-only transaction (if any)
+     * - Creates a brand new read-write transaction
+     * - Commits independently when done
+     * 
+     * This ensures the connection is NOT read-only when we try to save awards.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = false)
+    @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
+    public void computeAndSaveAwardsInNewTransaction(LocalDate awardDate, UUID intervalId, 
+                                                       UUID jurisdictionId, UUID genreId) {
+        System.out.println(">>> NEW TRANSACTION STARTED - readOnly=false <<<");
+        System.out.println("Computing awards for date: " + awardDate);
+        
+        // Delegate to the main computation logic
+        computeAwardsInternal(awardDate, intervalId, jurisdictionId, genreId);
+        
+        System.out.println(">>> TRANSACTION WILL COMMIT NOW <<<");
+    }
+
+    // =========================================================================
+    // CORE AWARD COMPUTATION - INTERNAL METHOD
     // =========================================================================
 
     /**
-     * Compute awards for a specific date with:
-     * - THREE-TIER TIEBREAKER: votes → score → seniority
-     * - VOTE AGGREGATION: Parent jurisdictions include votes from all children
+     * Compute awards for a specific date.
      * 
-     * Creates exactly ONE winner per category/jurisdiction/genre/interval/date.
-     * SAVES the award to the database permanently.
+     * This is the INTERNAL method that does the actual work.
+     * It should be called from within a transaction (not directly from controllers).
      */
+    @Transactional(readOnly = false)
     @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
     public void computeAwardsForDate(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
+        System.out.println(">>> computeAwardsForDate called with @Transactional(readOnly=false)");
+        computeAwardsInternal(awardDate, intervalId, jurisdictionId, genreId);
+    }
+
+    /**
+     * The actual computation logic - separated so it can be called from different transaction contexts
+     */
+    private void computeAwardsInternal(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
         // Get jurisdictions to process (only voting-enabled ones)
         List<UUID> jurisdictions;
         if (jurisdictionId != null) {
-            // Verify it's voting-enabled
             Jurisdiction jur = jurisdictionRepository.findById(jurisdictionId).orElse(null);
             if (jur == null || !Boolean.TRUE.equals(jur.getVotingEnabled())) {
                 System.out.println("Skipping non-voting-enabled jurisdiction: " + jurisdictionId);
@@ -201,63 +265,68 @@ public class AwardService {
             return;
         }
 
-        // Calculate date range for this interval
         LocalDate startDate = getIntervalStartDate(intervalId, awardDate);
 
         System.out.println("Computing awards for " + interval.getName() + " from " + startDate + " to " + awardDate);
+        System.out.println("Jurisdictions to process: " + jurisdictions.size());
+        System.out.println("Genres to process: " + genres.size());
 
+        int awardsCreated = 0;
+        
         for (UUID jurId : jurisdictions) {
             for (UUID genId : genres) {
-                // Compute SONG award (with vote aggregation from children)
-                computeSingleWinnerAward("song", jurId, genId, intervalId, startDate, awardDate, interval);
+                if (computeSingleWinnerAward("song", jurId, genId, intervalId, startDate, awardDate, interval)) {
+                    awardsCreated++;
+                }
                 
-                // Compute ARTIST award (with vote aggregation from children)
-                computeSingleWinnerAward("artist", jurId, genId, intervalId, startDate, awardDate, interval);
+                if (computeSingleWinnerAward("artist", jurId, genId, intervalId, startDate, awardDate, interval)) {
+                    awardsCreated++;
+                }
             }
         }
+        
+        System.out.println(">>> Total awards created in this transaction: " + awardsCreated);
     }
 
     /**
-     * Core method: Compute a SINGLE winner for one category/jurisdiction/genre/interval/date.
-     * 
-     * KEY FEATURE: Aggregates votes from the jurisdiction AND all its children.
-     * Example: Harlem award counts votes from Harlem + Uptown Harlem + Downtown Harlem
+     * Compute a SINGLE winner for one category/jurisdiction/genre/interval/date.
+     * Returns true if an award was created.
      */
-    private void computeSingleWinnerAward(String targetType, UUID jurisdictionId, UUID genreId,
-                                           UUID intervalId, LocalDate startDate, LocalDate awardDate,
-                                           VotingInterval interval) {
+    private boolean computeSingleWinnerAward(String targetType, UUID jurisdictionId, UUID genreId,
+                                              UUID intervalId, LocalDate startDate, LocalDate awardDate,
+                                              VotingInterval interval) {
         
-        // Check if award already exists for this category
         if (awardRepository.existsAwardForCategory(targetType, jurisdictionId, genreId, intervalId, awardDate)) {
             System.out.println("Award already exists for " + targetType + " in jurisdiction " + jurisdictionId + " on " + awardDate);
-            return;
+            return false;
         }
 
-        // =====================================================================
-        // KEY: Get all candidates with AGGREGATED votes from this jurisdiction
-        // AND all its children
-        // =====================================================================
-        List<CandidateResult> candidates = getCandidatesWithAggregatedVotes(
+        List<CandidateResult> candidates = getCandidatesWithBidirectionalVotes(
             targetType, jurisdictionId, genreId, intervalId, startDate, awardDate
         );
 
+        // ZERO-VOTE FALLBACK: If no votes, get candidates by score + seniority
         if (candidates.isEmpty()) {
-            System.out.println("No votes found for " + targetType + " in jurisdiction " + jurisdictionId + " (including children) on " + awardDate);
-            return;
+            System.out.println("No votes found for " + targetType + " in jurisdiction " + jurisdictionId + " on " + awardDate);
+            System.out.println("FALLBACK: Querying candidates by score + seniority (no votes required)");
+            
+            candidates = getCandidatesByScoreAndSeniority(targetType, jurisdictionId, genreId);
+            
+            if (candidates.isEmpty()) {
+                System.out.println("No eligible " + targetType + "s found in jurisdiction hierarchy for fallback award");
+                return false;
+            }
         }
 
-        // Apply three-tier tiebreaker to find THE winner
         WinnerResult winner = determineWinner(candidates, targetType);
 
         if (winner == null) {
             System.out.println("Could not determine winner for " + targetType);
-            return;
+            return false;
         }
 
-        // Get point value for this interval
         int awardPoints = AWARD_POINTS.getOrDefault(interval.getName(), 50);
 
-        // Create and SAVE the award
         Award award = Award.builder()
             .targetType(targetType)
             .targetId(winner.targetId)
@@ -273,33 +342,39 @@ public class AwardService {
             .tiedCandidatesCount(winner.tiedCandidatesCount)
             .build();
 
-        awardRepository.save(award);
+        Award savedAward = awardRepository.save(award);
+        awardRepository.flush();  // Force immediate write
         
-        // Award points to winner
-        scoreUpdateService.onAward(winner.targetId, awardPoints);
-
-        System.out.println("✓ Award SAVED: " + targetType + " winner in " + jurisdictionId + 
+        System.out.println("✓ Award SAVED with ID: " + savedAward.getAwardId() + " for " + targetType + 
+                          " winner in jurisdiction " + jurisdictionId + 
                           " with " + winner.voteCount + " votes (determined by " + winner.determinationMethod + ")");
+        
+        scoreUpdateService.onAward(winner.targetId, awardPoints);
+        
+        return true;
     }
 
     /**
-     * Get all candidates with their vote counts AGGREGATED from the jurisdiction
-     * AND ALL ITS CHILDREN.
-     * 
-     * This is the key method that enables:
-     * - Downtown Harlem artist wins Downtown Harlem award
-     * - Same artist ALSO wins Harlem award (if they have most votes across all of Harlem)
+     * BIDIRECTIONAL VOTE AGGREGATION
      */
     @SuppressWarnings("unchecked")
-    private List<CandidateResult> getCandidatesWithAggregatedVotes(String targetType, UUID jurisdictionId, 
-                                                                    UUID genreId, UUID intervalId, 
-                                                                    LocalDate startDate, LocalDate endDate) {
-        // =====================================================================
-        // Get this jurisdiction and ALL its children using the hierarchy
-        // =====================================================================
-        List<UUID> jurisdictionIds = getJurisdictionAndAllChildren(jurisdictionId);
+    private List<CandidateResult> getCandidatesWithBidirectionalVotes(String targetType, UUID jurisdictionId, 
+                                                                       UUID genreId, UUID intervalId, 
+                                                                       LocalDate startDate, LocalDate endDate) {
+        Set<UUID> allRelatedJurisdictions = new HashSet<>();
         
-        System.out.println("Aggregating votes from " + jurisdictionIds.size() + " jurisdictions for " + jurisdictionId);
+        allRelatedJurisdictions.add(jurisdictionId);
+        
+        List<UUID> children = getJurisdictionAndAllChildren(jurisdictionId);
+        allRelatedJurisdictions.addAll(children);
+        
+        List<UUID> ancestors = getJurisdictionAncestors(jurisdictionId);
+        allRelatedJurisdictions.addAll(ancestors);
+        
+        System.out.println("Bidirectional vote aggregation for " + jurisdictionId + 
+                          ": checking " + allRelatedJurisdictions.size() + " jurisdictions");
+
+        List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
 
         String sql;
         
@@ -312,11 +387,13 @@ public class AwardService {
                     s.created_at as seniority
                 FROM votes v
                 JOIN songs s ON v.target_id = s.song_id
+                JOIN users artist ON s.artist_id = artist.user_id
                 WHERE v.target_type = 'song'
-                  AND v.jurisdiction_id IN (:jurisdictionIds)
                   AND v.genre_id = :genreId
                   AND v.interval_id = :intervalId
                   AND v.vote_date BETWEEN :startDate AND :endDate
+                  AND v.jurisdiction_id IN (:allRelatedJurisdictions)
+                  AND artist.jurisdiction_id IN (:thisAndChildren)
                 GROUP BY v.target_id, s.score, s.created_at
                 ORDER BY vote_count DESC, score DESC, seniority ASC
             """;
@@ -330,18 +407,20 @@ public class AwardService {
                 FROM votes v
                 JOIN users u ON v.target_id = u.user_id
                 WHERE v.target_type = 'artist'
-                  AND v.jurisdiction_id IN (:jurisdictionIds)
                   AND v.genre_id = :genreId
                   AND v.interval_id = :intervalId
                   AND v.vote_date BETWEEN :startDate AND :endDate
                   AND (u.deleted_at IS NULL)
+                  AND v.jurisdiction_id IN (:allRelatedJurisdictions)
+                  AND u.jurisdiction_id IN (:thisAndChildren)
                 GROUP BY v.target_id, u.score, u.created_at
                 ORDER BY vote_count DESC, score DESC, seniority ASC
             """;
         }
 
         Query query = entityManager.createNativeQuery(sql);
-        query.setParameter("jurisdictionIds", jurisdictionIds);
+        query.setParameter("allRelatedJurisdictions", new ArrayList<>(allRelatedJurisdictions));
+        query.setParameter("thisAndChildren", thisAndChildren);
         query.setParameter("genreId", genreId);
         query.setParameter("intervalId", intervalId);
         query.setParameter("startDate", startDate);
@@ -359,13 +438,80 @@ public class AwardService {
             candidates.add(candidate);
         }
 
+        System.out.println("Found " + candidates.size() + " candidates with votes for " + targetType);
         return candidates;
     }
 
     /**
-     * Get a jurisdiction and ALL its descendants (children, grandchildren, etc.)
-     * Uses recursive CTE to traverse the hierarchy.
+     * ZERO-VOTE FALLBACK: Get candidates by score + seniority (no votes required)
+     * Uses same bidirectional jurisdiction logic as vote aggregation
      */
+    @SuppressWarnings("unchecked")
+    private List<CandidateResult> getCandidatesByScoreAndSeniority(String targetType, UUID jurisdictionId, UUID genreId) {
+        // Use bidirectional jurisdiction logic (this + children + ancestors)
+        Set<UUID> allRelatedJurisdictions = new HashSet<>();
+        allRelatedJurisdictions.add(jurisdictionId);
+        allRelatedJurisdictions.addAll(getJurisdictionAndAllChildren(jurisdictionId));
+        allRelatedJurisdictions.addAll(getJurisdictionAncestors(jurisdictionId));
+        
+        List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
+
+        System.out.println("FALLBACK: Querying " + targetType + "s by score+seniority from " + 
+                          thisAndChildren.size() + " jurisdictions (this + children)");
+
+        String sql;
+        
+        if ("song".equals(targetType)) {
+            sql = """
+                SELECT 
+                    s.song_id as target_id,
+                    0 as vote_count,
+                    COALESCE(s.score, 0) as score,
+                    s.created_at as seniority
+                FROM songs s
+                JOIN users artist ON s.artist_id = artist.user_id
+                WHERE s.genre_id = :genreId
+                  AND artist.jurisdiction_id IN (:thisAndChildren)
+                ORDER BY score DESC, seniority ASC
+                LIMIT 1
+            """;
+        } else {
+            sql = """
+                SELECT 
+                    u.user_id as target_id,
+                    0 as vote_count,
+                    COALESCE(u.score, 0) as score,
+                    u.created_at as seniority
+                FROM users u
+                WHERE u.role = 'artist'
+                  AND u.genre_id = :genreId
+                  AND u.deleted_at IS NULL
+                  AND u.jurisdiction_id IN (:thisAndChildren)
+                ORDER BY score DESC, seniority ASC
+                LIMIT 1
+            """;
+        }
+
+        Query query = entityManager.createNativeQuery(sql);
+        query.setParameter("thisAndChildren", thisAndChildren);
+        query.setParameter("genreId", genreId);
+
+        List<Object[]> results = query.getResultList();
+        
+        List<CandidateResult> candidates = new ArrayList<>();
+        for (Object[] row : results) {
+            CandidateResult candidate = new CandidateResult();
+            candidate.targetId = (UUID) row[0];
+            candidate.voteCount = ((Number) row[1]).intValue();  // Always 0
+            candidate.score = ((Number) row[2]).intValue();
+            candidate.seniority = row[3] != null ? ((java.sql.Timestamp) row[3]).toLocalDateTime() : LocalDateTime.now();
+            candidates.add(candidate);
+        }
+
+        System.out.println("FALLBACK: Found " + candidates.size() + " candidate(s) by score+seniority for " + targetType);
+        return candidates;
+    }
+
     @SuppressWarnings("unchecked")
     private List<UUID> getJurisdictionAndAllChildren(UUID jurisdictionId) {
         String sql = """
@@ -386,22 +532,39 @@ public class AwardService {
         Query query = entityManager.createNativeQuery(sql);
         query.setParameter("jurisdictionId", jurisdictionId);
         
-        List<UUID> results = query.getResultList();
-        return results;
+        return query.getResultList();
     }
 
-    /**
-     * Determine the winner using three-tier tiebreaker:
-     * 1. Most votes
-     * 2. Highest score (if tied on votes)
-     * 3. Oldest account/song (if tied on score)
-     */
+    @SuppressWarnings("unchecked")
+    private List<UUID> getJurisdictionAncestors(UUID jurisdictionId) {
+        String sql = """
+            WITH RECURSIVE ancestor_tree AS (
+                SELECT parent_jurisdiction_id 
+                FROM jurisdictions 
+                WHERE jurisdiction_id = :jurisdictionId
+                AND parent_jurisdiction_id IS NOT NULL
+                
+                UNION ALL
+                
+                SELECT j.parent_jurisdiction_id 
+                FROM jurisdictions j
+                INNER JOIN ancestor_tree at ON j.jurisdiction_id = at.parent_jurisdiction_id
+                WHERE j.parent_jurisdiction_id IS NOT NULL
+            )
+            SELECT parent_jurisdiction_id FROM ancestor_tree
+        """;
+        
+        Query query = entityManager.createNativeQuery(sql);
+        query.setParameter("jurisdictionId", jurisdictionId);
+        
+        return query.getResultList();
+    }
+
     private WinnerResult determineWinner(List<CandidateResult> candidates, String targetType) {
         if (candidates.isEmpty()) {
             return null;
         }
 
-        // Candidates are already sorted by votes DESC, score DESC, seniority ASC
         CandidateResult topCandidate = candidates.get(0);
         
         WinnerResult winner = new WinnerResult();
@@ -410,7 +573,13 @@ public class AwardService {
         winner.score = topCandidate.score;
         winner.seniority = topCandidate.seniority;
 
-        // Count how many candidates are tied at each level
+        // Check if this is a zero-vote scenario (fallback by score)
+        if (topCandidate.voteCount == 0) {
+            winner.determinationMethod = "FALLBACK";
+            winner.tiedCandidatesCount = 0;
+            return winner;
+        }
+
         int tiedOnVotes = 0;
         int tiedOnVotesAndScore = 0;
 
@@ -423,7 +592,6 @@ public class AwardService {
             }
         }
 
-        // Determine how the winner was selected
         if (tiedOnVotes == 1) {
             winner.determinationMethod = "VOTES";
             winner.tiedCandidatesCount = 0;
@@ -442,11 +610,8 @@ public class AwardService {
     // SCHEDULED CRON JOBS
     // =========================================================================
 
-    /**
-     * Daily awards - runs at 12:01 AM
-     * Computes awards for YESTERDAY's votes for ALL voting-enabled jurisdictions
-     */
-    @Scheduled(cron = "0 1 0 * * ?")  // 12:01 AM daily
+    @Scheduled(cron = "0 1 0 * * ?")
+    @Transactional(readOnly = false)
     public void computeDailyAwards() {
         LocalDate yesterday = LocalDate.now().minusDays(1);
         System.out.println("=== DAILY AWARD CRON: Computing for " + yesterday + " ===");
@@ -457,32 +622,33 @@ public class AwardService {
             return;
         }
 
-        // Compute for ALL voting-enabled jurisdictions (null = all)
-        computeAwardsForDate(yesterday, dailyInterval.get().getIntervalId(), null, null);
-        
-        // Reset plays_today for the new day
+        // Call internal method directly since we're already in a transaction
+        computeAwardsInternal(yesterday, dailyInterval.get().getIntervalId(), null, null);
         songRepository.resetPlaysToday(LocalDate.now());
         
         System.out.println("=== DAILY AWARD CRON COMPLETE ===");
     }
 
     @Scheduled(cron = "0 1 0 * * MON")
+    @Transactional(readOnly = false)
     public void computeWeeklyAwards() {
         System.out.println("=== WEEKLY AWARD CRON ===");
         Optional<VotingInterval> weekly = votingIntervalRepository.findByName("Weekly");
         if (weekly.isEmpty()) return;
-        computeAwardsForDate(LocalDate.now().minusDays(1), weekly.get().getIntervalId(), null, null);
+        computeAwardsInternal(LocalDate.now().minusDays(1), weekly.get().getIntervalId(), null, null);
     }
 
     @Scheduled(cron = "0 1 0 1 * ?")
+    @Transactional(readOnly = false)
     public void computeMonthlyAwards() {
         System.out.println("=== MONTHLY AWARD CRON ===");
         Optional<VotingInterval> monthly = votingIntervalRepository.findByName("Monthly");
         if (monthly.isEmpty()) return;
-        computeAwardsForDate(LocalDate.now().minusDays(1), monthly.get().getIntervalId(), null, null);
+        computeAwardsInternal(LocalDate.now().minusDays(1), monthly.get().getIntervalId(), null, null);
     }
 
     @Scheduled(cron = "0 1 0 1 * ?")
+    @Transactional(readOnly = false)
     public void computeQuarterlyAwards() {
         LocalDate now = LocalDate.now();
         int month = now.getMonthValue();
@@ -490,11 +656,12 @@ public class AwardService {
             System.out.println("=== QUARTERLY AWARD CRON ===");
             Optional<VotingInterval> quarterly = votingIntervalRepository.findByName("Quarterly");
             if (quarterly.isEmpty()) return;
-            computeAwardsForDate(now.minusDays(1), quarterly.get().getIntervalId(), null, null);
+            computeAwardsInternal(now.minusDays(1), quarterly.get().getIntervalId(), null, null);
         }
     }
 
     @Scheduled(cron = "0 1 0 1 * ?")
+    @Transactional(readOnly = false)
     public void computeMidtermAwards() {
         LocalDate now = LocalDate.now();
         int month = now.getMonthValue();
@@ -502,41 +669,41 @@ public class AwardService {
             System.out.println("=== MIDTERM AWARD CRON ===");
             Optional<VotingInterval> midterm = votingIntervalRepository.findByName("Midterm");
             if (midterm.isEmpty()) return;
-            computeAwardsForDate(now.minusDays(1), midterm.get().getIntervalId(), null, null);
+            computeAwardsInternal(now.minusDays(1), midterm.get().getIntervalId(), null, null);
         }
     }
 
     @Scheduled(cron = "0 1 0 1 1 ?")
+    @Transactional(readOnly = false)
     public void computeAnnualAwards() {
         System.out.println("=== ANNUAL AWARD CRON ===");
         Optional<VotingInterval> annual = votingIntervalRepository.findByName("Annual");
         if (annual.isEmpty()) return;
-        computeAwardsForDate(LocalDate.now().minusDays(1), annual.get().getIntervalId(), null, null);
+        computeAwardsInternal(LocalDate.now().minusDays(1), annual.get().getIntervalId(), null, null);
     }
 
     // =========================================================================
     // MANUAL COMPUTATION
     // =========================================================================
 
+    @Transactional(readOnly = false)
     @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
     public void computeForInterval(UUID intervalId, UUID jurisdictionId, UUID genreId, LocalDate cronDate) {
-        computeAwardsForDate(cronDate, intervalId, jurisdictionId, genreId);
+        computeAwardsInternal(cronDate, intervalId, jurisdictionId, genreId);
     }
 
+    @Transactional(readOnly = false)
     public void computeDailyAwardsForDate(LocalDate cronDate) {
         Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
         if (dailyInterval.isEmpty()) return;
-        computeAwardsForDate(cronDate, dailyInterval.get().getIntervalId(), null, null);
+        computeAwardsInternal(cronDate, dailyInterval.get().getIntervalId(), null, null);
     }
 
-    /**
-     * Recompute ALL historical awards from votes data.
-     */
+    @Transactional(readOnly = false)
     @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
     public void recomputeAllHistoricalAwards() {
         System.out.println("=== RECOMPUTING ALL HISTORICAL AWARDS ===");
         
-        // Get all distinct vote dates
         String sql = "SELECT DISTINCT vote_date FROM votes ORDER BY vote_date";
         Query query = entityManager.createNativeQuery(sql);
         
@@ -552,10 +719,9 @@ public class AwardService {
         for (java.sql.Date sqlDate : voteDates) {
             LocalDate date = sqlDate.toLocalDate();
             System.out.println("Processing votes for " + date);
-            // Compute for ALL voting-enabled jurisdictions and ALL genres
-            computeAwardsForDate(date, dailyInterval.get().getIntervalId(), null, null);
+            computeAwardsInternal(date, dailyInterval.get().getIntervalId(), null, null);
         }
-
+        
         System.out.println("=== HISTORICAL RECOMPUTATION COMPLETE ===");
     }
 
@@ -608,14 +774,9 @@ public class AwardService {
         }
     }
 
-    /**
-     * Create fallback awards for display when no votes exist.
-     * These are NOT saved to the database.
-     */
     private List<Award> createFallbackAwards(String type, UUID jurisdictionId, UUID intervalId, LocalDate awardDate) {
         List<Award> fallbackAwards = new ArrayList<>();
         
-        // Get this jurisdiction and all children for fallback too
         List<UUID> jurisdictionIds = getJurisdictionAndAllChildren(jurisdictionId);
         
         if ("song".equals(type)) {
@@ -689,8 +850,14 @@ public class AwardService {
         return awards;
     }
 
+    @Transactional(readOnly = true)
+    public List<Award> getArtistAwards(UUID artistId, int limit, int offset) {
+        List<Award> awards = awardRepository.findByTargetIdOrderByAwardDateDesc(artistId, PageRequest.of(offset / limit, limit));
+        return populateAwardEntities(awards);
+    }
+
     // =========================================================================
-    // INNER CLASSES FOR TIEBREAKER LOGIC
+    // INNER CLASSES
     // =========================================================================
 
     private static class CandidateResult {

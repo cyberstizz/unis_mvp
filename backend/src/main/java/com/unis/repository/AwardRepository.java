@@ -1,6 +1,8 @@
 package com.unis.repository;
 
 import com.unis.entity.Award;
+
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -197,4 +199,7 @@ public interface AwardRepository extends JpaRepository<Award, UUID> {
     @Modifying
     @Query("DELETE FROM Award a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId")
     void deleteByJurisdictionId(@Param("jurisdictionId") UUID jurisdictionId);
+
+    @Query("SELECT a FROM Award a WHERE a.targetId = :targetId AND a.targetType = 'artist' ORDER BY a.awardDate DESC")
+    List<Award> findByTargetIdOrderByAwardDateDesc(@Param("targetId") UUID targetId, Pageable pageable);
 }
