@@ -70,7 +70,7 @@ public class VoteService {
     @Autowired
     private UserRepository userRepository;
 
-  @CacheEvict(value = {"leaderboards", "nominees", "voteCounts"}, allEntries = true)
+    @CacheEvict(value = {"leaderboards", "nominees", "voteCounts"}, allEntries = true)
     @Transactional
     public Vote submitVote(Vote vote) {
         // 1. GUARD CLAUSES: Validate required fields preventing NPE
@@ -79,26 +79,46 @@ public class VoteService {
         if (vote.getJurisdiction() == null) throw new IllegalArgumentException("Jurisdiction is required");
         if (vote.getInterval() == null) throw new IllegalArgumentException("Interval is required");
 
-        // 2. Check unique constraint (Now safe because we know genre/jurisdiction are not null)
-        Long existingCount = voteRepository.existsByUserUserIdAndTargetTypeAndTargetIdAndGenreGenreIdAndJurisdictionJurisdictionIdAndIntervalIntervalIdAndVoteDate(
-                vote.getUser().getUserId(), vote.getTargetType(), vote.getTargetId(), 
+        // =====================================================================
+        // 2. NEW: Validate jurisdiction eligibility BEFORE saving
+        // =====================================================================
+        UUID userId = vote.getUser().getUserId();
+        UUID targetJurisdictionId = vote.getJurisdiction().getJurisdictionId();
+        
+        if (!canUserVoteInJurisdiction(userId, targetJurisdictionId)) {
+            throw new IllegalArgumentException(
+                "User is not eligible to vote in this jurisdiction. " +
+                "Users can only vote in their home jurisdiction and its voting-enabled ancestors."
+            );
+        }
+
+        // =====================================================================
+        // 3. Check unique constraint - FIXED: Removed target_id from check
+        // User can only cast ONE vote per category per jurisdiction per day
+        // =====================================================================
+        Long existingCount = voteRepository.existsByUserAndCategoryAndJurisdictionAndIntervalAndDate(
+                vote.getUser().getUserId(), 
+                vote.getTargetType(),
                 vote.getGenre().getGenreId(),
                 vote.getJurisdiction().getJurisdictionId(), 
                 vote.getInterval().getIntervalId(), 
                 vote.getVoteDate());
         
         if (existingCount > 0) {
-            throw new RuntimeException("Vote already exists for this user/period");
+            throw new RuntimeException(
+                "You have already cast a " + vote.getTargetType() + " vote " +
+                "in this jurisdiction for today. Votes cannot be changed."
+            );
         }
 
-        // 3. Save the vote
+        // 4. Save the vote
         Vote saved = voteRepository.save(vote);
 
-        // 4. Update scores
+        // 5. Update scores
         scoreUpdateService.onVote(vote.getUser().getUserId(), vote.getTargetId(), vote.getTargetType());
         awardRepository.incrementAwardEngagement(vote.getTargetType(), vote.getTargetId(), vote.getJurisdiction().getJurisdictionId(), vote.getInterval().getIntervalId());
 
-        // 5. Update Total Votes (With NULL protection)
+        // 6. Update Total Votes (With NULL protection)
         if ("artist".equals(vote.getTargetType())) {
             String incrementVotes = "UPDATE users SET total_votes = COALESCE(total_votes, 0) + 1 WHERE user_id = :artistId";
             Query q = entityManager.createNativeQuery(incrementVotes);
@@ -121,6 +141,98 @@ public class VoteService {
         return saved;
     }
    
+    // =========================================================================
+    // FIXED: Jurisdiction Eligibility Check - Now traverses FULL hierarchy
+    // =========================================================================
+    
+    /**
+     * Check if a user can vote in a specific jurisdiction.
+     * 
+     * Rules:
+     * 1. User can vote in their HOME jurisdiction (if voting_enabled)
+     * 2. User can vote in any ANCESTOR jurisdiction (if voting_enabled)
+     * 3. User CANNOT vote in sibling, cousin, or unrelated jurisdictions
+     * 
+     * Example for Downtown Harlem user:
+     * - CAN vote in: Downtown Harlem, Harlem (both voting_enabled = true)
+     * - CANNOT vote in: Uptown Harlem (sibling), Brooklyn (unrelated)
+     * - CANNOT vote in: Upper Manhattan (ancestor but voting_enabled = false)
+     * 
+     * @param userId The user attempting to vote
+     * @param targetJurisdictionId The jurisdiction they want to vote in
+     * @return true if eligible, false otherwise
+     */
+    public boolean canUserVoteInJurisdiction(UUID userId, UUID targetJurisdictionId) {
+        // Get the user with their jurisdiction
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found: " + userId));
+        
+        Jurisdiction userJurisdiction = user.getJurisdiction();
+        if (userJurisdiction == null) {
+            throw new RuntimeException("User has no home jurisdiction assigned: " + userId);
+        }
+
+        // Get user's jurisdiction with path
+        Jurisdiction userJurWithPath = jurisdictionRepository.findById(userJurisdiction.getJurisdictionId())
+            .orElseThrow(() -> new RuntimeException("User jurisdiction not found"));
+        
+        String userPath = userJurWithPath.getPath();
+        if (userPath == null || userPath.isEmpty()) {
+            throw new RuntimeException("User jurisdiction has no path configured. Run Phase 1 SQL to populate paths.");
+        }
+
+        // Use the repository method to check eligibility
+        // This checks: target is in user's path AND target is voting_enabled
+        return jurisdictionRepository.canUserVoteInJurisdiction(userPath, targetJurisdictionId);
+    }
+
+    /**
+     * Get all jurisdictions where a user is eligible to vote.
+     * Used for populating the jurisdiction dropdown in the voting UI.
+     * 
+     * @param userId The user
+     * @return List of voting-enabled jurisdictions in user's ancestor chain
+     */
+    public List<Jurisdiction> getEligibleJurisdictionsForUser(UUID userId) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found: " + userId));
+        
+        Jurisdiction userJurisdiction = user.getJurisdiction();
+        if (userJurisdiction == null) {
+            return new ArrayList<>();
+        }
+
+        Jurisdiction userJurWithPath = jurisdictionRepository.findById(userJurisdiction.getJurisdictionId())
+            .orElseThrow(() -> new RuntimeException("User jurisdiction not found"));
+        
+        String userPath = userJurWithPath.getPath();
+        if (userPath == null || userPath.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // Get voting-enabled ancestors
+        List<Object[]> results = jurisdictionRepository.findVotingEnabledAncestors(userPath);
+        
+        // Convert to Jurisdiction entities
+        List<UUID> jurisdictionIds = results.stream()
+            .map(row -> (UUID) row[0])
+            .collect(Collectors.toList());
+        
+        if (jurisdictionIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        List<Jurisdiction> jurisdictions = jurisdictionRepository.findAllById(jurisdictionIds);
+        
+        // Sort by depth (deepest first - user's home jurisdiction first)
+        jurisdictions.sort((a, b) -> {
+            int depthA = a.getDepth() != null ? a.getDepth() : 0;
+            int depthB = b.getDepth() != null ? b.getDepth() : 0;
+            return Integer.compare(depthB, depthA);
+        });
+        
+        return jurisdictions;
+    }
 
     @Cacheable(value = "voteCounts", key = "'total-' + #targetType + '-' + #targetId")
     public Long getTotalVotesForTarget(String targetType, UUID targetId) {
@@ -142,13 +254,15 @@ public class VoteService {
     }
 
     // NOT CACHED - Scheduled cron job (runs once daily at midnight)
+    // NOTE: Award computation moved to AwardService - this is kept for backwards compatibility
     @Scheduled(cron = "0 0 0 * * ?")
     public void computeDailyAwards() {
         Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
         if (dailyInterval.isEmpty()) return;
 
         UUID dailyId = dailyInterval.get().getIntervalId();
-        List<UUID> jurisdictions = jurisdictionRepository.findAllJurisdictionIds();
+        // FIXED: Only compute for voting-enabled jurisdictions
+        List<UUID> jurisdictions = jurisdictionRepository.findVotingEnabledJurisdictionIds();
         List<UUID> genres = genreRepository.findAllGenreIds();
 
         for (UUID jurisdictionId : jurisdictions) {
@@ -340,41 +454,18 @@ public class VoteService {
             case "Quarterly":
                 int currentQuarter = (today.getMonthValue() - 1) / 3;
                 return today.withMonth(currentQuarter * 3 + 1).withDayOfMonth(1);
+            case "Midterm":
+                int month = today.getMonthValue();
+                if (month >= 7) {
+                    return today.withMonth(7).withDayOfMonth(1);
+                } else {
+                    return today.withMonth(1).withDayOfMonth(1);
+                }
             case "Annual":
                 return today.withDayOfYear(1);
             default:
                 return today;
         }
-    }
-
-    // NOT CACHED - Authorization check, infrequent and user-specific
-    // Check if user can vote in a jurisdiction
-    public boolean canUserVoteInJurisdiction(UUID userId, UUID jurisdictionId) {
-        User user = userRepository.findById(userId)
-            .orElseThrow(() -> new RuntimeException("User not found"));
-        
-        Jurisdiction targetJurisdiction = jurisdictionRepository.findById(jurisdictionId)
-            .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
-        
-        Jurisdiction userJurisdiction = user.getJurisdiction();
-        
-        // User can vote in their own jurisdiction
-        if (userJurisdiction.getJurisdictionId().equals(jurisdictionId)) {
-            return true;
-        }
-        
-        // User can vote in parent jurisdiction
-        if (userJurisdiction.getParentJurisdiction() != null && 
-            userJurisdiction.getParentJurisdiction().getJurisdictionId().equals(jurisdictionId)) {
-            return true;
-        }
-        
-        // User can vote in top-level (sitewide) - check if target jurisdiction has no parent
-        if (targetJurisdiction.getParentJurisdiction() == null) {
-            return true;
-        }
-        
-        return false;
     }
 
     // CACHED: Live leaderboard rankings (1 min TTL via "leaderboards" cache)

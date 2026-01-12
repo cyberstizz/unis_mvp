@@ -39,4 +39,14 @@ public class Jurisdiction {
 
     @Column(name = "symbol_url")
     private String symbolUrl;
+
+    @Column
+    private Integer depth;
+
+    @Column
+    private String path;
+
+    @Column(name = "voting_enabled")
+    @Builder.Default
+    private Boolean votingEnabled = false;
 }

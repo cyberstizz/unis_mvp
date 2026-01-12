@@ -26,9 +26,9 @@ public interface JurisdictionRepository extends JpaRepository<Jurisdiction, UUID
     @Query("SELECT j.jurisdictionId FROM Jurisdiction j")
     List<UUID> findAllJurisdictionIds();
 
-    // =====================================================================
+    // =========================================================================
     // NEW METHODS FOR HIERARCHY NAVIGATION (FindPage map drill-down)
-    // =====================================================================
+    // =========================================================================
 
     /**
      * Find all direct children of a jurisdiction
@@ -105,4 +105,74 @@ public interface JurisdictionRepository extends JpaRepository<Jurisdiction, UUID
         ORDER BY j.name
         """, nativeQuery = true)
     List<Object[]> findJurisdictionsContainingPoint(@Param("lat") double lat, @Param("lng") double lng);
+
+ 
+    /**
+     * Get all voting-enabled jurisdictions
+     * Used for populating dropdowns in the voting UI
+     */
+    @Query("SELECT j FROM Jurisdiction j WHERE j.votingEnabled = true ORDER BY j.depth, j.name")
+    List<Jurisdiction> findVotingEnabledJurisdictions();
+
+    /**
+     * Get all voting-enabled jurisdiction IDs
+     * Used for award computation (only compute for enabled jurisdictions)
+     */
+    @Query("SELECT j.jurisdictionId FROM Jurisdiction j WHERE j.votingEnabled = true")
+    List<UUID> findVotingEnabledJurisdictionIds();
+
+    /**
+     * Find all VOTING-ENABLED ancestors of a jurisdiction (including itself)
+     * Uses the path column for efficient lookup
+     * 
+     * This is the KEY query for voting eligibility:
+     * - User's jurisdiction path contains all ancestor UUIDs
+     * - We find all jurisdictions whose UUID appears in that path
+     * - We filter to only voting_enabled = true
+     * 
+     * Example: Downtown Harlem user
+     * - Path: /unis-uuid/.../harlem-uuid/downtown-harlem-uuid/
+     * - Returns: Harlem, Downtown Harlem (only these are voting_enabled)
+     * - Does NOT return: Upper Manhattan, Manhattan, etc. (voting_enabled = false)
+     */
+    @Query(value = """
+        SELECT j.jurisdiction_id, j.name, j.depth, j.voting_enabled
+        FROM jurisdictions j
+        WHERE :userPath LIKE '%' || j.jurisdiction_id::text || '%'
+          AND j.voting_enabled = true
+        ORDER BY j.depth
+        """, nativeQuery = true)
+    List<Object[]> findVotingEnabledAncestors(@Param("userPath") String userPath);
+
+    /**
+     * Check if a user can vote in a specific jurisdiction
+     * 
+     * Logic:
+     * 1. Get the user's home jurisdiction path
+     * 2. Check if target jurisdiction's UUID appears in that path
+     * 3. Check if target jurisdiction is voting_enabled
+     * 
+     * Returns true if:
+     * - Target jurisdiction UUID is in user's path (target is ancestor or self)
+     * - Target jurisdiction has voting_enabled = true
+     */
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1 
+            FROM jurisdictions target
+            WHERE target.jurisdiction_id = :targetJurisdictionId
+              AND target.voting_enabled = true
+              AND :userPath LIKE '%' || target.jurisdiction_id::text || '%'
+        )
+        """, nativeQuery = true)
+    boolean canUserVoteInJurisdiction(
+        @Param("userPath") String userPath, 
+        @Param("targetJurisdictionId") UUID targetJurisdictionId
+    );
+
+    /**
+     * Get a jurisdiction with its path (for eligibility checks)
+     */
+    @Query("SELECT j FROM Jurisdiction j WHERE j.jurisdictionId = :id")
+    Optional<Jurisdiction> findByIdWithPath(@Param("id") UUID id);
 }

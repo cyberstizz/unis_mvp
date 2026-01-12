@@ -18,6 +18,7 @@ import com.unis.repository.VotingIntervalRepository;
 import com.unis.service.AwardService;
 import com.unis.service.VoteService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -57,43 +58,91 @@ public class VoteController {
 
     // POST /api/v1/vote/submit (submit vote, page 2)
     @PostMapping("/submit")
-    public ResponseEntity<Vote> submitVote(@RequestBody VoteRequest req) {
-        // Fetch full User object from userId
-        User user = userRepository.findById(req.getUserId())
-            .orElseThrow(() -> new RuntimeException("User not found: " + req.getUserId()));
+    public ResponseEntity<?> submitVote(@RequestBody VoteRequest req) {
+        try {
+            // Fetch full User object from userId
+            User user = userRepository.findById(req.getUserId())
+                .orElseThrow(() -> new RuntimeException("User not found: " + req.getUserId()));
 
-        // Fetch Genre, Jurisdiction, Interval (optional—null OK if not provided)
-        Genre genre = null;
-        if (req.getGenreId() != null) {
-            genre = genreRepository.findById(req.getGenreId())
+            // Fetch Genre, Jurisdiction, Interval (required for voting)
+            if (req.getGenreId() == null) {
+                return ResponseEntity.badRequest().body("Genre is required for voting");
+            }
+            Genre genre = genreRepository.findById(req.getGenreId())
                 .orElseThrow(() -> new RuntimeException("Genre not found: " + req.getGenreId()));
-        }
 
-        Jurisdiction jurisdiction = null;
-        if (req.getJurisdictionId() != null) {
-            jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
+            if (req.getJurisdictionId() == null) {
+                return ResponseEntity.badRequest().body("Jurisdiction is required for voting");
+            }
+            Jurisdiction jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
                 .orElseThrow(() -> new RuntimeException("Jurisdiction not found: " + req.getJurisdictionId()));
-        }
 
-        VotingInterval interval = null;
-        if (req.getIntervalId() != null) {
-            interval = votingIntervalRepository.findById(req.getIntervalId())
+            if (req.getIntervalId() == null) {
+                return ResponseEntity.badRequest().body("Interval is required for voting");
+            }
+            VotingInterval interval = votingIntervalRepository.findById(req.getIntervalId())
                 .orElseThrow(() -> new RuntimeException("Interval not found: " + req.getIntervalId()));
+
+            // =========================================================================
+            // NEW: Check if jurisdiction is voting-enabled
+            // =========================================================================
+            if (jurisdiction.getVotingEnabled() == null || !jurisdiction.getVotingEnabled()) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body("Voting is not enabled for this jurisdiction: " + jurisdiction.getName());
+            }
+
+            // =========================================================================
+            // NEW: Check jurisdiction eligibility BEFORE building the vote
+            // This is also checked in VoteService, but checking here gives better error messages
+            // =========================================================================
+            if (!voteService.canUserVoteInJurisdiction(req.getUserId(), req.getJurisdictionId())) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body("You are not eligible to vote in " + jurisdiction.getName() + 
+                          ". You can only vote in your home jurisdiction and its parent jurisdictions.");
+            }
+
+            // Build Vote entity
+            Vote vote = Vote.builder()
+                .user(user)
+                .targetType(req.getTargetType())
+                .targetId(req.getTargetId())
+                .genre(genre)
+                .jurisdiction(jurisdiction)
+                .interval(interval)
+                .voteDate(req.getVoteDate())
+                .build();
+
+            Vote saved = voteService.submitVote(vote);
+            return ResponseEntity.ok(saved);
+            
+        } catch (IllegalArgumentException e) {
+            // Validation errors (eligibility, duplicate vote, etc.)
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (RuntimeException e) {
+            // Check for specific error types
+            if (e.getMessage() != null && e.getMessage().contains("already cast")) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
+            }
+            if (e.getMessage() != null && e.getMessage().contains("not eligible")) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
+            }
+            // Other errors
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body("Failed to submit vote: " + e.getMessage());
         }
+    }
 
-        // Build Vote entity
-        Vote vote = Vote.builder()
-            .user(user)
-            .targetType(req.getTargetType())
-            .targetId(req.getTargetId())
-            .genre(genre)
-            .jurisdiction(jurisdiction)
-            .interval(interval)
-            .voteDate(req.getVoteDate())
-            .build();
-
-        Vote saved = voteService.submitVote(vote);
-        return ResponseEntity.ok(saved);
+    // =========================================================================
+    // NEW: Get eligible jurisdictions for user (for dynamic dropdown)
+    // =========================================================================
+    @GetMapping("/eligible-jurisdictions")
+    public ResponseEntity<List<Jurisdiction>> getEligibleJurisdictions(@RequestParam UUID userId) {
+        try {
+            List<Jurisdiction> jurisdictions = voteService.getEligibleJurisdictionsForUser(userId);
+            return ResponseEntity.ok(jurisdictions);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().build();
+        }
     }
 
     // GET /api/v1/vote/results?type={type}&jurisdictionId={id}&genreId={id}&intervalId={id} (vote page results, page 2)

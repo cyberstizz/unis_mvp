@@ -89,7 +89,14 @@ public class User {
     @Column(name = "total_votes", nullable = false)
     private Integer totalVotes = 0;
 
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     public enum Role {
         listener, artist
+    }
+
+    public boolean isDeleted() {
+    return deletedAt != null;
     }
 }

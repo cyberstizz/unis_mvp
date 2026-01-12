@@ -300,29 +300,41 @@ public class UserService {
     @Transactional
     @CacheEvict(value = {"userProfiles", "artists"}, allEntries = true)
     public void deleteCurrentUserAndAllData(UUID currentUserId) {
-        // 1. Delete all songs by this artist
+        // First, verify user exists
+        User user = userRepository.findById(currentUserId)
+            .orElseThrow(() -> new RuntimeException("User not found: " + currentUserId));
+
+        // Check if already deleted
+        if (user.getDeletedAt() != null) {
+            throw new RuntimeException("User is already deleted");
+        }
+
+        // 1. Delete all songs by this artist (content removal)
         songRepository.deleteByArtistUserId(currentUserId);
 
-        // 2. Delete all videos by this artist
+        // 2. Delete all videos by this artist (content removal)
         videoRepository.deleteByArtistUserId(currentUserId);
 
-        // 3. Delete all votes cast BY this user
-        voteRepository.deleteByUserUserId(currentUserId);
+        // 3. REMOVED: Don't delete votes cast BY this user
+        // voteRepository.deleteByUserUserId(currentUserId);
+        // Reason: Preserves voting history for audit trail
 
-        // 4. Delete all votes cast ON this user's songs
-        voteRepository.deleteByTargetArtistId(currentUserId);
+        // 4. REMOVED: Don't delete votes cast ON this user's songs
+        // voteRepository.deleteByTargetArtistId(currentUserId);
+        // Reason: Preserves historical voting data for Milestones page
 
-        // 5. Delete all awards this user ever received
-        awardRepository.deleteByTargetArtistId(currentUserId);
+        // 5. REMOVED: Don't delete awards this user received
+        // awardRepository.deleteByTargetArtistId(currentUserId);
+        // Reason: Preserves historical award data for Milestones page
 
-        // 6. Delete all song plays / video plays
+        // 6. Delete all song plays / video plays (activity logs)
         songPlayRepository.deleteByUserUserId(currentUserId);
         videoPlayRepository.deleteByUserUserId(currentUserId);
 
-        // 7. Delete all likes
+        // 7. Delete all likes (user preferences)
         likeRepository.deleteByUserUserId(currentUserId);
 
-        // 8. Delete all ad views
+        // 8. Delete all ad views (activity logs)
         adViewRepository.deleteByUserUserId(currentUserId);
 
         // 9. Clean up supporter relationships
@@ -330,9 +342,31 @@ public class UserService {
         supporterRepository.deleteByArtistUserId(currentUserId);
         supporterRepository.deleteByListenerUserId(currentUserId);
 
-        // 10. Finally delete the user record itself
-        userRepository.deleteById(currentUserId);
+        // 10. SOFT DELETE: Mark user as deleted instead of removing
+        user.setDeletedAt(LocalDateTime.now());
+        userRepository.save(user);
+
+        // Log the soft delete
+        System.out.println("User soft-deleted: " + currentUserId + " at " + user.getDeletedAt());
     }
+
+    /**
+     * Check if a user is deleted (soft delete check)
+     */
+    public boolean isUserDeleted(UUID userId) {
+        return userRepository.findById(userId)
+            .map(user -> user.getDeletedAt() != null)
+            .orElse(true); // Non-existent user is considered "deleted"
+    }
+
+    /**
+     * Get user only if active (not soft-deleted)
+     */
+    public Optional<User> getActiveUser(UUID userId) {
+        return userRepository.findById(userId)
+            .filter(user -> user.getDeletedAt() == null);
+    }
+
 
 
     @Transactional
