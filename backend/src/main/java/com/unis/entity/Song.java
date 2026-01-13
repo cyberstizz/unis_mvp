@@ -15,7 +15,7 @@ import java.util.UUID;
 public class Song {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @GeneratedValue(generator = "UUID")
     @Column(name = "song_id")
     private UUID songId;
 
@@ -53,13 +53,13 @@ public class Song {
     private LocalDateTime createdAt;
 
     // NEW FIELDS
-    @Column(name = "explicit", nullable = false)
+    @Column(name = "explicit")
     private Boolean explicit = false;
 
     @Column(name = "lyrics", columnDefinition = "TEXT")
     private String lyrics;
 
-    @Column(name = "plays_today", nullable = false)
+    @Column(name = "plays_today")
     private Integer playsToday = 0;
 
     @Column(name = "last_play_reset_date")

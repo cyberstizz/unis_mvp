@@ -530,16 +530,27 @@ public class MediaService {
 
     // ========== UPDATED: CACHED Individual song lookup with likes and plays ==========
     public Song getSongById(UUID songId) {
+         // Use a fresh fetch to ensure we aren't getting a 'cleared' or 'detached' entity
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
         
-        // Set the play count from the song_plays table
-        Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
-        song.setPlayCount(playCount != null ? playCount : 0L);
-        
-        // Set likes count
-        int likesCount = getLikeCount(songId);
-        song.setLikes(likesCount);
+        try {
+            // Set play count safely
+            Long playCount = songPlayRepository.countTotalPlaysBySongId(songId);
+            song.setPlayCount(playCount != null ? playCount : 0L);
+            
+            // Set likes count safely
+            int likesCount = getLikeCount(songId);
+            song.setLikes(likesCount);
+            
+            // Ensure Artist is initialized to prevent LazyInitializationException
+            if (song.getArtist() != null) {
+                song.getArtist().getUsername(); // Trigger load
+            }
+        } catch (Exception e) {
+            System.err.println("Error decorating song with stats: " + e.getMessage());
+            // We still return the song even if stats fail, so the page doesn't go blank
+        }
         
         return song;
     }
