@@ -593,7 +593,9 @@ public class MediaService {
      * @param userId The user liking the song
      * @return true if liked, false if already liked
      */
+
     @Transactional
+    @CacheEvict(value = {"songs", "artists"}, allEntries = true)
     public boolean likeSong(UUID songId, UUID userId) {
         // Check if already liked
         String checkSql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
@@ -603,9 +605,14 @@ public class MediaService {
             return false; // Already liked
         }
         
-        // Insert like
-        String insertSql = "INSERT INTO likes (user_id, media_id, media_type) VALUES (?, ?, 'song')";
-        jdbcTemplate.update(insertSql, userId, songId);
+        // Insert like with created_at
+        String insertSql = "INSERT INTO likes (like_id, user_id, media_id, media_type, created_at) VALUES (?, ?, ?, 'song', NOW())";
+        jdbcTemplate.update(insertSql, UUID.randomUUID(), userId, songId);
+        
+        // Award points: Song +2, Artist +1, User +1
+        scoreUpdateService.onLike(userId, songId);
+        
+        System.out.println("✓ Like created: User " + userId + " liked Song " + songId + " (points awarded)");
         
         return true;
     }
@@ -617,9 +624,17 @@ public class MediaService {
      * @return true if unliked, false if wasn't liked
      */
     @Transactional
+    @CacheEvict(value = {"songs", "artists"}, allEntries = true)
     public boolean unlikeSong(UUID songId, UUID userId) {
         String deleteSql = "DELETE FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
         int rowsAffected = jdbcTemplate.update(deleteSql, userId, songId);
+        
+        // Note: We do NOT deduct points when unliking
+        // Points represent historical engagement value and remain
+        
+        if (rowsAffected > 0) {
+            System.out.println("✓ Like removed: User " + userId + " unliked Song " + songId + " (points retained)");
+        }
         
         return rowsAffected > 0;
     }

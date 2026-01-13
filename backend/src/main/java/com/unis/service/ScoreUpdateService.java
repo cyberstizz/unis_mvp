@@ -93,6 +93,26 @@ public class ScoreUpdateService {
     }
 
     /**
+     * Called when a user likes a song
+     * Awards points to: liker (+1), song (+2), and artist (+1)
+     */
+
+    @Transactional
+    public void onLike(UUID userId, UUID songId) {
+        // User who liked gets +1 point
+        updateUserScoreIncrement(userId, 1);
+        
+        // Song gets +2 points
+        songRepository.incrementScore(songId, 2);
+        
+        // Artist (song creator) gets +1 point
+        Song song = songRepository.findById(songId).orElse(null);
+        if (song != null && song.getArtist() != null) {
+            updateUserScoreIncrement(song.getArtist().getUserId(), 1);
+        }
+    }
+
+    /**
      * Called when a user gains a supporter
      * Awards +5 points to the artist
      */
