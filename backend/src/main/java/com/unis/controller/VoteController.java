@@ -25,7 +25,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -113,8 +115,13 @@ public class VoteController {
                 .build();
 
             Vote saved = voteService.submitVote(vote);
-            return ResponseEntity.ok(saved);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "Vote cast successfully");
+            response.put("voteId", saved.getVoteId());
             
+            return ResponseEntity.ok(response);
+
         } catch (IllegalArgumentException e) {
             // Validation errors (eligibility, duplicate vote, etc.)
             return ResponseEntity.badRequest().body(e.getMessage());
