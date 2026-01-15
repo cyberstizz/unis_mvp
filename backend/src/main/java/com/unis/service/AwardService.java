@@ -399,7 +399,7 @@ public class AwardService {
                 JOIN users artist ON s.artist_id = artist.user_id
                 WHERE v.target_type = 'song'
                   AND v.genre_id = :genreId
-                  AND v.vote_date BETWEEN :startDate AND :endDate
+                  AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
                   AND v.jurisdiction_id IN (:allRelatedJurisdictions)
                   AND artist.jurisdiction_id IN (:thisAndChildren)
                 GROUP BY v.target_id, s.score, s.created_at
@@ -441,7 +441,7 @@ public class AwardService {
                 JOIN users u ON v.target_id = u.user_id
                 WHERE v.target_type = 'artist'
                   AND v.genre_id = :genreId
-                  AND v.vote_date BETWEEN :startDate AND :endDate
+                  AND Date(v.vote_date) BETWEEN :startDate AND :endDate
                   AND (u.deleted_at IS NULL)
                   AND v.jurisdiction_id IN (:allRelatedJurisdictions)
                   AND u.jurisdiction_id IN (:thisAndChildren)
