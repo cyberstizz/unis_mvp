@@ -26,6 +26,7 @@ public class SongPlay {
     private User user;
 
     @Column(name = "played_at")
+    @Builder.Default
     private LocalDateTime playedAt = LocalDateTime.now();
 
     @Column(name = "duration_secs")

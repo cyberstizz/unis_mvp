@@ -337,9 +337,11 @@ public class MediaService {
         
         int durationInSeconds = song.getDuration() != null ? song.getDuration() / 1000 : 180;
         
+        // FIXED: Explicitly set playedAt to ensure it's not null
         SongPlay play = SongPlay.builder()
             .song(song)
             .user(user)
+            .playedAt(LocalDateTime.now())  
             .durationSecs(durationInSeconds)
             .build();
         songPlayRepository.save(play);
@@ -354,7 +356,6 @@ public class MediaService {
         artistQuery.setParameter("songId", songId);
         int rowsUpdated = artistQuery.executeUpdate();
 
-        // CRITICAL: Flush and clear to prevent Hibernate from overwriting with stale data
         entityManager.flush();
         entityManager.clear();
 

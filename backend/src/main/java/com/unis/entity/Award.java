@@ -61,15 +61,17 @@ public class Award {
     private String caption;
 
     // =========================================================================
-    // NEW FIELDS: Tiebreaker audit trail (added in Phase 1 schema)
+    // TIEBREAKER AUDIT FIELDS
     // =========================================================================
 
     /**
      * How the winner was determined:
-     * - "VOTES" = Won by having the most votes (no tie)
-     * - "SCORE" = Tied on votes, won by highest score
-     * - "SENIORITY" = Tied on votes AND score, won by oldest account/song
-     * - "FALLBACK" = No votes cast, showing top by score
+     * - "WEIGHTED_VOTES" = Won by having the most weighted vote points (no tie)
+     * - "PLAYS" = Tied on weighted votes, won by most plays
+     * - "LIKES" = Tied on weighted votes AND plays, won by most likes
+     * - "SCORE" = Tied on weighted votes, plays, AND likes, won by highest score
+     * - "SENIORITY" = Tied on everything, won by oldest account/song
+     * - "FALLBACK" = No votes cast, showing top by plays/likes/score/seniority
      */
     @Column(name = "determination_method")
     private String determinationMethod;
@@ -83,7 +85,7 @@ public class Award {
 
     /**
      * Number of candidates that were tied before tiebreaker was applied.
-     * 0 = No tie (clear winner by votes)
+     * 0 = No tie (clear winner by weighted votes)
      * 2+ = That many candidates were tied
      */
     @Column(name = "tied_candidates_count")
@@ -92,10 +94,41 @@ public class Award {
 
     /**
      * JSON details of the tiebreaker process (optional, for debugging/audit).
-     * Example: {"tied_ids": ["uuid1", "uuid2"], "votes": 5, "scores": [100, 100]}
+     * Example: {"tied_ids": ["uuid1", "uuid2"], "weighted_points": 270, "plays": [15, 15]}
      */
     @Column(name = "tiebreaker_details", columnDefinition = "TEXT")
     private String tiebreakerDetails;
+
+    // =========================================================================
+    // NEW AUDIT FIELDS FOR WEIGHTED SCORING SYSTEM
+    // =========================================================================
+
+    /**
+     * Total weighted points from votes.
+     * Calculated as: SUM(vote_weight) where weights are:
+     * Annual=250, Midterm=200, Quarterly=60, Monthly=25, Weekly=20, Daily=10
+     */
+    @Column(name = "weighted_points")
+    @Builder.Default
+    private Integer weightedPoints = 0;
+
+    /**
+     * Total song plays during the interval (used for tiebreaker #2).
+     * For artists: sum of plays across all their songs.
+     * For songs: plays for that specific song.
+     */
+    @Column(name = "plays_count")
+    @Builder.Default
+    private Integer playsCount = 0;
+
+    /**
+     * Total likes during the interval (used for tiebreaker #3).
+     * For artists: sum of likes across all their songs.
+     * For songs: likes for that specific song.
+     */
+    @Column(name = "likes_count")
+    @Builder.Default
+    private Integer likesCount = 0;
 
     // =========================================================================
     // TRANSIENT FIELDS: For API responses (not persisted)
@@ -112,7 +145,7 @@ public class Award {
     // =========================================================================
 
     /**
-     * Check if this award was determined by tiebreaker (not clear vote winner)
+     * Check if this award was determined by tiebreaker (not clear weighted vote winner)
      */
     public boolean wasTiebroken() {
         return tiedCandidatesCount != null && tiedCandidatesCount > 0;
@@ -123,18 +156,22 @@ public class Award {
      */
     public String getDeterminationDescription() {
         if (determinationMethod == null) {
-            return "Winner by votes";
+            return "Winner by weighted votes";
         }
         
         switch (determinationMethod) {
-            case "VOTES":
-                return "Winner by votes";
+            case "WEIGHTED_VOTES":
+                return "Winner by weighted votes (" + weightedPoints + " points)";
+            case "PLAYS":
+                return "Tiebreaker: most plays (" + tiedCandidatesCount + " tied on " + weightedPoints + " points)";
+            case "LIKES":
+                return "Tiebreaker: most likes (" + tiedCandidatesCount + " tied on points & plays)";
             case "SCORE":
-                return "Tiebreaker: highest score (" + tiedCandidatesCount + " tied on votes)";
+                return "Tiebreaker: highest score (" + tiedCandidatesCount + " tied on points, plays & likes)";
             case "SENIORITY":
-                return "Tiebreaker: oldest account (" + tiedCandidatesCount + " tied on votes & score)";
+                return "Tiebreaker: oldest account (" + tiedCandidatesCount + " tied on all metrics)";
             case "FALLBACK":
-                return "No votes cast - top by score";
+                return "No votes cast - top performer by engagement";
             default:
                 return determinationMethod;
         }

@@ -69,8 +69,6 @@ public class AwardService {
     @Autowired
     private EntityManager entityManager;
     
-    // Self-injection to allow @Transactional to work on internal calls
-    // @Lazy breaks the circular dependency cycle
     @Lazy
     @Autowired
     private AwardService self;
@@ -79,7 +77,7 @@ public class AwardService {
     private boolean autoPopulateAwards;
 
     // =========================================================================
-    // AWARD POINT VALUES (from spec)
+    // AWARD POINT VALUES - Points added to winner's score
     // =========================================================================
     private static final Map<String, Integer> AWARD_POINTS = Map.of(
         "Daily", 50,
@@ -88,6 +86,18 @@ public class AwardService {
         "Quarterly", 500,
         "Midterm", 2500,
         "Annual", 5000
+    );
+
+    // =========================================================================
+    // VOTE WEIGHTS - Used for calculating weighted vote points
+    // =========================================================================
+    private static final Map<String, Integer> VOTE_WEIGHTS = Map.of(
+        "Annual", 250,
+        "Midterm", 200,
+        "Quarterly", 60,
+        "Monthly", 25,
+        "Weekly", 20,
+        "Daily", 10
     );
 
     // =========================================================================
@@ -111,7 +121,6 @@ public class AwardService {
         List<Award> awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
         
         if (awards.isEmpty() && autoPopulateAwards) {
-            // Use self-reference to ensure @Transactional works
             self.computeAwardsForDate(end, intervalId, jurisdictionId, null);
             awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
         }
@@ -123,14 +132,6 @@ public class AwardService {
         return populateAwardEntities(awards);
     }
 
-    /**
-     * Get past awards - AUTO-COMPUTES AND SAVES if none exist
-     * 
-     * MAIN VERSION - with intervalId parameter
-     * 
-     * This method starts as read-only for the initial query, then delegates to
-     * a separate read-write transaction if computation is needed.
-     */
     @Transactional(readOnly = true)
     public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, 
                                       UUID jurisdictionId, UUID genreId, UUID intervalId) {
@@ -138,7 +139,6 @@ public class AwardService {
         System.out.println("Type: " + type + ", Start: " + startDate + ", End: " + endDate);
         System.out.println("Jurisdiction: " + jurisdictionId + ", Genre: " + genreId + ", Interval: " + intervalId);
         
-        // Use provided interval or determine from date range
         if (intervalId == null) {
             Optional<VotingInterval> intervalOpt = determineIntervalFromDateRange(startDate, endDate);
             intervalId = intervalOpt.map(VotingInterval::getIntervalId).orElse(null);
@@ -149,27 +149,21 @@ public class AwardService {
             return new ArrayList<>();
         }
 
-        // Check if awards exist for this specific query
         List<Award> awards = awardRepository.findByFilters(type, jurisdictionId, genreId, intervalId, startDate, endDate);
         
         System.out.println("Initial query found " + awards.size() + " awards");
         
-        // AUTO-COMPUTE AND SAVE if no awards exist
         if (awards.isEmpty() && autoPopulateAwards) {
             System.out.println("=== NO AWARDS FOUND - TRIGGERING COMPUTATION ===");
             
-            // CRITICAL FIX: Call via self-reference to new method with REQUIRES_NEW transaction
-            // This ensures a fresh read-write transaction is created
             UUID finalIntervalId = intervalId;
             self.computeAndSaveAwardsInNewTransaction(endDate, finalIntervalId, jurisdictionId, genreId);
             
-            // Fetch the newly created awards
             awards = awardRepository.findByFilters(type, jurisdictionId, genreId, finalIntervalId, startDate, endDate);
             
             System.out.println("=== AFTER COMPUTATION: Found " + awards.size() + " awards ===");
         }
         
-        // If still empty after computation, create fallback (but don't save fallbacks)
         if (awards.isEmpty()) {
             System.out.println("Still no awards after computation - creating fallback display (NOT saved)");
             awards = createFallbackAwards(type, jurisdictionId, intervalId, endDate);
@@ -184,30 +178,15 @@ public class AwardService {
         return populateAwardEntities(awards);
     }
 
-    /**
-     * Overload for backward compatibility (without intervalId)
-     * 
-     * NOTE: This just delegates to the main version above
-     */
     public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, 
                                       UUID jurisdictionId, UUID genreId) {
         return getPastAwards(type, startDate, endDate, jurisdictionId, genreId, null);
     }
 
     // =========================================================================
-    // TRANSACTION BOUNDARY FIX - NEW METHOD
+    // TRANSACTION BOUNDARY FIX
     // =========================================================================
     
-    /**
-     * CRITICAL FIX: This method creates a NEW read-write transaction.
-     * 
-     * REQUIRES_NEW propagation means:
-     * - Suspends the current read-only transaction (if any)
-     * - Creates a brand new read-write transaction
-     * - Commits independently when done
-     * 
-     * This ensures the connection is NOT read-only when we try to save awards.
-     */
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = false)
     @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
     public void computeAndSaveAwardsInNewTransaction(LocalDate awardDate, UUID intervalId, 
@@ -215,22 +194,15 @@ public class AwardService {
         System.out.println(">>> NEW TRANSACTION STARTED - readOnly=false <<<");
         System.out.println("Computing awards for date: " + awardDate);
         
-        // Delegate to the main computation logic
         computeAwardsInternal(awardDate, intervalId, jurisdictionId, genreId);
         
         System.out.println(">>> TRANSACTION WILL COMMIT NOW <<<");
     }
 
     // =========================================================================
-    // CORE AWARD COMPUTATION - INTERNAL METHOD
+    // CORE AWARD COMPUTATION
     // =========================================================================
 
-    /**
-     * Compute awards for a specific date.
-     * 
-     * This is the INTERNAL method that does the actual work.
-     * It should be called from within a transaction (not directly from controllers).
-     */
     @Transactional(readOnly = false)
     @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
     public void computeAwardsForDate(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
@@ -238,11 +210,7 @@ public class AwardService {
         computeAwardsInternal(awardDate, intervalId, jurisdictionId, genreId);
     }
 
-    /**
-     * The actual computation logic - separated so it can be called from different transaction contexts
-     */
     private void computeAwardsInternal(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
-        // Get jurisdictions to process (only voting-enabled ones)
         List<UUID> jurisdictions;
         if (jurisdictionId != null) {
             Jurisdiction jur = jurisdictionRepository.findById(jurisdictionId).orElse(null);
@@ -255,10 +223,8 @@ public class AwardService {
             jurisdictions = jurisdictionRepository.findVotingEnabledJurisdictionIds();
         }
 
-        // Get genres to process
         List<UUID> genres = genreId != null ? List.of(genreId) : genreRepository.findAllGenreIds();
 
-        // Get interval
         VotingInterval interval = votingIntervalRepository.findById(intervalId).orElse(null);
         if (interval == null) {
             System.out.println("Interval not found: " + intervalId);
@@ -290,7 +256,7 @@ public class AwardService {
 
     /**
      * Compute a SINGLE winner for one category/jurisdiction/genre/interval/date.
-     * Returns true if an award was created.
+     * Uses the full weighted voting + tiebreaker cascade.
      */
     private boolean computeSingleWinnerAward(String targetType, UUID jurisdictionId, UUID genreId,
                                               UUID intervalId, LocalDate startDate, LocalDate awardDate,
@@ -301,16 +267,17 @@ public class AwardService {
             return false;
         }
 
-        List<CandidateResult> candidates = getCandidatesWithBidirectionalVotes(
-            targetType, jurisdictionId, genreId, intervalId, startDate, awardDate
+        // Get candidates with full weighted scoring
+        List<CandidateResult> candidates = getCandidatesWithWeightedVotes(
+            targetType, jurisdictionId, genreId, startDate, awardDate
         );
 
-        // ZERO-VOTE FALLBACK: If no votes, get candidates by score + seniority
+        // ZERO-VOTE FALLBACK: If no votes, get candidates by plays/likes/score/seniority
         if (candidates.isEmpty()) {
             System.out.println("No votes found for " + targetType + " in jurisdiction " + jurisdictionId + " on " + awardDate);
-            System.out.println("FALLBACK: Querying candidates by score + seniority (no votes required)");
+            System.out.println("FALLBACK: Querying candidates by plays/likes/score/seniority");
             
-            candidates = getCandidatesByScoreAndSeniority(targetType, jurisdictionId, genreId);
+            candidates = getCandidatesByEngagement(targetType, jurisdictionId, genreId, startDate, awardDate);
             
             if (candidates.isEmpty()) {
                 System.out.println("No eligible " + targetType + "s found in jurisdiction hierarchy for fallback award");
@@ -318,7 +285,8 @@ public class AwardService {
             }
         }
 
-        WinnerResult winner = determineWinner(candidates, targetType);
+        // Determine winner using tiebreaker cascade
+        WinnerResult winner = determineWinner(candidates);
 
         if (winner == null) {
             System.out.println("Could not determine winner for " + targetType);
@@ -334,7 +302,10 @@ public class AwardService {
             .jurisdiction(jurisdictionRepository.findById(jurisdictionId).orElse(null))
             .interval(interval)
             .awardDate(awardDate)
-            .votesCount(winner.voteCount)
+            .votesCount(winner.rawVoteCount)
+            .weightedPoints(winner.weightedPoints)
+            .playsCount(winner.playsCount)
+            .likesCount(winner.likesCount)
             .engagementScore(winner.score)
             .weight(awardPoints)
             .determinationMethod(winner.determinationMethod)
@@ -343,26 +314,42 @@ public class AwardService {
             .build();
 
         Award savedAward = awardRepository.save(award);
-        awardRepository.flush();  // Force immediate write
+        awardRepository.flush();
         
         System.out.println("✓ Award SAVED with ID: " + savedAward.getAwardId() + " for " + targetType + 
                           " winner in jurisdiction " + jurisdictionId + 
-                          " with " + winner.voteCount + " votes (determined by " + winner.determinationMethod + ")");
+                          " with " + winner.weightedPoints + " weighted points" +
+                          " (" + winner.rawVoteCount + " votes, " + winner.playsCount + " plays, " + winner.likesCount + " likes)" +
+                          " (determined by " + winner.determinationMethod + ")");
         
         scoreUpdateService.onAward(winner.targetId, awardPoints);
         
         return true;
     }
 
+    // =========================================================================
+    // WEIGHTED VOTE AGGREGATION WITH FULL TIEBREAKER DATA
+    // =========================================================================
+
     /**
-     * BIDIRECTIONAL VOTE AGGREGATION
+     * Get candidates with weighted vote points and all tiebreaker metrics.
+     * 
+     * Vote weights:
+     * - Annual = 250 points
+     * - Midterm = 200 points
+     * - Quarterly = 60 points
+     * - Monthly = 25 points
+     * - Weekly = 20 points
+     * - Daily = 10 points
+     * 
+     * Also fetches: plays, likes, score, seniority for tiebreaking
      */
     @SuppressWarnings("unchecked")
-    private List<CandidateResult> getCandidatesWithBidirectionalVotes(String targetType, UUID jurisdictionId, 
-                                                                       UUID genreId, UUID intervalId, 
-                                                                       LocalDate startDate, LocalDate endDate) {
+    private List<CandidateResult> getCandidatesWithWeightedVotes(String targetType, UUID jurisdictionId, 
+                                                                  UUID genreId, LocalDate startDate, 
+                                                                  LocalDate endDate) {
+        // Build jurisdiction sets for bidirectional aggregation
         Set<UUID> allRelatedJurisdictions = new HashSet<>();
-        
         allRelatedJurisdictions.add(jurisdictionId);
         
         List<UUID> children = getJurisdictionAndAllChildren(jurisdictionId);
@@ -371,10 +358,10 @@ public class AwardService {
         List<UUID> ancestors = getJurisdictionAncestors(jurisdictionId);
         allRelatedJurisdictions.addAll(ancestors);
         
-        System.out.println("Bidirectional vote aggregation for " + jurisdictionId + 
-                          ": checking " + allRelatedJurisdictions.size() + " jurisdictions");
-
         List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
+
+        System.out.println("Weighted vote aggregation for " + jurisdictionId + 
+                          ": checking " + allRelatedJurisdictions.size() + " jurisdictions");
 
         String sql;
         
@@ -382,39 +369,84 @@ public class AwardService {
             sql = """
                 SELECT 
                     v.target_id,
-                    COUNT(v.vote_id) as vote_count,
+                    COUNT(v.vote_id) as raw_vote_count,
+                    SUM(CASE 
+                        WHEN vi.name = 'Annual' THEN 250
+                        WHEN vi.name = 'Midterm' THEN 200
+                        WHEN vi.name = 'Quarterly' THEN 60
+                        WHEN vi.name = 'Monthly' THEN 25
+                        WHEN vi.name = 'Weekly' THEN 20
+                        WHEN vi.name = 'Daily' THEN 10
+                        ELSE 0
+                    END) as weighted_points,
+                    COALESCE((
+                        SELECT COUNT(*) FROM song_plays sp 
+                        WHERE sp.song_id = v.target_id 
+                        AND sp.played_at IS NOT NULL
+                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                    ), 0) as plays_count,
+                    COALESCE((
+                        SELECT COUNT(*) FROM likes l 
+                        WHERE l.media_id = v.target_id 
+                        AND l.media_type = 'song'
+                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
+                    ), 0) as likes_count,
                     COALESCE(s.score, 0) as score,
                     s.created_at as seniority
                 FROM votes v
+                JOIN voting_intervals vi ON v.interval_id = vi.interval_id
                 JOIN songs s ON v.target_id = s.song_id
                 JOIN users artist ON s.artist_id = artist.user_id
                 WHERE v.target_type = 'song'
                   AND v.genre_id = :genreId
-                  AND v.interval_id = :intervalId
                   AND v.vote_date BETWEEN :startDate AND :endDate
                   AND v.jurisdiction_id IN (:allRelatedJurisdictions)
                   AND artist.jurisdiction_id IN (:thisAndChildren)
                 GROUP BY v.target_id, s.score, s.created_at
-                ORDER BY vote_count DESC, score DESC, seniority ASC
+                ORDER BY weighted_points DESC, plays_count DESC, likes_count DESC, score DESC, seniority ASC
             """;
         } else {
+            // Artist query - plays are sum of all their songs' plays
             sql = """
                 SELECT 
                     v.target_id,
-                    COUNT(v.vote_id) as vote_count,
+                    COUNT(v.vote_id) as raw_vote_count,
+                    SUM(CASE 
+                        WHEN vi.name = 'Annual' THEN 250
+                        WHEN vi.name = 'Midterm' THEN 200
+                        WHEN vi.name = 'Quarterly' THEN 60
+                        WHEN vi.name = 'Monthly' THEN 25
+                        WHEN vi.name = 'Weekly' THEN 20
+                        WHEN vi.name = 'Daily' THEN 10
+                        ELSE 0
+                    END) as weighted_points,
+                    COALESCE((
+                        SELECT COUNT(*) FROM song_plays sp 
+                        JOIN songs song ON sp.song_id = song.song_id
+                        WHERE song.artist_id = v.target_id 
+                        AND sp.played_at IS NOT NULL
+                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                    ), 0) as plays_count,
+                    COALESCE((
+                        SELECT COUNT(*) FROM likes l 
+                        JOIN songs song ON l.media_id = song.song_id
+                        WHERE song.artist_id = v.target_id 
+                        AND l.media_type = 'song'
+                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
+                    ), 0) as likes_count,
                     COALESCE(u.score, 0) as score,
                     u.created_at as seniority
                 FROM votes v
+                JOIN voting_intervals vi ON v.interval_id = vi.interval_id
                 JOIN users u ON v.target_id = u.user_id
                 WHERE v.target_type = 'artist'
                   AND v.genre_id = :genreId
-                  AND v.interval_id = :intervalId
                   AND v.vote_date BETWEEN :startDate AND :endDate
                   AND (u.deleted_at IS NULL)
                   AND v.jurisdiction_id IN (:allRelatedJurisdictions)
                   AND u.jurisdiction_id IN (:thisAndChildren)
                 GROUP BY v.target_id, u.score, u.created_at
-                ORDER BY vote_count DESC, score DESC, seniority ASC
+                ORDER BY weighted_points DESC, plays_count DESC, likes_count DESC, score DESC, seniority ASC
             """;
         }
 
@@ -422,7 +454,6 @@ public class AwardService {
         query.setParameter("allRelatedJurisdictions", new ArrayList<>(allRelatedJurisdictions));
         query.setParameter("thisAndChildren", thisAndChildren);
         query.setParameter("genreId", genreId);
-        query.setParameter("intervalId", intervalId);
         query.setParameter("startDate", startDate);
         query.setParameter("endDate", endDate);
 
@@ -432,32 +463,37 @@ public class AwardService {
         for (Object[] row : results) {
             CandidateResult candidate = new CandidateResult();
             candidate.targetId = (UUID) row[0];
-            candidate.voteCount = ((Number) row[1]).intValue();
-            candidate.score = ((Number) row[2]).intValue();
-            candidate.seniority = row[3] != null ? ((java.sql.Timestamp) row[3]).toLocalDateTime() : LocalDateTime.now();
+            candidate.rawVoteCount = ((Number) row[1]).intValue();
+            candidate.weightedPoints = ((Number) row[2]).intValue();
+            candidate.playsCount = ((Number) row[3]).intValue();
+            candidate.likesCount = ((Number) row[4]).intValue();
+            candidate.score = ((Number) row[5]).intValue();
+            candidate.seniority = row[6] != null ? ((java.sql.Timestamp) row[6]).toLocalDateTime() : LocalDateTime.now();
             candidates.add(candidate);
         }
 
-        System.out.println("Found " + candidates.size() + " candidates with votes for " + targetType);
+        System.out.println("Found " + candidates.size() + " candidates with weighted votes for " + targetType);
+        if (!candidates.isEmpty()) {
+            CandidateResult top = candidates.get(0);
+            System.out.println("Top candidate: " + top.targetId + " with " + top.weightedPoints + " weighted points, " +
+                              top.playsCount + " plays, " + top.likesCount + " likes, score=" + top.score);
+        }
+        
         return candidates;
     }
 
     /**
-     * ZERO-VOTE FALLBACK: Get candidates by score + seniority (no votes required)
-     * Uses same bidirectional jurisdiction logic as vote aggregation
+     * FALLBACK: Get candidates by engagement metrics when no votes exist.
+     * Uses same tiebreaker cascade: plays → likes → score → seniority
      */
     @SuppressWarnings("unchecked")
-    private List<CandidateResult> getCandidatesByScoreAndSeniority(String targetType, UUID jurisdictionId, UUID genreId) {
-        // Use bidirectional jurisdiction logic (this + children + ancestors)
-        Set<UUID> allRelatedJurisdictions = new HashSet<>();
-        allRelatedJurisdictions.add(jurisdictionId);
-        allRelatedJurisdictions.addAll(getJurisdictionAndAllChildren(jurisdictionId));
-        allRelatedJurisdictions.addAll(getJurisdictionAncestors(jurisdictionId));
-        
+    private List<CandidateResult> getCandidatesByEngagement(String targetType, UUID jurisdictionId, 
+                                                             UUID genreId, LocalDate startDate, 
+                                                             LocalDate endDate) {
         List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
 
-        System.out.println("FALLBACK: Querying " + targetType + "s by score+seniority from " + 
-                          thisAndChildren.size() + " jurisdictions (this + children)");
+        System.out.println("FALLBACK: Querying " + targetType + "s by engagement from " + 
+                          thisAndChildren.size() + " jurisdictions");
 
         String sql;
         
@@ -465,21 +501,49 @@ public class AwardService {
             sql = """
                 SELECT 
                     s.song_id as target_id,
-                    0 as vote_count,
+                    0 as raw_vote_count,
+                    0 as weighted_points,
+                    COALESCE((
+                        SELECT COUNT(*) FROM song_plays sp 
+                        WHERE sp.song_id = s.song_id 
+                        AND sp.played_at IS NOT NULL
+                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                    ), 0) as plays_count,
+                    COALESCE((
+                        SELECT COUNT(*) FROM likes l 
+                        WHERE l.media_id = s.song_id 
+                        AND l.media_type = 'song'
+                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
+                    ), 0) as likes_count,
                     COALESCE(s.score, 0) as score,
                     s.created_at as seniority
                 FROM songs s
                 JOIN users artist ON s.artist_id = artist.user_id
                 WHERE s.genre_id = :genreId
                   AND artist.jurisdiction_id IN (:thisAndChildren)
-                ORDER BY score DESC, seniority ASC
-                LIMIT 1
+                ORDER BY plays_count DESC, likes_count DESC, score DESC, seniority ASC
+                LIMIT 10
             """;
         } else {
             sql = """
                 SELECT 
                     u.user_id as target_id,
-                    0 as vote_count,
+                    0 as raw_vote_count,
+                    0 as weighted_points,
+                    COALESCE((
+                        SELECT COUNT(*) FROM song_plays sp 
+                        JOIN songs song ON sp.song_id = song.song_id
+                        WHERE song.artist_id = u.user_id 
+                        AND sp.played_at IS NOT NULL
+                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                    ), 0) as plays_count,
+                    COALESCE((
+                        SELECT COUNT(*) FROM likes l 
+                        JOIN songs song ON l.media_id = song.song_id
+                        WHERE song.artist_id = u.user_id 
+                        AND l.media_type = 'song'
+                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
+                    ), 0) as likes_count,
                     COALESCE(u.score, 0) as score,
                     u.created_at as seniority
                 FROM users u
@@ -487,14 +551,16 @@ public class AwardService {
                   AND u.genre_id = :genreId
                   AND u.deleted_at IS NULL
                   AND u.jurisdiction_id IN (:thisAndChildren)
-                ORDER BY score DESC, seniority ASC
-                LIMIT 1
+                ORDER BY plays_count DESC, likes_count DESC, score DESC, seniority ASC
+                LIMIT 10
             """;
         }
 
         Query query = entityManager.createNativeQuery(sql);
         query.setParameter("thisAndChildren", thisAndChildren);
         query.setParameter("genreId", genreId);
+        query.setParameter("startDate", startDate);
+        query.setParameter("endDate", endDate);
 
         List<Object[]> results = query.getResultList();
         
@@ -502,15 +568,102 @@ public class AwardService {
         for (Object[] row : results) {
             CandidateResult candidate = new CandidateResult();
             candidate.targetId = (UUID) row[0];
-            candidate.voteCount = ((Number) row[1]).intValue();  // Always 0
-            candidate.score = ((Number) row[2]).intValue();
-            candidate.seniority = row[3] != null ? ((java.sql.Timestamp) row[3]).toLocalDateTime() : LocalDateTime.now();
+            candidate.rawVoteCount = ((Number) row[1]).intValue();
+            candidate.weightedPoints = ((Number) row[2]).intValue();
+            candidate.playsCount = ((Number) row[3]).intValue();
+            candidate.likesCount = ((Number) row[4]).intValue();
+            candidate.score = ((Number) row[5]).intValue();
+            candidate.seniority = row[6] != null ? ((java.sql.Timestamp) row[6]).toLocalDateTime() : LocalDateTime.now();
             candidates.add(candidate);
         }
 
-        System.out.println("FALLBACK: Found " + candidates.size() + " candidate(s) by score+seniority for " + targetType);
+        System.out.println("FALLBACK: Found " + candidates.size() + " candidate(s) by engagement for " + targetType);
         return candidates;
     }
+
+    // =========================================================================
+    // WINNER DETERMINATION WITH FULL TIEBREAKER CASCADE
+    // =========================================================================
+
+    /**
+     * Determine winner using the full tiebreaker cascade:
+     * 1. Weighted vote points (primary)
+     * 2. Song plays during interval
+     * 3. Likes during interval
+     * 4. Platform score
+     * 5. Seniority (oldest wins)
+     */
+    private WinnerResult determineWinner(List<CandidateResult> candidates) {
+        if (candidates.isEmpty()) {
+            return null;
+        }
+
+        CandidateResult topCandidate = candidates.get(0);
+        
+        WinnerResult winner = new WinnerResult();
+        winner.targetId = topCandidate.targetId;
+        winner.rawVoteCount = topCandidate.rawVoteCount;
+        winner.weightedPoints = topCandidate.weightedPoints;
+        winner.playsCount = topCandidate.playsCount;
+        winner.likesCount = topCandidate.likesCount;
+        winner.score = topCandidate.score;
+        winner.seniority = topCandidate.seniority;
+
+        // Check if this is a zero-vote scenario (fallback)
+        if (topCandidate.weightedPoints == 0) {
+            winner.determinationMethod = "FALLBACK";
+            winner.tiedCandidatesCount = 0;
+            return winner;
+        }
+
+        // Count ties at each level
+        int tiedOnWeightedPoints = 0;
+        int tiedOnPlays = 0;
+        int tiedOnLikes = 0;
+        int tiedOnScore = 0;
+
+        for (CandidateResult c : candidates) {
+            if (c.weightedPoints == topCandidate.weightedPoints) {
+                tiedOnWeightedPoints++;
+                if (c.playsCount == topCandidate.playsCount) {
+                    tiedOnPlays++;
+                    if (c.likesCount == topCandidate.likesCount) {
+                        tiedOnLikes++;
+                        if (c.score == topCandidate.score) {
+                            tiedOnScore++;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Determine which level broke the tie
+        if (tiedOnWeightedPoints == 1) {
+            winner.determinationMethod = "WEIGHTED_VOTES";
+            winner.tiedCandidatesCount = 0;
+        } else if (tiedOnPlays == 1) {
+            winner.determinationMethod = "PLAYS";
+            winner.tiedCandidatesCount = tiedOnWeightedPoints;
+        } else if (tiedOnLikes == 1) {
+            winner.determinationMethod = "LIKES";
+            winner.tiedCandidatesCount = tiedOnPlays;
+        } else if (tiedOnScore == 1) {
+            winner.determinationMethod = "SCORE";
+            winner.tiedCandidatesCount = tiedOnLikes;
+        } else {
+            winner.determinationMethod = "SENIORITY";
+            winner.tiedCandidatesCount = tiedOnScore;
+        }
+
+        System.out.println("Winner determination: " + winner.determinationMethod + 
+                          " (tied candidates: " + winner.tiedCandidatesCount + ")");
+
+        return winner;
+    }
+
+    // =========================================================================
+    // JURISDICTION HIERARCHY HELPERS
+    // =========================================================================
 
     @SuppressWarnings("unchecked")
     private List<UUID> getJurisdictionAndAllChildren(UUID jurisdictionId) {
@@ -560,52 +713,6 @@ public class AwardService {
         return query.getResultList();
     }
 
-    private WinnerResult determineWinner(List<CandidateResult> candidates, String targetType) {
-        if (candidates.isEmpty()) {
-            return null;
-        }
-
-        CandidateResult topCandidate = candidates.get(0);
-        
-        WinnerResult winner = new WinnerResult();
-        winner.targetId = topCandidate.targetId;
-        winner.voteCount = topCandidate.voteCount;
-        winner.score = topCandidate.score;
-        winner.seniority = topCandidate.seniority;
-
-        // Check if this is a zero-vote scenario (fallback by score)
-        if (topCandidate.voteCount == 0) {
-            winner.determinationMethod = "FALLBACK";
-            winner.tiedCandidatesCount = 0;
-            return winner;
-        }
-
-        int tiedOnVotes = 0;
-        int tiedOnVotesAndScore = 0;
-
-        for (CandidateResult c : candidates) {
-            if (c.voteCount == topCandidate.voteCount) {
-                tiedOnVotes++;
-                if (c.score == topCandidate.score) {
-                    tiedOnVotesAndScore++;
-                }
-            }
-        }
-
-        if (tiedOnVotes == 1) {
-            winner.determinationMethod = "VOTES";
-            winner.tiedCandidatesCount = 0;
-        } else if (tiedOnVotesAndScore == 1) {
-            winner.determinationMethod = "SCORE";
-            winner.tiedCandidatesCount = tiedOnVotes;
-        } else {
-            winner.determinationMethod = "SENIORITY";
-            winner.tiedCandidatesCount = tiedOnVotesAndScore;
-        }
-
-        return winner;
-    }
-
     // =========================================================================
     // SCHEDULED CRON JOBS
     // =========================================================================
@@ -622,7 +729,6 @@ public class AwardService {
             return;
         }
 
-        // Call internal method directly since we're already in a transaction
         computeAwardsInternal(yesterday, dailyInterval.get().getIntervalId(), null, null);
         songRepository.resetPlaysToday(LocalDate.now());
         
@@ -795,6 +901,9 @@ public class AwardService {
                     .interval(votingIntervalRepository.findById(intervalId).orElse(null))
                     .awardDate(awardDate)
                     .votesCount(0)
+                    .weightedPoints(0)
+                    .playsCount(0)
+                    .likesCount(0)
                     .engagementScore(song.getScore())
                     .weight(100)
                     .determinationMethod("FALLBACK")
@@ -821,6 +930,9 @@ public class AwardService {
                     .interval(votingIntervalRepository.findById(intervalId).orElse(null))
                     .awardDate(awardDate)
                     .votesCount(0)
+                    .weightedPoints(0)
+                    .playsCount(0)
+                    .likesCount(0)
                     .engagementScore(artist.getScore())
                     .weight(100)
                     .determinationMethod("FALLBACK")
@@ -862,14 +974,20 @@ public class AwardService {
 
     private static class CandidateResult {
         UUID targetId;
-        int voteCount;
+        int rawVoteCount;
+        int weightedPoints;
+        int playsCount;
+        int likesCount;
         int score;
         LocalDateTime seniority;
     }
 
     private static class WinnerResult {
         UUID targetId;
-        int voteCount;
+        int rawVoteCount;
+        int weightedPoints;
+        int playsCount;
+        int likesCount;
         int score;
         LocalDateTime seniority;
         String determinationMethod;
