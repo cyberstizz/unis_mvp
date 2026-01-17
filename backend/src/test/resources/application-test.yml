@@ -1,0 +1,37 @@
+# Test configuration - Uses your existing PostgreSQL database
+# All tests run in transactions that ROLL BACK, so your data is safe
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/unis
+    username: unis_user
+    password: "$ucce$$7"
+    driver-class-name: org.postgresql.Driver
+  
+  jpa:
+    hibernate:
+      # IMPORTANT: Don't use create-drop with your real database!
+      # 'validate' ensures schema matches entities without modifying it
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  
+  # Disable caching during tests for predictable behavior
+  cache:
+    type: none
+
+# Unis-specific test configuration
+unis:
+  auto-populate-awards: true
+
+# Logging - helpful for debugging test failures
+logging:
+  level:
+    com.unis: DEBUG
+    org.springframework.transaction: DEBUG
+    # Uncomment these for SQL debugging:
+    # org.hibernate.SQL: DEBUG
+    # org.hibernate.type.descriptor.sql.BasicBinder: TRACE
