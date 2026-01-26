@@ -58,7 +58,7 @@ public class VoteController {
     @Autowired
     private SongRepository songRepository;
 
-    // POST /api/v1/vote/submit (submit vote, page 2)
+    // POST /api/v1/vote/submit
     @PostMapping("/submit")
     public ResponseEntity<?> submitVote(@RequestBody VoteRequest req) {
         try {
