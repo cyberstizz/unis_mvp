@@ -18,15 +18,14 @@ import java.util.UUID;
 public interface CommentRepository extends JpaRepository<Comment, UUID> {
 
     // Get all top-level comments for a song (not replies), ordered by newest first
-    @Query("SELECT c FROM Comment c WHERE c.song.songId = :songId AND c.parentComment IS NULL AND c.deletedAt IS NULL ORDER BY c.createdAt DESC")
+    @Query("SELECT c FROM Comment c JOIN FETCH c.user u LEFT JOIN FETCH u.jurisdiction WHERE c.song.songId = :songId AND c.parentComment IS NULL AND c.deletedAt IS NULL ORDER BY c.createdAt DESC")
     List<Comment> findTopLevelCommentsBySongId(@Param("songId") UUID songId);
 
     // Get paginated top-level comments for a song
-    @Query("SELECT c FROM Comment c WHERE c.song.songId = :songId AND c.parentComment IS NULL AND c.deletedAt IS NULL")
+    @Query("SELECT c FROM Comment c JOIN FETCH c.user u LEFT JOIN FETCH u.jurisdiction WHERE c.song.songId = :songId AND c.parentComment IS NULL AND c.deletedAt IS NULL")
     Page<Comment> findTopLevelCommentsBySongIdPaginated(@Param("songId") UUID songId, Pageable pageable);
-
     // Get all replies to a specific comment
-    @Query("SELECT c FROM Comment c WHERE c.parentComment.commentId = :parentId AND c.deletedAt IS NULL ORDER BY c.createdAt ASC")
+    @Query("SELECT c FROM Comment c JOIN FETCH c.user u LEFT JOIN FETCH u.jurisdiction WHERE c.parentComment.commentId = :parentId AND c.deletedAt IS NULL ORDER BY c.createdAt ASC")
     List<Comment> findRepliesByParentId(@Param("parentId") UUID parentId);
 
     // Get comment count for a song (including replies)

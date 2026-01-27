@@ -46,7 +46,8 @@ public class CommentDTO {
         private LocalDateTime updatedAt;
         private boolean isReply;
         private int replyCount;
-        
+        private String userJurisdictionName;
+
         // User info
         private UUID userId;
         private String username;
@@ -68,7 +69,8 @@ public class CommentDTO {
                     .replyCount(comment.getReplyCount())
                     .userId(comment.getUser().getUserId())
                     .username(comment.getUser().getUsername())
-                    .userPhotoUrl(comment.getUser().getPhotoUrl());
+                    .userPhotoUrl(comment.getUser().getPhotoUrl())
+                    .userJurisdictionName(comment.getUser().getJurisdiction() != null ? comment.getUser().getJurisdiction().getName() : null);
 
             if (includeReplies && comment.getReplies() != null && !comment.getReplies().isEmpty()) {
                 builder.replies(comment.getReplies().stream()
