@@ -16,20 +16,25 @@ import java.io.IOException;
 public interface UserRepository extends JpaRepository<User, UUID> {
     User findByUsername(String username);  // For auth
 
+    // C5 FIX: Original findByEmail does NOT filter deleted users.
+    // Keep it for cases where you need to find users regardless of deletion status
+    // (e.g., checking if a deleted user's email is taken during registration).
     Optional<User> findByEmail(String email);
+
+    // C5 FIX: New method — only returns active (non-deleted) users.
+    // Used by UserDetailsServiceImpl for authentication.
+    @Query("SELECT u FROM User u WHERE u.email = :email AND u.deletedAt IS NULL")
+    Optional<User> findActiveByEmail(@Param("email") String email);
 
     
     boolean existsByReferralCode(String referralCode);
 
-    // Your original: FETCH jurisdiction only
     @Query("SELECT u FROM User u LEFT JOIN FETCH u.jurisdiction WHERE u.userId = :id")
     Optional<User> findByIdWithJurisdiction(@Param("id") UUID id);
 
-    // New: Full with associations (for profile/feed, no transient defaultSong)
     @Query("SELECT u FROM User u LEFT JOIN FETCH u.jurisdiction LEFT JOIN FETCH u.genre WHERE u.userId = :id")
     Optional<User> findByIdWithAssociations(@Param("id") UUID id);
 
-    // Top artists with hierarchy (your existing)
     @Query(value = "WITH RECURSIVE jurisdiction_hierarchy AS ( " +
             "  SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId " +
             "  UNION ALL " +
@@ -40,7 +45,6 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             "ORDER BY u.score DESC LIMIT :limit", nativeQuery = true)
     List<User> findTopArtistsByJurisdictionWithHierarchy(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
 
-    // Score batch (your existing)
     @Query(value = "SELECT u.user_id, " +
                "COALESCE((SELECT COUNT(r.referral_id) * 5 FROM referrals r WHERE r.referrer_id = u.user_id), 0) + " +
                "COALESCE((SELECT COUNT(sp.play_id) * 1 FROM song_plays sp WHERE sp.user_id = u.user_id), 0) + " +

@@ -9,6 +9,7 @@ import com.unis.entity.Song;
 import com.unis.entity.Genre;
 import com.unis.entity.Jurisdiction;
 import com.unis.entity.User;
+import com.unis.util.SecurityUtils;
 import com.unis.repository.UserRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VoteRepository;
@@ -62,9 +63,12 @@ public class VoteController {
     @PostMapping("/submit")
     public ResponseEntity<?> submitVote(@RequestBody VoteRequest req) {
         try {
-            // Fetch full User object from userId
-            User user = userRepository.findById(req.getUserId())
-                .orElseThrow(() -> new RuntimeException("User not found: " + req.getUserId()));
+            // C6 FIX: Get userId from JWT, not from request body
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+
+            // Fetch full User object from authenticated userId (not req.getUserId())
+            User user = userRepository.findById(authenticatedUserId)
+                .orElseThrow(() -> new RuntimeException("User not found: " + authenticatedUserId));
 
             // Fetch Genre, Jurisdiction, Interval (required for voting)
             if (req.getGenreId() == null) {
@@ -85,19 +89,13 @@ public class VoteController {
             VotingInterval interval = votingIntervalRepository.findById(req.getIntervalId())
                 .orElseThrow(() -> new RuntimeException("Interval not found: " + req.getIntervalId()));
 
-            // =========================================================================
-            // NEW: Check if jurisdiction is voting-enabled
-            // =========================================================================
             if (jurisdiction.getVotingEnabled() == null || !jurisdiction.getVotingEnabled()) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body("Voting is not enabled for this jurisdiction: " + jurisdiction.getName());
             }
 
-            // =========================================================================
-            // NEW: Check jurisdiction eligibility BEFORE building the vote
-            // This is also checked in VoteService, but checking here gives better error messages
-            // =========================================================================
-            if (!voteService.canUserVoteInJurisdiction(req.getUserId(), req.getJurisdictionId())) {
+            // C6 FIX: Use authenticatedUserId instead of req.getUserId() for eligibility check
+            if (!voteService.canUserVoteInJurisdiction(authenticatedUserId, req.getJurisdictionId())) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body("You are not eligible to vote in " + jurisdiction.getName() + 
                           ". You can only vote in your home jurisdiction and its parent jurisdictions.");
@@ -123,36 +121,37 @@ public class VoteController {
             return ResponseEntity.ok(response);
 
         } catch (IllegalArgumentException e) {
-            // Validation errors (eligibility, duplicate vote, etc.)
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (RuntimeException e) {
-            // Check for specific error types
             if (e.getMessage() != null && e.getMessage().contains("already cast")) {
                 return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
             }
             if (e.getMessage() != null && e.getMessage().contains("not eligible")) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
             }
-            // Other errors
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body("Failed to submit vote: " + e.getMessage());
         }
     }
 
-    // =========================================================================
-    // NEW: Get eligible jurisdictions for user (for dynamic dropdown)
-    // =========================================================================
+    // C6 FIX: Get eligible jurisdictions using authenticated user, not query param
     @GetMapping("/eligible-jurisdictions")
-    public ResponseEntity<List<Jurisdiction>> getEligibleJurisdictions(@RequestParam UUID userId) {
+    public ResponseEntity<List<Jurisdiction>> getEligibleJurisdictions(@RequestParam(required = false) UUID userId) {
         try {
-            List<Jurisdiction> jurisdictions = voteService.getEligibleJurisdictionsForUser(userId);
+            // Use JWT userId if available, fall back to query param for backward compatibility
+            UUID resolvedUserId;
+            try {
+                resolvedUserId = SecurityUtils.getAuthenticatedUserId();
+            } catch (Exception e) {
+                resolvedUserId = userId;
+            }
+            List<Jurisdiction> jurisdictions = voteService.getEligibleJurisdictionsForUser(resolvedUserId);
             return ResponseEntity.ok(jurisdictions);
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().build();
         }
     }
 
-    // GET /api/v1/vote/results?type={type}&jurisdictionId={id}&genreId={id}&intervalId={id} (vote page results, page 2)
     @GetMapping("/results")
     public ResponseEntity<List<Vote>> getVoteResults(
             @RequestParam String type,
@@ -163,22 +162,18 @@ public class VoteController {
         return ResponseEntity.ok(results);
     }
 
-    // GET /api/v1/vote/total/{targetType}/{targetId} (total votes for card, page 2)
     @GetMapping("/total/{targetType}/{targetId}")
     public ResponseEntity<Long> getTotalVotes(@PathVariable String targetType, @PathVariable UUID targetId) {
         Long total = voteService.getTotalVotesForTarget(targetType, targetId);
         return ResponseEntity.ok(total);
     }
 
-    // GET /api/v1/vote/votes/user/{userId} (votes cast by user, for score)
     @GetMapping("/votes/user/{userId}")
     public ResponseEntity<Long> getVotesCastByUser(@PathVariable UUID userId) {
         Long count = voteService.getVotesCastByUser(userId);
         return ResponseEntity.ok(count);
     }
 
-
-    // GET /api/v1/vote/nominees - Get top nominees by vote count
     @GetMapping("/nominees")
     public ResponseEntity<?> getNominees(
             @RequestParam String targetType,
@@ -191,7 +186,6 @@ public class VoteController {
         return ResponseEntity.ok(nominees);
     }
 
-    // GET /api/v1/vote/check-eligibility
     @GetMapping("/check-eligibility")
     public ResponseEntity<Boolean> checkEligibility(
             @RequestParam UUID userId,
@@ -201,44 +195,42 @@ public class VoteController {
         return ResponseEntity.ok(canVote);
     }
 
-   @GetMapping("/leaderboards")
+    @GetMapping("/leaderboards")
     public ResponseEntity<List<LeaderboardDto>> getLeaderboards(
         @RequestParam UUID jurisdictionId,
         @RequestParam UUID genreId,
         @RequestParam String targetType,
         @RequestParam UUID intervalId,
         @RequestParam(defaultValue = "50") int limit,
-        @RequestParam(required = false) boolean playsOnly) {  // For fallback
-        System.out.println("Leaderboards hit: jur=" + jurisdictionId + ", genre=" + genreId + ", type=" + targetType + ", interval=" + intervalId + ", limit=" + limit + ", playsOnly=" + playsOnly);  // Debug
-        List<LeaderboardDto> leaderboard = voteService.getLeaderboard(targetType, genreId, jurisdictionId, intervalId, limit);  // Pass playsOnly to service
+        @RequestParam(required = false) boolean playsOnly) {
+        System.out.println("Leaderboards hit: jur=" + jurisdictionId + ", genre=" + genreId + ", type=" + targetType + ", interval=" + intervalId + ", limit=" + limit + ", playsOnly=" + playsOnly);
+        List<LeaderboardDto> leaderboard = voteService.getLeaderboard(targetType, genreId, jurisdictionId, intervalId, limit);
         return ResponseEntity.ok(leaderboard);
-}
+    }
+
     @PostMapping("/awards/compute")
     public ResponseEntity<String> computeAwards(
         @RequestParam UUID intervalId,
         @RequestParam UUID jurisdictionId,
         @RequestParam UUID genreId,
         @RequestParam(required = false) LocalDate date) {
-    LocalDate cronDate = date != null ? date : LocalDate.now();
-    awardService.computeForInterval(intervalId, jurisdictionId, genreId, cronDate);
-    return ResponseEntity.ok("Computed for " + cronDate);
+        LocalDate cronDate = date != null ? date : LocalDate.now();
+        awardService.computeForInterval(intervalId, jurisdictionId, genreId, cronDate);
+        return ResponseEntity.ok("Computed for " + cronDate);
     }
 
-    // GET /api/v1/vote/history - Get authenticated user's vote history
+    // GET /api/v1/vote/history — already uses Authentication correctly, no C6 change needed
     @GetMapping("/history")
     public ResponseEntity<List<VoteHistoryDto>> getVoteHistory(
             Authentication auth,
             @RequestParam(defaultValue = "50") int limit) {
 
-        // Get user from auth token
         String email = auth.getName();
         User user = userRepository.findByEmail(email)
             .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // Fetch user's votes
         List<Vote> votes = voteRepository.findByUserUserIdOrderByVoteDateDesc(user.getUserId());
 
-        // Build DTOs with nominee details
         List<VoteHistoryDto> history = new ArrayList<>();
         int count = 0;
 
@@ -248,7 +240,6 @@ public class VoteController {
             String nomineeName = "Unknown";
             String nomineeImage = null;
 
-            // Fetch nominee details based on targetType
             if ("song".equalsIgnoreCase(vote.getTargetType())) {
                 Optional<Song> songOpt = songRepository.findById(vote.getTargetId());
                 if (songOpt.isPresent()) {
@@ -265,7 +256,6 @@ public class VoteController {
                 }
             }
 
-            // Get interval name
             String intervalName = vote.getInterval() != null
                 ? vote.getInterval().getName()
                 : "day";

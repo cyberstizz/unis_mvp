@@ -7,38 +7,25 @@ public class ReferralCodeGenerator {
     
     private static final String ALPHANUMERIC = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final int CODE_SUFFIX_LENGTH = 5;
+    private static final int MAX_PREFIX_LENGTH = 20;
     private static final Random RANDOM = new SecureRandom();
 
-    /**
-     * Generate a referral code based on username
-     * Format: USERNAME-XXXXX (e.g., RAPKING-A7B3C)
-     * 
-     * @param username The user's username
-     * @return A unique referral code candidate
-     */
     public static String generate(String username) {
-        // Sanitize username (uppercase, remove special chars, max 20 chars)
         String sanitized = username
                 .toUpperCase()
-                .replaceAll("[^A-Z0-9]", "")
-                .substring(0, Math.min(username.length(), 20));
+                .replaceAll("[^A-Z0-9]", "");
         
-        // Generate random 5-character suffix
+        // C7 FIX: was Math.min(username.length(), 20) — must use sanitized.length()
+        String prefix = sanitized.substring(0, Math.min(sanitized.length(), MAX_PREFIX_LENGTH));
+        
         StringBuilder suffix = new StringBuilder(CODE_SUFFIX_LENGTH);
         for (int i = 0; i < CODE_SUFFIX_LENGTH; i++) {
             suffix.append(ALPHANUMERIC.charAt(RANDOM.nextInt(ALPHANUMERIC.length())));
         }
         
-        return sanitized + "-" + suffix.toString();
+        return prefix + "-" + suffix.toString();
     }
 
-    /**
-     * Generate a referral code and ensure it's unique by checking against existing codes
-     * 
-     * @param username The user's username
-     * @param existsCheck Function that returns true if code already exists
-     * @return A guaranteed unique referral code
-     */
     public static String generateUnique(String username, java.util.function.Predicate<String> existsCheck) {
         String code;
         int attempts = 0;
@@ -48,10 +35,15 @@ public class ReferralCodeGenerator {
             code = generate(username);
             attempts++;
             
-            // Safety: If we can't find a unique code after 10 attempts, append a timestamp
             if (attempts >= maxAttempts) {
-                code = username.toUpperCase().substring(0, Math.min(username.length(), 15)) 
-                       + "-" + System.currentTimeMillis();
+                // L13 FIX: was timestamp-based (guessable) — now uses double-length random suffix
+                String sanitized = username.toUpperCase().replaceAll("[^A-Z0-9]", "");
+                String prefix = sanitized.substring(0, Math.min(sanitized.length(), MAX_PREFIX_LENGTH));
+                StringBuilder fallbackSuffix = new StringBuilder(CODE_SUFFIX_LENGTH * 2);
+                for (int i = 0; i < CODE_SUFFIX_LENGTH * 2; i++) {
+                    fallbackSuffix.append(ALPHANUMERIC.charAt(RANDOM.nextInt(ALPHANUMERIC.length())));
+                }
+                code = prefix + "-" + fallbackSuffix.toString();
                 break;
             }
         } while (existsCheck.test(code));

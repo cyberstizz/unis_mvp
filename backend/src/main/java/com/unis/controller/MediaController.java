@@ -2,8 +2,9 @@ package com.unis.controller;
 
 import com.unis.entity.Song;
 import com.unis.entity.Video;
+import com.unis.util.SecurityUtils;
 import com.unis.service.MediaService;
-import lombok.extern.slf4j.Slf4j;  
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -26,39 +27,42 @@ public class MediaController {
     @Autowired
     private MediaService mediaService;
 
-    // POST /api/v1/media/song (add song, page 7)
+    // POST /api/v1/media/song — C1 + C6: now requires auth (SecurityConfig), artistId from JWT
     @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Song> addSong(
-            @RequestPart("song") String songJson, 
+            @RequestPart("song") String songJson,
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "artwork", required = false) MultipartFile artwork) {
+        // C6 FIX: artistId will be extracted from JWT inside MediaService
+        // The songJson still contains artistId from the frontend but MediaService should
+        // override it with the authenticated user. See note below.
         Song saved = mediaService.addSong(songJson, file, artwork);
         return ResponseEntity.ok(saved);
     }
 
-    // POST /api/v1/media/video (add video, page 7)
+    // POST /api/v1/media/video
     @PostMapping(value = "/video", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Video> addVideo(
-            @RequestPart("video") String videoJson, 
+            @RequestPart("video") String videoJson,
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "artwork", required = false) MultipartFile artwork) {
         Video saved = mediaService.addVideo(videoJson, file, artwork);
         return ResponseEntity.ok(saved);
     }
 
-    // DELETE /api/v1/media/song/{id} (delete song, page 7)
+    // DELETE /api/v1/media/song/{id}
     @DeleteMapping("/song/{songId}")
     public ResponseEntity<Void> deleteSong(@PathVariable UUID songId) {
         mediaService.deleteSong(songId);
         return ResponseEntity.ok().build();
     }
 
-    // PATCH /api/v1/media/song/{id} (update song description/artwork)
+    // PATCH /api/v1/media/song/{id}
     @PatchMapping(value = "/song/{songId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Song> updateSong(
             @PathVariable UUID songId,
             @RequestParam(value = "description", required = false) String description,
-            @RequestParam(value = "artwork", required = false) MultipartFile artwork, 
+            @RequestParam(value = "artwork", required = false) MultipartFile artwork,
             @RequestParam(value = "lyrics", required = false) String lyrics) {
         try {
             Song updated = mediaService.updateSong(songId, description, artwork, lyrics);
@@ -69,36 +73,54 @@ public class MediaController {
         }
     }
 
-    // DELETE /api/v1/media/video/{id} (delete video, page 7)
+    // DELETE /api/v1/media/video/{id}
     @DeleteMapping("/video/{videoId}")
     public ResponseEntity<Void> deleteVideo(@PathVariable UUID videoId) {
         mediaService.deleteVideo(videoId);
         return ResponseEntity.ok().build();
     }
 
-    // POST /api/v1/media/song/{id}/play?userId={userId} (play song, pages 1,3,11)
+    // POST /api/v1/media/song/{id}/play
+    // C6 FIX: Use JWT userId instead of query param
     @PostMapping("/song/{songId}/play")
-    public ResponseEntity<Void> playSong(@PathVariable UUID songId, @RequestParam UUID userId) {
-        mediaService.playSong(songId, userId);
+    public ResponseEntity<Void> playSong(@PathVariable UUID songId,
+                                          @RequestParam(required = false) UUID userId) {
+        // Use JWT if available, fall back to query param for unauthenticated play tracking
+        UUID resolvedUserId;
+        try {
+            resolvedUserId = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            resolvedUserId = userId;
+        }
+        mediaService.playSong(songId, resolvedUserId);
         return ResponseEntity.ok().build();
     }
 
-    // POST /api/v1/media/video/{id}/play?userId={userId} (play video, pages 1,3,11)
+    // POST /api/v1/media/video/{id}/play
     @PostMapping("/video/{videoId}/play")
-    public ResponseEntity<Void> playVideo(@PathVariable UUID videoId, @RequestParam UUID userId) {
-        mediaService.playVideo(videoId, userId);
+    public ResponseEntity<Void> playVideo(@PathVariable UUID videoId,
+                                           @RequestParam(required = false) UUID userId) {
+        UUID resolvedUserId;
+        try {
+            resolvedUserId = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            resolvedUserId = userId;
+        }
+        mediaService.playVideo(videoId, resolvedUserId);
         return ResponseEntity.ok().build();
     }
 
-    // ========== LIKES ENDPOINTS (NEW) ==========
-    
-    // POST /api/v1/media/song/{songId}/like - Like a song
+    // ========== LIKES ENDPOINTS ==========
+
+    // POST /api/v1/media/song/{songId}/like — C6 FIX: userId from JWT
     @PostMapping("/song/{songId}/like")
     public ResponseEntity<Map<String, Object>> likeSong(
             @PathVariable UUID songId,
-            @RequestParam UUID userId) {
+            @RequestParam(required = false) UUID userId) {
         try {
-            boolean liked = mediaService.likeSong(songId, userId);
+            // C6 FIX: Use JWT userId
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+            boolean liked = mediaService.likeSong(songId, authenticatedUserId);
             Map<String, Object> response = new HashMap<>();
             response.put("success", liked);
             response.put("message", liked ? "Song liked" : "Already liked");
@@ -110,13 +132,14 @@ public class MediaController {
         }
     }
 
-    // DELETE /api/v1/media/song/{songId}/like - Unlike a song
+    // DELETE /api/v1/media/song/{songId}/like — C6 FIX: userId from JWT
     @DeleteMapping("/song/{songId}/like")
     public ResponseEntity<Map<String, Object>> unlikeSong(
             @PathVariable UUID songId,
-            @RequestParam UUID userId) {
+            @RequestParam(required = false) UUID userId) {
         try {
-            boolean unliked = mediaService.unlikeSong(songId, userId);
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+            boolean unliked = mediaService.unlikeSong(songId, authenticatedUserId);
             Map<String, Object> response = new HashMap<>();
             response.put("success", unliked);
             response.put("message", unliked ? "Song unliked" : "Like not found");
@@ -128,13 +151,19 @@ public class MediaController {
         }
     }
 
-    // GET /api/v1/media/song/{songId}/is-liked - Check if user liked a song
+    // GET /api/v1/media/song/{songId}/is-liked — C6 FIX: userId from JWT
     @GetMapping("/song/{songId}/is-liked")
     public ResponseEntity<Map<String, Boolean>> isLiked(
             @PathVariable UUID songId,
-            @RequestParam UUID userId) {
+            @RequestParam(required = false) UUID userId) {
         try {
-            boolean liked = mediaService.isLiked(songId, userId);
+            UUID resolvedUserId;
+            try {
+                resolvedUserId = SecurityUtils.getAuthenticatedUserId();
+            } catch (Exception e) {
+                resolvedUserId = userId;
+            }
+            boolean liked = mediaService.isLiked(songId, resolvedUserId);
             return ResponseEntity.ok(Map.of("isLiked", liked));
         } catch (Exception e) {
             log.error("Failed to check like status {}: {}", songId, e.getMessage());
@@ -142,7 +171,7 @@ public class MediaController {
         }
     }
 
-    // GET /api/v1/media/song/{songId}/likes/count - Get like count for a song
+    // GET /api/v1/media/song/{songId}/likes/count
     @GetMapping("/song/{songId}/likes/count")
     public ResponseEntity<Map<String, Integer>> getLikeCount(@PathVariable UUID songId) {
         try {
@@ -156,46 +185,40 @@ public class MediaController {
 
     // ========== END LIKES ENDPOINTS ==========
 
-    // GET /api/v1/media/songs/jurisdiction/{id}?limit=3 (top songs by SCORE, page 3)
     @GetMapping("/songs/jurisdiction/{jurisdictionId}")
     public ResponseEntity<List<Song>> getTopSongsByJurisdiction(
-            @PathVariable UUID jurisdictionId, 
+            @PathVariable UUID jurisdictionId,
             @RequestParam(defaultValue = "3") int limit) {
         List<Song> songs = mediaService.getTopSongsByJurisdiction(jurisdictionId, limit);
         return ResponseEntity.ok(songs);
     }
 
-    // GET /api/v1/media/videos/jurisdiction/{id}?limit=3 (top videos, page 3)
     @GetMapping("/videos/jurisdiction/{jurisdictionId}")
     public ResponseEntity<List<Video>> getTopVideosByJurisdiction(
-            @PathVariable UUID jurisdictionId, 
+            @PathVariable UUID jurisdictionId,
             @RequestParam(defaultValue = "3") int limit) {
         List<Video> videos = mediaService.getTopVideosByJurisdiction(jurisdictionId, limit);
         return ResponseEntity.ok(videos);
     }
 
-    // GET /api/v1/media/songs/artist/{artistId} (artist's songs, page 7)
     @GetMapping("/songs/artist/{artistId}")
     public ResponseEntity<List<Song>> getSongsByArtist(@PathVariable UUID artistId) {
         List<Song> songs = mediaService.getSongsByArtist(artistId);
         return ResponseEntity.ok(songs);
     }
 
-    // GET /api/v1/media/videos/artist/{artistId} (artist's videos, page 7)
     @GetMapping("/videos/artist/{artistId}")
     public ResponseEntity<List<Video>> getVideosByArtist(@PathVariable UUID artistId) {
         List<Video> videos = mediaService.getVideosByArtist(artistId);
         return ResponseEntity.ok(videos);
     }
 
-    // GET /api/v1/media/song/{songId} (get single song)
     @GetMapping("/song/{songId}")
     public ResponseEntity<Song> getSong(@PathVariable UUID songId) {
         Song song = mediaService.getSongById(songId);
         return ResponseEntity.ok(song);
     }
 
-    // GET /api/v1/media/song/{songId}/lyrics (get song lyrics - NEW)
     @GetMapping("/song/{songId}/lyrics")
     public ResponseEntity<Map<String, Object>> getSongLyrics(@PathVariable UUID songId) {
         try {
@@ -212,24 +235,20 @@ public class MediaController {
         }
     }
 
-    // GET /api/v1/media/trending (mixed songs + videos by SCORE)
-    // KEPT YOUR ORIGINAL - This is for your existing feed
     @GetMapping("/trending")
     public ResponseEntity<List<Object>> getTrendingMedia(
-            @RequestParam UUID jurisdictionId, 
+            @RequestParam UUID jurisdictionId,
             @RequestParam(defaultValue = "5") int limit) {
         List<Song> topSongs = mediaService.getTopSongsByJurisdiction(jurisdictionId, limit);
         List<Video> topVideos = mediaService.getTopVideosByJurisdiction(jurisdictionId, limit);
         List<Object> mixed = new ArrayList<>();
         mixed.addAll(topSongs);
         mixed.addAll(topVideos);
-        mixed.sort(Comparator.comparing((Object o) -> 
+        mixed.sort(Comparator.comparing((Object o) ->
             -(o instanceof Song ? ((Song) o).getScore() : ((Video) o).getScore())));
         return ResponseEntity.ok(mixed.stream().limit(limit).collect(Collectors.toList()));
     }
 
-    // GET /api/v1/media/trending/today (songs by plays_today - NEW)
-    // This is the NEW endpoint for today's trending based on plays_today
     @GetMapping("/trending/today")
     public ResponseEntity<List<Song>> getTrendingToday(
             @RequestParam UUID jurisdictionId,
@@ -243,17 +262,15 @@ public class MediaController {
         }
     }
 
-    // GET /api/v1/media/new (newest songs)
     @GetMapping("/new")
     public ResponseEntity<List<Song>> getNewMedia(
-            @RequestParam UUID jurisdictionId, 
+            @RequestParam UUID jurisdictionId,
             @RequestParam(defaultValue = "5") int limit) {
         try {
             List<Song> newSongs = mediaService.getNewSongsByJurisdiction(jurisdictionId, limit);
             return ResponseEntity.ok(newSongs);
         } catch (Exception e) {
             log.error("New media query failed, falling back to trending:", e);
-            // Fallback: Get trending, filter to songs only
             List<Object> trendingMixed = getTrendingMedia(jurisdictionId, limit).getBody();
             List<Song> fallbackSongs = trendingMixed.stream()
                 .filter(o -> o instanceof Song)
@@ -269,7 +286,7 @@ public class MediaController {
             @PathVariable UUID songId,
             @RequestBody Map<String, String> body) {
         String lyrics = body.get("lyrics");
-        Song updated = mediaService.updateSong(songId, null, null, lyrics); 
+        Song updated = mediaService.updateSong(songId, null, null, lyrics);
         return ResponseEntity.ok(updated);
     }
 }

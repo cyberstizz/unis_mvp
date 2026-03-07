@@ -18,7 +18,9 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        User user = userRepository.findByEmail(username)
+        // C5 FIX: was findByEmail — soft-deleted users could still authenticate.
+        // Now uses findActiveByEmail which filters WHERE deleted_at IS NULL.
+        User user = userRepository.findActiveByEmail(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + username));
 
         return new org.springframework.security.core.userdetails.User(user.getEmail(), user.getPasswordHash(), new ArrayList<>());

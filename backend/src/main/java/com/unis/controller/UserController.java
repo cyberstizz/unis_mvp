@@ -1,6 +1,7 @@
 package com.unis.controller;
 
 import com.unis.dto.UserDto;
+import com.unis.util.SecurityUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,7 +39,7 @@ import java.io.IOException;
 
 
 @RestController
-@RequestMapping("/api/v1/users")  // Base path
+@RequestMapping("/api/v1/users")
 public class UserController {
     @Autowired
     private UserService userService;
@@ -65,67 +66,85 @@ public class UserController {
 
 
     // POST /api/v1/users/register (page 6 signup)
-    // POST /api/v1/users/register (page 6 signup)
-@PostMapping("/register")
-public ResponseEntity<User> register(@RequestBody UserDto dto) {
-    User user = User.builder()
-        .username(dto.getUsername())
-        .email(dto.getEmail())
-        .passwordHash(dto.getPassword())
-        .role(User.Role.valueOf(dto.getRole()))
-        .bio(dto.getBio())
-        .photoUrl(dto.getPhotoUrl())
-        .build();
-    
-    // Fetch jurisdiction entity and set
-    Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
-        .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
-    user.setJurisdiction(jurisdiction);
-    
-    // Set genre for artists
-    if (dto.getGenreId() != null) {
-        Genre genre = genreRepository.findById(dto.getGenreId())
-            .orElseThrow(() -> new RuntimeException("Genre not found"));
-        user.setGenre(genre);
+    @PostMapping("/register")
+    public ResponseEntity<User> register(@RequestBody UserDto dto) {
+        User user = User.builder()
+            .username(dto.getUsername())
+            .email(dto.getEmail())
+            .passwordHash(dto.getPassword())
+            .role(User.Role.valueOf(dto.getRole()))
+            .bio(dto.getBio())
+            .photoUrl(dto.getPhotoUrl())
+            .build();
+
+        // Fetch jurisdiction entity and set
+        Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
+            .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
+        user.setJurisdiction(jurisdiction);
+
+        // Set genre for artists
+        if (dto.getGenreId() != null) {
+            Genre genre = genreRepository.findById(dto.getGenreId())
+                .orElseThrow(() -> new RuntimeException("Genre not found"));
+            user.setGenre(genre);
+        }
+
+        // Pass referral code to register method
+        User registered = userService.register(
+            user,
+            dto.getSupportedArtistId(),
+            dto.getReferralCode()
+        );
+
+        return ResponseEntity.ok(registered);
     }
-    
-    // Pass referral code to register method
-    User registered = userService.register(
-        user, 
-        dto.getSupportedArtistId(),
-        dto.getReferralCode()  
-    );
-    
-    return ResponseEntity.ok(registered);
-}
 
     // GET /api/v1/users/profile/{id} (page 6 dashboard)
-   @GetMapping("/profile/{userId}")
+    @GetMapping("/profile/{userId}")
     public ResponseEntity<User> getProfile(@PathVariable UUID userId) {
-    Optional<User> optUser = userRepository.findByIdWithAssociations(userId);
-    if (optUser.isEmpty()) return ResponseEntity.notFound().build();
-    return ResponseEntity.ok(optUser.get());  // Full with jurisdiction/defaultSong
+        Optional<User> optUser = userRepository.findByIdWithAssociations(userId);
+        if (optUser.isEmpty()) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(optUser.get());
     }
 
     // PUT /api/v1/users/profile/{id}/photo (edit photo)
+    // C4 FIX: Ownership check — only the authenticated user can update their own photo
     @PutMapping("/profile/{userId}/photo")
-    public ResponseEntity<User> updatePhoto(@PathVariable UUID userId, @RequestBody UserDto dto) {
+    public ResponseEntity<?> updatePhoto(@PathVariable UUID userId, @RequestBody UserDto dto) {
+        UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+        if (!authenticatedUserId.equals(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body("You can only update your own profile");
+        }
         User updated = userService.updatePhoto(userId, dto.getPhotoUrl());
         return ResponseEntity.ok(updated);
     }
 
     // PUT /api/v1/users/profile/{id}/bio (edit bio)
+    // C4 FIX: Ownership check
     @PutMapping("/profile/{userId}/bio")
-    public ResponseEntity<User> updateBio(@PathVariable UUID userId, @RequestBody UserDto dto) {
+    public ResponseEntity<?> updateBio(@PathVariable UUID userId, @RequestBody UserDto dto) {
+        UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+        if (!authenticatedUserId.equals(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body("You can only update your own profile");
+        }
         User updated = userService.updateBio(userId, dto.getBio());
         return ResponseEntity.ok(updated);
     }
 
     // PUT /api/v1/users/profile/{id} (update social media URLs)
+    // C4 FIX: Ownership check
     @PutMapping("/profile/{userId}")
-    public ResponseEntity<Map<String, String>> updateSocialMedia(
+    public ResponseEntity<?> updateSocialMedia(
             @PathVariable UUID userId,
             @RequestBody Map<String, String> payload) {
+
+        UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+        if (!authenticatedUserId.equals(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body("You can only update your own profile");
+        }
 
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
@@ -149,8 +168,14 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
     }
 
     // PUT /api/v1/users/profile/{id}/password (update password)
+    // C4 FIX: Ownership check
     @PutMapping("/profile/{userId}/password")
-    public ResponseEntity<User> updatePassword(@PathVariable UUID userId, @RequestBody UserDto dto) {
+    public ResponseEntity<?> updatePassword(@PathVariable UUID userId, @RequestBody UserDto dto) {
+        UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+        if (!authenticatedUserId.equals(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body("You can only update your own profile");
+        }
         User updated = userService.updatePassword(userId, dto.getOldPassword(), dto.getNewPassword());
         return ResponseEntity.ok(updated);
     }
@@ -164,42 +189,38 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
 
     @GetMapping("/artist/top")
     public ResponseEntity<List<User>> getTopArtists(@RequestParam UUID jurisdictionId, @RequestParam(defaultValue = "5") int limit) {
-        // Use native query in UserService: SUM(s.score) GROUP BY artist_id ORDER DESC (JOIN songs/videos)
         List<User> tops = userService.getTopArtistsByJurisdiction(jurisdictionId, limit);
         return ResponseEntity.ok(tops);
     }
 
     @GetMapping("/{userId}/default-song")
     public ResponseEntity<Song> getDefaultSong(@PathVariable UUID userId) {
-    Optional<User> optUser = userRepository.findById(userId);
-    if (optUser.isEmpty() || optUser.get().getDefaultSongId() == null) return ResponseEntity.notFound().build();
-    Optional<Song> optSong = songRepository.findById(optUser.get().getDefaultSongId());
-    return optSong.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+        Optional<User> optUser = userRepository.findById(userId);
+        if (optUser.isEmpty() || optUser.get().getDefaultSongId() == null) return ResponseEntity.notFound().build();
+        Optional<Song> optSong = songRepository.findById(optUser.get().getDefaultSongId());
+        return optSong.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
     }
 
     @DeleteMapping("/me")
     public ResponseEntity<Map<String, String>> deleteMyAccount(Authentication auth) {
-        // FIX: Get email from token, then find user
-        String email = auth.getName();  // This is the email, NOT userId!
-        
+        String email = auth.getName();
+
         User user = userRepository.findByEmail(email)
             .orElseThrow(() -> new RuntimeException("User not found"));
-        
+
         UUID userId = user.getUserId();
-        
+
         try {
-            // Call service to cascade delete everything
             userService.deleteCurrentUserAndAllData(userId);
-            
+
             Map<String, String> response = new HashMap<>();
             response.put("message", "Account deleted successfully");
             return ResponseEntity.ok(response);
-            
+
         } catch (Exception e) {
-            // Log the actual error
             System.err.println("Failed to delete user " + userId + ": " + e.getMessage());
             e.printStackTrace();
-            
+
             Map<String, String> errorResponse = new HashMap<>();
             errorResponse.put("error", "Failed to delete account: " + e.getMessage());
             return ResponseEntity.status(500).body(errorResponse);
@@ -208,33 +229,31 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
 
     @GetMapping("/artists/active")
     public ResponseEntity<List<User>> getActiveArtists() {
-    List<User> artists = userRepository.findByRoleOrderByScoreDesc(User.Role.artist);
-    return ResponseEntity.ok(artists);
-}
+        List<User> artists = userRepository.findByRoleOrderByScoreDesc(User.Role.artist);
+        return ResponseEntity.ok(artists);
+    }
 
-        // TEMP endpoint for CreateAccountWizard photo upload (anonymous allowed)
-   @PatchMapping("/profile/photo")
+    // TEMP endpoint for CreateAccountWizard photo upload (anonymous allowed)
+    @PatchMapping("/profile/photo")
     public ResponseEntity<Map<String, String>> uploadSignupPhoto(
-                HttpServletRequest request,
-                @RequestParam("photo") MultipartFile file) throws IOException {
+            HttpServletRequest request,
+            @RequestParam("photo") MultipartFile file) throws IOException {
 
-            // Save file (reuse your existing upload logic)
-            String photoUrl = fileStorageService.storeFile(file);
+        String photoUrl = fileStorageService.storeFile(file);
 
-            Map<String, String> response = new HashMap<>();
-            response.put("photoUrl", photoUrl);
-            return ResponseEntity.ok(response);
-        }
+        Map<String, String> response = new HashMap<>();
+        response.put("photoUrl", photoUrl);
+        return ResponseEntity.ok(response);
+    }
 
-    // PATCH /api/v1/users/profile — FINAL WORKING VERSION
+    // PATCH /api/v1/users/profile — already uses Authentication correctly, no C4/C6 change needed
     @PatchMapping("/profile")
     public ResponseEntity<Map<String, String>> updateProfile(
         Authentication auth,
         @RequestParam(value = "photo", required = false) MultipartFile photo,
         @RequestParam(value = "bio", required = false) String bio) throws IOException {
 
-        // FIX: Get user by email from token, then get UUID
-        String email = auth.getName();  // this is the email
+        String email = auth.getName();
         User user = userRepository.findByEmail(email)
             .orElseThrow(() -> new RuntimeException("User not found"));
 
@@ -261,41 +280,34 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
     public ResponseEntity<Map<String, String>> setDefaultSong(
         Authentication auth,
         @RequestBody Map<String, UUID> payload) {
-        
+
         String email = auth.getName();
         User user = userRepository.findByEmail(email)
             .orElseThrow(() -> new RuntimeException("User not found"));
-        
+
         UUID songId = payload.get("defaultSongId");
         userService.updateDefaultSong(user.getUserId(), songId);
-        
+
         return ResponseEntity.ok(Map.of("message", "Default song set"));
     }
 
-  
+
     @GetMapping("/referral-code/{userId}")
     public ResponseEntity<Map<String, String>> getReferralCode(@PathVariable UUID userId) {
         try {
             User user = userService.getProfile(userId);
-            
+
             Map<String, String> response = new HashMap<>();
             response.put("username", user.getUsername());
             response.put("referralCode", user.getReferralCode());
-            
+
             return ResponseEntity.ok(response);
-            
+
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
     }
 
-
-
-
-        /**
-     * Validate a referral code and return the referrer's username
-     * GET /api/v1/users/validate-referral/{code}
-     */
     @GetMapping("/validate-referral/{code}")
     public ResponseEntity<Map<String, Object>> validateReferralCode(@PathVariable String code) {
         Map<String, Object> response = new HashMap<>();
@@ -307,10 +319,10 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
             response.put("referrerId", null);
             return ResponseEntity.ok(response);
         }
-        
+
         try {
             Optional<User> referrerOpt = userRepository.findByReferralCode(code);
-            
+
             if (referrerOpt.isPresent()) {
                 User referrer = referrerOpt.get();
                 response.put("valid", true);
@@ -329,23 +341,19 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
         }
     }
 
-    /**
-     * Check if an email is available for registration
-     * GET /api/v1/users/check-email?email=test@example.com
-     */
     @GetMapping("/check-email")
     public ResponseEntity<Map<String, Object>> checkEmailAvailability(@RequestParam String email) {
         Map<String, Object> response = new HashMap<>();
-        
+
         try {
             boolean exists = userRepository.existsByEmail(email);
             response.put("available", !exists);
             response.put("email", email);
-            
+
             if (exists) {
                 response.put("message", "Email already registered");
             }
-            
+
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             response.put("available", false);
@@ -354,23 +362,19 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
         }
     }
 
-    /**
-     * Check if a username is available for registration
-     * GET /api/v1/users/check-username?username=johndoe
-     */
     @GetMapping("/check-username")
     public ResponseEntity<Map<String, Object>> checkUsernameAvailability(@RequestParam String username) {
         Map<String, Object> response = new HashMap<>();
-        
+
         try {
             boolean exists = userRepository.existsByUsername(username);
             response.put("available", !exists);
             response.put("username", username);
-            
+
             if (exists) {
                 response.put("message", "Username already taken");
             }
-            
+
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             response.put("available", false);
@@ -379,26 +383,22 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
         }
     }
 
-    /**
-     * Get artists with their default song details for preview
-     * GET /api/v1/users/artists/with-preview
-     */
     @GetMapping("/artists/with-preview")
     public ResponseEntity<List<Map<String, Object>>> getArtistsWithPreview(
             @RequestParam(required = false) UUID jurisdictionId) {
-        
+
         try {
             List<User> artists;
-            
+
             if (jurisdictionId != null) {
                 artists = userRepository.findByRoleAndJurisdiction(
-                    User.Role.artist, 
+                    User.Role.artist,
                     jurisdictionId
                 );
             } else {
                 artists = userRepository.findByRoleOrderByScoreDesc(User.Role.artist);
             }
-            
+
             List<Map<String, Object>> result = artists.stream().map(artist -> {
                 Map<String, Object> artistData = new HashMap<>();
                 artistData.put("userId", artist.getUserId());
@@ -407,14 +407,14 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
                 artistData.put("bio", artist.getBio());
                 artistData.put("score", artist.getScore());
                 artistData.put("defaultSongId", artist.getDefaultSongId());
-                
+
                 if (artist.getJurisdiction() != null) {
                     Map<String, Object> jurisdiction = new HashMap<>();
                     jurisdiction.put("jurisdictionId", artist.getJurisdiction().getJurisdictionId());
                     jurisdiction.put("name", artist.getJurisdiction().getName());
                     artistData.put("jurisdiction", jurisdiction);
                 }
-                
+
                 if (artist.getDefaultSongId() != null) {
                     songRepository.findById(artist.getDefaultSongId()).ifPresent(song -> {
                         Map<String, Object> songData = new HashMap<>();
@@ -426,88 +426,74 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
                         artistData.put("defaultSong", songData);
                     });
                 }
-                
+
                 return artistData;
             }).collect(Collectors.toList());
-            
+
             return ResponseEntity.ok(result);
-            
+
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(List.of());
         }
     }
 
-
-    // 1. GET SUPPORTERS COUNT
-    // Matches: /v1/users/{id}/supporters/count
     @GetMapping("/{userId}/supporters/count")
     public ResponseEntity<Map<String, Long>> getSupportersCount(@PathVariable UUID userId) {
         long count = userRepository.countBySupportedArtistId(userId);
         return ResponseEntity.ok(Map.of("count", count));
     }
 
-    // 2. GET FOLLOWERS COUNT
-    // Matches: /v1/users/{id}/followers/count
     @GetMapping("/{userId}/followers/count")
     public ResponseEntity<Map<String, Long>> getFollowersCount(@PathVariable UUID userId) {
         long count = followRepository.countByFollowed_UserId(userId);
         return ResponseEntity.ok(Map.of("count", count));
     }
 
-    // 3. FOLLOW ACTION (for the SongPage "Follow" button)
     @PostMapping("/{artistId}/follow")
     public ResponseEntity<Void> followUser(@PathVariable UUID artistId, Authentication auth) {
         String email = auth.getName();
         User currentUser = userRepository.findByEmail(email)
             .orElseThrow(() -> new RuntimeException("User not found"));
-        
-        // Prevent self-follow
+
         if (currentUser.getUserId().equals(artistId)) {
             return ResponseEntity.badRequest().build();
         }
 
-        // Check if already following
         if (!followRepository.existsByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId)) {
             User artistToFollow = userRepository.findById(artistId)
                 .orElseThrow(() -> new RuntimeException("Artist not found"));
-            
+
             com.unis.entity.Follow follow = com.unis.entity.Follow.builder()
                 .follower(currentUser)
                 .followed(artistToFollow)
                 .build();
-            
+
             followRepository.save(follow);
         }
         return ResponseEntity.ok().build();
     }
 
-    // 4. UNFOLLOW ACTION
     @DeleteMapping("/{artistId}/follow")
     @jakarta.transaction.Transactional
     public ResponseEntity<Void> unfollowUser(@PathVariable UUID artistId, Authentication auth) {
         String email = auth.getName();
         User currentUser = userRepository.findByEmail(email)
             .orElseThrow(() -> new RuntimeException("User not found"));
-            
+
         followRepository.deleteByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId);
         return ResponseEntity.ok().build();
     }
 
-    // 5. CHECK IF FOLLOWING (for SongPage button state)
     @GetMapping("/{artistId}/is-following")
     public ResponseEntity<Map<String, Boolean>> isFollowing(@PathVariable UUID artistId, Authentication auth) {
         String email = auth.getName();
         User currentUser = userRepository.findByEmail(email)
             .orElseThrow(() -> new RuntimeException("User not found"));
-            
+
         boolean isFollowing = followRepository.existsByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId);
         return ResponseEntity.ok(Map.of("isFollowing", isFollowing));
     }
 
-    /**
-     * GET /api/v1/users/{userId}/total-plays
-     * Get total plays across all of an artist's songs
-     */
     @GetMapping("/{userId}/total-plays")
     public ResponseEntity<Map<String, Integer>> getTotalPlays(@PathVariable UUID userId) {
         try {
@@ -518,11 +504,7 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
             return ResponseEntity.ok(Map.of("totalPlays", 0));
         }
     }
-    
-    /**
-     * GET /api/v1/users/{userId}/total-votes
-     * Get total votes (score) across all of an artist's songs
-     */
+
     @GetMapping("/{userId}/total-votes")
     public ResponseEntity<Map<String, Integer>> getTotalVotes(@PathVariable UUID userId) {
         try {
@@ -533,11 +515,7 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
             return ResponseEntity.ok(Map.of("totalVotes", 0));
         }
     }
-    
-    /**
-     * GET /api/v1/users/{userId}/total-likes
-     * Get total likes across all of an artist's songs
-     */
+
     @GetMapping("/{userId}/total-likes")
     public ResponseEntity<Map<String, Integer>> getTotalLikes(@PathVariable UUID userId) {
         try {
@@ -548,6 +526,4 @@ public ResponseEntity<User> register(@RequestBody UserDto dto) {
             return ResponseEntity.ok(Map.of("totalLikes", 0));
         }
     }
-
-
 }
