@@ -12,6 +12,7 @@ import com.unis.entity.Genre;
 import com.unis.entity.Jurisdiction;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
+import com.unis.util.SecurityUtils;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
@@ -87,7 +88,8 @@ public class MediaService {
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Add song - EVICTS cache because new content affects trending/artist lists
+// Add song - EVICTS cache because new content affects trending/artist lists
+    // C1 + C6 FIX: artistId now comes from JWT, not from client JSON
     @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
     public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {
         try {
@@ -97,16 +99,16 @@ public class MediaService {
             if (req.getTitle() == null || req.getTitle().trim().isEmpty()) {
                 throw new IllegalArgumentException("Title is required");
             }
-            if (req.getArtistId() == null) {
-                throw new IllegalArgumentException("Artist ID is required and cannot be null");
-            }
             if (file == null || file.isEmpty()) {
                 throw new IllegalArgumentException("Audio file is required");
             }
 
-            // Resolve artist
-            User artist = userRepository.findById(req.getArtistId())
-                    .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+            // C6 FIX: Get artistId from JWT instead of req.getArtistId()
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+
+            // Resolve artist using authenticated user
+            User artist = userRepository.findById(authenticatedUserId)
+                    .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + authenticatedUserId));
 
             // Resolve genre (optional)
             Genre genre = null;
@@ -170,6 +172,7 @@ public class MediaService {
         }
     }
 
+    
     // NOT CACHED - private helper method
     private Integer computeDuration(MultipartFile file) {
         if (file == null || file.isEmpty()) {

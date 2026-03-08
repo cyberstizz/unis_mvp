@@ -93,6 +93,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/users/artists/active").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/profile").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/profile/photo").permitAll()
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/users/profile/photo").permitAll()                
                 .requestMatchers("/api/v1/users/me").permitAll()
                 .requestMatchers("/api/v1/jurisdictions/by-location").permitAll()
                 .requestMatchers("/api/v1/users/validate-referral/**").permitAll()

@@ -94,24 +94,59 @@
 ---
 
 ### `config/SecurityConfig.java`
-**Purpose:** Defines the Spring Security filter chain. Stateless JWT, CSRF disabled, configures public vs authenticated endpoints.
+**Purpose:** Defines the Spring Security filter chain. Stateless JWT, CSRF disabled, configures public vs authenticated vs admin-only endpoints.
 
 **Key Beans:** `passwordEncoder()` (BCrypt), `authenticationManager()`, `corsConfigurationSource()` (includes Netlify prod origin)
+
+**Filter Chain Rule Order (evaluated top to bottom):**
+
+| Priority | Pattern | Access | Fix |
+|----------|---------|--------|-----|
+| 1 | `OPTIONS /**` | permitAll | Preflight |
+| 2 | `/api/v1/admin/**` | `hasRole("ADMIN")` | C3 |
+| 3 | `POST /api/v1/awards/recompute-all` | `hasRole("ADMIN")` | C2 |
+| 4 | `POST /api/v1/awards/compute` | `hasRole("ADMIN")` | C2 |
+| 5 | `GET /api/v1/awards/cron/manual` | `hasRole("ADMIN")` | C2 |
+| 6 | `POST /api/v1/vote/awards/compute` | `hasRole("ADMIN")` | C2 |
+| 7 | `POST /api/v1/media/song` | authenticated | C1 |
+| 8 | `POST /api/v1/media/video` | authenticated | C6 |
+| 9 | `DELETE /api/v1/media/song/**` | authenticated | C6 |
+| 10 | `DELETE /api/v1/media/video/**` | authenticated | C6 |
+| 11 | `PATCH /api/v1/media/song/**` | authenticated | C6 |
+| 12 | `POST /api/v1/media/song/*/like` | authenticated | C6 |
+| 13 | `DELETE /api/v1/media/song/*/like` | authenticated | C6 |
+| 14 | `POST /api/v1/vote/submit` | authenticated | C6 |
+| 15 | `POST /api/v1/comments` | authenticated | C6 |
+| 16 | `PATCH /api/v1/comments/**` | authenticated | C6 |
+| 17 | `DELETE /api/v1/comments/**` | authenticated | C6 |
+| 18 | `PUT /api/v1/users/profile/*/photo` | authenticated | C4 |
+| 19 | `PUT /api/v1/users/profile/*/bio` | authenticated | C4 |
+| 20 | `PUT /api/v1/users/profile/*/password` | authenticated | C4 |
+| 21 | `PUT /api/v1/users/profile/*` | authenticated | C4 |
 
 **Public Endpoints (no token required):**
 
 | Pattern | Notes |
 |---------|-------|
 | `OPTIONS /**` | Preflight |
-| `/api/auth/**`, `/api/v1/users/register`, `/api/v1/users/login` | Auth flows |
-| `/api/v1/users/default-song`, `/api/v1/users/*/default-song` | Guest playback |
-| `/api/v1/users/artists/active`, `/api/v1/users/profile`, `/api/v1/users/profile/photo` | Public browse |
-| `/api/v1/users/me` | ⚠️ Likely unintentional |
-| `/api/v1/users/check-email`, `/api/v1/users/check-username`, `/api/v1/users/validate-referral/**` | Registration helpers |
+| `/api/auth/**` | Auth flows |
+| `/api/v1/users/register` | Registration |
+| `/api/v1/users/login` | Login |
+| `/api/v1/users/default-song` | Guest playback |
+| `/api/v1/users/*/default-song` | Guest playback by userId |
+| `/api/v1/users/artists/active` | Public browse |
+| `GET /api/v1/users/profile` | Public browse (GET only) |
+| `GET /api/v1/users/profile/photo` | Public browse (GET only) |
+| `/api/v1/users/me` | ⚠️ Still likely unintentional — review |
+| `/api/v1/users/check-email` | Registration helper |
+| `/api/v1/users/check-username` | Registration helper |
+| `/api/v1/users/validate-referral/**` | Registration helper |
 | `/api/v1/jurisdictions/by-location` | Onboarding geo-lookup |
-| `POST /api/v1/media/song` | ⚠️ Bug — should require auth |
-| `/api/v1/awards/recompute-all` | ⚠️ Bug — should require admin |
-| `/uploads/**`, `/actuator/**`, `/error/**` | Static files and ops |
+| `/uploads/**` | Static files (dev only) |
+| `/actuator/**` | Ops |
+| `/error/**` | Error pages |
+
+**Note:** `hasRole("ADMIN")` checks for Spring Security authority `ROLE_ADMIN`. This is populated by `UserDetailsServiceImpl` from the `admin_roles` table (see Section 7).
 
 ---
 
@@ -127,18 +162,29 @@
 | `role` | User role (String) |
 | `iat` / `exp` | Issued at / expiry (24h) |
 
-**Key Methods:** `generateToken(email, userId, role)`, `validateToken(token, userDetails)`, `validateToken(token)` (expiry-only overload), `extractUsername(token)`
+**Key Methods:** `generateToken(email, userId, role)`, `validateToken(token, userDetails)`, `validateToken(token)` (expiry-only overload), `extractUsername(token)`, `extractClaim(token, claimsResolver)` (public — used by JwtRequestFilter for userId extraction)
+
+**Internal Methods:** `extractAllClaims(token)` (private — parses and verifies JWT), `isTokenExpired(token)`, `createToken(claims, subject)`
 
 **Refactor Flag:** Uses deprecated JJWT setters — upgrade to JJWT 0.12+ builder pattern.
 
 ---
 
 ### `config/JwtRequestFilter.java`
-**Purpose:** `OncePerRequestFilter`. Extracts Bearer token, validates via `JwtUtil`, populates `SecurityContext`.
+**Purpose:** `OncePerRequestFilter`. Extracts Bearer token, validates via `JwtUtil`, populates `SecurityContext` with userId stored as credentials.
 
-**Filter Flow:** Request → extract Bearer token → `extractUsername` → `loadUserByUsername` → `validateToken` → set `SecurityContext` → `chain.doFilter()`
+**Filter Flow:** Request → extract Bearer token → `extractUsername` → `loadUserByUsername` → `validateToken` → extract `userId` claim → set `SecurityContext` with userId as credentials → `chain.doFilter()`
 
-**Refactor Flags:** Uses `System.out.println` for logging — replace with SLF4J. Only catches `IllegalArgumentException` and `ExpiredJwtException` — add `MalformedJwtException` and `SignatureException`.
+**C6 Fix Applied:** The `UsernamePasswordAuthenticationToken` now stores the JWT's `userId` claim as its credentials field (was `null` before). This allows any downstream code to retrieve the authenticated userId via `SecurityUtils.getAuthenticatedUserId()` without re-parsing the token.
+
+**Exception Handling:** Catches `IllegalArgumentException`, `ExpiredJwtException`, `MalformedJwtException`, and `SignatureException`.
+
+**Key code:**
+```java
+String userId = jwtUtil.extractClaim(token, claims -> claims.get("userId", String.class));
+UsernamePasswordAuthenticationToken authToken =
+    new UsernamePasswordAuthenticationToken(userDetails, userId, userDetails.getAuthorities());
+```
 
 ---
 
@@ -352,33 +398,38 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 |--------|------|------|-------------|
 | POST | `/api/v1/users/register` | Public | Register new user |
 | GET | `/api/v1/users/profile/{userId}` | Public | Fetch full profile |
-| PUT | `/api/v1/users/profile/{userId}/photo` | Public* | Update photo via URL |
-| PUT | `/api/v1/users/profile/{userId}/bio` | Public* | Update bio |
-| PUT | `/api/v1/users/profile/{userId}` | Public* | Update social URLs |
-| PUT | `/api/v1/users/profile/{userId}/password` | Public* | Change password |
+| PUT | `/api/v1/users/profile/{userId}/photo` | Required + Ownership (C4) | Update photo via URL |
+| PUT | `/api/v1/users/profile/{userId}/bio` | Required + Ownership (C4) | Update bio |
+| PUT | `/api/v1/users/profile/{userId}` | Required + Ownership (C4) | Update social URLs |
+| PUT | `/api/v1/users/profile/{userId}/password` | Required + Ownership (C4) | Change password |
 | GET | `/api/v1/users/artist/{artistId}` | Public | Artist profile |
 | GET | `/api/v1/users/artist/top` | Public | Top N artists by jurisdiction |
 | GET | `/api/v1/users/{userId}/default-song` | Public | Artist's pinned song |
-| DELETE | `/api/v1/users/me` | Required | Delete authenticated user |
+| DELETE | `/api/v1/users/me` | Required (via Authentication) | Delete authenticated user |
 | GET | `/api/v1/users/artists/active` | Public | All artists by score |
 | PATCH | `/api/v1/users/profile/photo` | Public | Anon photo upload (temp signup) |
-| PATCH | `/api/v1/users/profile` | Required | Update photo/bio via multipart |
-| PATCH | `/api/v1/users/default-song` | Required | Set default song |
-| GET | `/api/v1/users/referral-code/{userId}` | Public* | Get referral code |
+| PATCH | `/api/v1/users/profile` | Required (via Authentication) | Update photo/bio via multipart |
+| PATCH | `/api/v1/users/default-song` | Required (via Authentication) | Set default song |
+| GET | `/api/v1/users/referral-code/{userId}` | Public | Get referral code |
 | GET | `/api/v1/users/validate-referral/{code}` | Public | Validate referral code |
 | GET | `/api/v1/users/check-email` | Public | Email availability |
 | GET | `/api/v1/users/check-username` | Public | Username availability |
 | GET | `/api/v1/users/artists/with-preview` | Public | Artists with default song preview |
 | GET | `/api/v1/users/{userId}/supporters/count` | Public | Supporter count |
 | GET | `/api/v1/users/{userId}/followers/count` | Public | Follower count |
-| POST | `/api/v1/users/{artistId}/follow` | Required | Follow artist |
-| DELETE | `/api/v1/users/{artistId}/follow` | Required | Unfollow artist |
-| GET | `/api/v1/users/{artistId}/is-following` | Required | Check follow status |
+| POST | `/api/v1/users/{artistId}/follow` | Required (via Authentication) | Follow artist |
+| DELETE | `/api/v1/users/{artistId}/follow` | Required (via Authentication) | Unfollow artist |
+| GET | `/api/v1/users/{artistId}/is-following` | Required (via Authentication) | Check follow status |
 | GET | `/api/v1/users/{userId}/total-plays` | Public | Total plays |
 | GET | `/api/v1/users/{userId}/total-votes` | Public | Total vote score |
 | GET | `/api/v1/users/{userId}/total-likes` | Public | Total likes |
 
-**Refactor Flags:** `PUT /profile/{userId}/*` has no ownership check. Hardcoded `"UNIS-LAUNCH-2024"` bypass. N+1 in `getArtistsWithPreview`.
+**C4 Fix:** All PUT `/profile/{userId}/*` methods validate that `SecurityUtils.getAuthenticatedUserId()` matches the path `userId`. Returns 403 if mismatch.
+
+**Remaining Refactor Flags:**
+- Hardcoded `"UNIS-LAUNCH-2024"` bypass — remove before production (L17)
+- N+1 in `getArtistsWithPreview` — still present
+- `PATCH /profile/photo` temp endpoint — remove or secure before launch (L16)
 
 ---
 
@@ -386,16 +437,16 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/media/song` | **Public (bug)** | Upload song |
-| POST | `/api/v1/media/video` | Public* | Upload video |
-| DELETE | `/api/v1/media/song/{songId}` | Public* | Delete song |
-| PATCH | `/api/v1/media/song/{songId}` | Public* | Update song metadata |
-| DELETE | `/api/v1/media/video/{videoId}` | Public* | Delete video |
-| POST | `/api/v1/media/song/{songId}/play` | Public | Record play |
-| POST | `/api/v1/media/video/{videoId}/play` | Public | Record video play |
-| POST | `/api/v1/media/song/{songId}/like` | Public* | Like song |
-| DELETE | `/api/v1/media/song/{songId}/like` | Public* | Unlike song |
-| GET | `/api/v1/media/song/{songId}/is-liked` | Public* | Check like status |
+| POST | `/api/v1/media/song` | Required (C1) | Upload song — artistId from JWT (C6) |
+| POST | `/api/v1/media/video` | Required | Upload video |
+| DELETE | `/api/v1/media/song/{songId}` | Required | Delete song |
+| PATCH | `/api/v1/media/song/{songId}` | Required | Update song metadata |
+| DELETE | `/api/v1/media/video/{videoId}` | Required | Delete video |
+| POST | `/api/v1/media/song/{songId}/play` | Public | Record play — uses JWT userId if available, falls back to query param |
+| POST | `/api/v1/media/video/{videoId}/play` | Public | Record video play — same fallback pattern |
+| POST | `/api/v1/media/song/{songId}/like` | Required | Like song — userId from JWT (C6) |
+| DELETE | `/api/v1/media/song/{songId}/like` | Required | Unlike song — userId from JWT (C6) |
+| GET | `/api/v1/media/song/{songId}/is-liked` | Public | Check like status — uses JWT if available, falls back to query param |
 | GET | `/api/v1/media/song/{songId}/likes/count` | Public | Like count |
 | GET | `/api/v1/media/songs/jurisdiction/{jurisdictionId}` | Public | Top songs by jurisdiction |
 | GET | `/api/v1/media/videos/jurisdiction/{jurisdictionId}` | Public | Top videos by jurisdiction |
@@ -406,7 +457,11 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | GET | `/api/v1/media/trending` | Public | Mixed songs + videos by score |
 | GET | `/api/v1/media/trending/today` | Public | Songs by `plays_today` |
 | GET | `/api/v1/media/new` | Public | Newest songs by jurisdiction |
-| PATCH | `/api/v1/media/song/{songId}/lyrics` | Public* | Update lyrics only |
+| PATCH | `/api/v1/media/song/{songId}/lyrics` | Required | Update lyrics only |
+
+**C1 + C6 Fixes:** Song upload now requires authentication (was public). All mutation endpoints derive userId from JWT via `SecurityUtils.getAuthenticatedUserId()`. Play tracking and is-liked use JWT with fallback to query param for backward compatibility.
+
+**Remaining Refactor Flags:** `SongWithStatsRowMapper` N+1 per row. `addVideo` and `deleteVideo` have no cache eviction.
 
 ---
 
@@ -414,16 +469,22 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/vote/submit` | Public* | Submit vote |
-| GET | `/api/v1/vote/eligible-jurisdictions` | Public* | Eligible jurisdictions |
+| POST | `/api/v1/vote/submit` | Required | Submit vote — userId from JWT (C6) |
+| GET | `/api/v1/vote/eligible-jurisdictions` | Required | Eligible jurisdictions — userId from JWT with query param fallback (C6) |
 | GET | `/api/v1/vote/results` | Public | Filtered vote results |
 | GET | `/api/v1/vote/total/{targetType}/{targetId}` | Public | Total votes for target |
 | GET | `/api/v1/vote/votes/user/{userId}` | Public | Votes cast by user |
 | GET | `/api/v1/vote/nominees` | Public | Top nominees |
 | GET | `/api/v1/vote/check-eligibility` | Public | Eligibility check |
 | GET | `/api/v1/vote/leaderboards` | Public | Ranked leaderboard |
-| POST | `/api/v1/vote/awards/compute` | Public* | Trigger award computation (duplicate) |
-| GET | `/api/v1/vote/history` | Required | Authenticated user's vote history |
+| POST | `/api/v1/vote/awards/compute` | Admin only (C2) | Trigger award computation |
+| GET | `/api/v1/vote/history` | Required (via Authentication) | Authenticated user's vote history |
+
+**C6 Fix:** `submitVote` uses `SecurityUtils.getAuthenticatedUserId()` instead of `req.getUserId()`. `getEligibleJurisdictions` uses JWT with fallback.
+
+**Note:** `getVoteHistory` already used `Authentication auth` parameter correctly — no change needed.
+
+**Remaining Refactor Flag:** Duplicate `computeDailyAwards` — remove from `VoteService` (M1).
 
 ---
 
@@ -433,11 +494,13 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 |--------|------|------|-------------|
 | GET | `/api/v1/awards/leaderboards` | Public | Live leaderboards |
 | GET | `/api/v1/awards/past` | Public | Past awards with filters |
-| GET | `/api/v1/awards/cron/manual` | Public* | Manual daily trigger |
-| POST | `/api/v1/awards/compute` | Public* | Compute awards for params |
-| POST | `/api/v1/awards/recompute-all` | **Public (bug)** | Wipe and recompute all history |
+| GET | `/api/v1/awards/cron/manual` | Admin only (C2) | Manual daily trigger |
+| POST | `/api/v1/awards/compute` | Admin only (C2) | Compute awards for params |
+| POST | `/api/v1/awards/recompute-all` | Admin only (C2) | Wipe and recompute all history |
 | GET | `/api/v1/awards/winner` | Public | Single winner for category/date |
 | GET | `/api/v1/awards/artist/{artistId}` | Public | Paginated awards for artist |
+
+**C2 Fix:** All destructive/compute endpoints now require `ROLE_ADMIN`.
 
 ---
 
@@ -479,14 +542,16 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/comments` | Public* | Create comment or reply |
+| POST | `/api/v1/comments` | Required | Create comment — userId from JWT (C6) |
 | GET | `/api/v1/comments/song/{songId}` | Public | All comments for song |
 | GET | `/api/v1/comments/song/{songId}/paginated` | Public | Paginated comments |
 | GET | `/api/v1/comments/{commentId}` | Public | Single comment |
 | GET | `/api/v1/comments/{commentId}/replies` | Public | Replies |
 | GET | `/api/v1/comments/song/{songId}/count` | Public | Comment count |
-| PATCH | `/api/v1/comments/{commentId}` | Public* | Update comment |
-| DELETE | `/api/v1/comments/{commentId}` | Public* | Delete comment |
+| PATCH | `/api/v1/comments/{commentId}` | Required | Update comment — userId from JWT (C6) |
+| DELETE | `/api/v1/comments/{commentId}` | Required | Delete comment — userId from JWT (C6) |
+
+**C6 Fix:** All mutation endpoints use `SecurityUtils.getAuthenticatedUserId()` instead of client-supplied `userId` query parameter. The query param is kept as `required = false` for backward compatibility but is ignored by the backend.
 
 ---
 
@@ -497,10 +562,12 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | GET | `/api/v1/earnings/{artistId}` | Public* | Daily earnings stub |
 | GET | `/api/v1/earnings/{artistId}/breakdown` | Public* | Earnings breakdown stub |
 | GET | `/uploads/{filename}` | Public | Serve local file (dev only) |
-| GET | `/api/v1/admin/cache/stats` | **Public (bug)** | Cache stats |
-| DELETE | `/api/v1/admin/cache/clear` | **Public (bug)** | Clear all caches |
-| DELETE | `/api/v1/admin/cache/clear/{cacheName}` | **Public (bug)** | Clear specific cache |
-| GET | `/api/v1/admin/cache/names` | **Public (bug)** | List cache names |
+| GET | `/api/v1/admin/cache/stats` | Admin only (C3) | Cache stats |
+| DELETE | `/api/v1/admin/cache/clear` | Admin only (C3) | Clear all caches |
+| DELETE | `/api/v1/admin/cache/clear/{cacheName}` | Admin only (C3) | Clear specific cache |
+| GET | `/api/v1/admin/cache/names` | Admin only (C3) | List cache names |
+
+**C3 Fix:** All `/api/v1/admin/**` endpoints now require `ROLE_ADMIN`.
 
 ---
 
@@ -514,7 +581,7 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | `UserDto` | `UserController` | Multi-purpose catch-all — registration, photo, bio, password |
 | `SongUploadRequest` | `MediaController` | Song metadata from JSON multipart |
 | `VideoUploadRequest` | `MediaController` | Video metadata — mirrors song without `explicit`/`lyrics` |
-| `VoteRequest` | `VoteController` | Vote submission — `userId` should come from JWT |
+| `VoteRequest` | `VoteController` | Vote submission — `userId` field present but ignored; backend uses JWT (C6) |
 | `VoteHistoryDto` | `VoteController` | Vote history item with `nomineeName`, `nomineeImage`, `interval` |
 | `LeaderboardDto` | `VoteController` | `rank`, `name`, `votes`, `artwork`, `artist`, `targetId` |
 | `AwardDto` | **Unused in controller** | `AwardController` returns entity directly — should use this DTO |
@@ -533,10 +600,10 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | POST | `/api/auth/logout` | Optional | Auth |
 | POST | `/api/v1/users/register` | Public | User |
 | GET | `/api/v1/users/profile/{userId}` | Public | User |
-| PUT | `/api/v1/users/profile/{userId}/photo` | Public* | User |
-| PUT | `/api/v1/users/profile/{userId}/bio` | Public* | User |
-| PUT | `/api/v1/users/profile/{userId}` | Public* | User |
-| PUT | `/api/v1/users/profile/{userId}/password` | Public* | User |
+| PUT | `/api/v1/users/profile/{userId}/photo` | Required + Ownership (C4) | User |
+| PUT | `/api/v1/users/profile/{userId}/bio` | Required + Ownership (C4) | User |
+| PUT | `/api/v1/users/profile/{userId}` | Required + Ownership (C4) | User |
+| PUT | `/api/v1/users/profile/{userId}/password` | Required + Ownership (C4) | User |
 | GET | `/api/v1/users/artist/{artistId}` | Public | User |
 | GET | `/api/v1/users/artist/top` | Public | User |
 | GET | `/api/v1/users/{userId}/default-song` | Public | User |
@@ -545,7 +612,7 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | PATCH | `/api/v1/users/profile/photo` | Public | User |
 | PATCH | `/api/v1/users/profile` | Required | User |
 | PATCH | `/api/v1/users/default-song` | Required | User |
-| GET | `/api/v1/users/referral-code/{userId}` | Public* | User |
+| GET | `/api/v1/users/referral-code/{userId}` | Public | User |
 | GET | `/api/v1/users/validate-referral/{code}` | Public | User |
 | GET | `/api/v1/users/check-email` | Public | User |
 | GET | `/api/v1/users/check-username` | Public | User |
@@ -558,16 +625,16 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | GET | `/api/v1/users/{userId}/total-plays` | Public | User |
 | GET | `/api/v1/users/{userId}/total-votes` | Public | User |
 | GET | `/api/v1/users/{userId}/total-likes` | Public | User |
-| POST | `/api/v1/media/song` | **Public (bug)** | Media |
-| POST | `/api/v1/media/video` | Public* | Media |
-| DELETE | `/api/v1/media/song/{songId}` | Public* | Media |
-| PATCH | `/api/v1/media/song/{songId}` | Public* | Media |
-| DELETE | `/api/v1/media/video/{videoId}` | Public* | Media |
-| POST | `/api/v1/media/song/{songId}/play` | Public | Media |
-| POST | `/api/v1/media/video/{videoId}/play` | Public | Media |
-| POST | `/api/v1/media/song/{songId}/like` | Public* | Media |
-| DELETE | `/api/v1/media/song/{songId}/like` | Public* | Media |
-| GET | `/api/v1/media/song/{songId}/is-liked` | Public* | Media |
+| POST | `/api/v1/media/song` | Required (C1) | Media |
+| POST | `/api/v1/media/video` | Required | Media |
+| DELETE | `/api/v1/media/song/{songId}` | Required | Media |
+| PATCH | `/api/v1/media/song/{songId}` | Required | Media |
+| DELETE | `/api/v1/media/video/{videoId}` | Required | Media |
+| POST | `/api/v1/media/song/{songId}/play` | Public (JWT fallback) | Media |
+| POST | `/api/v1/media/video/{videoId}/play` | Public (JWT fallback) | Media |
+| POST | `/api/v1/media/song/{songId}/like` | Required (C6) | Media |
+| DELETE | `/api/v1/media/song/{songId}/like` | Required (C6) | Media |
+| GET | `/api/v1/media/song/{songId}/is-liked` | Public (JWT fallback) | Media |
 | GET | `/api/v1/media/song/{songId}/likes/count` | Public | Media |
 | GET | `/api/v1/media/songs/jurisdiction/{jurisdictionId}` | Public | Media |
 | GET | `/api/v1/media/videos/jurisdiction/{jurisdictionId}` | Public | Media |
@@ -578,22 +645,22 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | GET | `/api/v1/media/trending` | Public | Media |
 | GET | `/api/v1/media/trending/today` | Public | Media |
 | GET | `/api/v1/media/new` | Public | Media |
-| PATCH | `/api/v1/media/song/{songId}/lyrics` | Public* | Media |
-| POST | `/api/v1/vote/submit` | Public* | Vote |
-| GET | `/api/v1/vote/eligible-jurisdictions` | Public* | Vote |
+| PATCH | `/api/v1/media/song/{songId}/lyrics` | Required | Media |
+| POST | `/api/v1/vote/submit` | Required (C6) | Vote |
+| GET | `/api/v1/vote/eligible-jurisdictions` | Required (C6) | Vote |
 | GET | `/api/v1/vote/results` | Public | Vote |
 | GET | `/api/v1/vote/total/{targetType}/{targetId}` | Public | Vote |
 | GET | `/api/v1/vote/votes/user/{userId}` | Public | Vote |
 | GET | `/api/v1/vote/nominees` | Public | Vote |
 | GET | `/api/v1/vote/check-eligibility` | Public | Vote |
 | GET | `/api/v1/vote/leaderboards` | Public | Vote |
-| POST | `/api/v1/vote/awards/compute` | Public* | Vote |
+| POST | `/api/v1/vote/awards/compute` | Admin only (C2) | Vote |
 | GET | `/api/v1/vote/history` | Required | Vote |
 | GET | `/api/v1/awards/leaderboards` | Public | Award |
 | GET | `/api/v1/awards/past` | Public | Award |
-| GET | `/api/v1/awards/cron/manual` | Public* | Award |
-| POST | `/api/v1/awards/compute` | Public* | Award |
-| POST | `/api/v1/awards/recompute-all` | **Public (bug)** | Award |
+| GET | `/api/v1/awards/cron/manual` | Admin only (C2) | Award |
+| POST | `/api/v1/awards/compute` | Admin only (C2) | Award |
+| POST | `/api/v1/awards/recompute-all` | Admin only (C2) | Award |
 | GET | `/api/v1/awards/winner` | Public | Award |
 | GET | `/api/v1/awards/artist/{artistId}` | Public | Award |
 | GET | `/api/v1/jurisdictions/{jurisdictionId}` | Public | Jurisdiction |
@@ -615,21 +682,21 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 | POST | `/api/playlists/{playlistId}/tracks` | Required | Playlist |
 | DELETE | `/api/playlists/{playlistId}/tracks/{playlistItemId}` | Required | Playlist |
 | PUT | `/api/playlists/{playlistId}/reorder` | Required | Playlist |
-| POST | `/api/v1/comments` | Public* | Comment |
+| POST | `/api/v1/comments` | Required (C6) | Comment |
 | GET | `/api/v1/comments/song/{songId}` | Public | Comment |
 | GET | `/api/v1/comments/song/{songId}/paginated` | Public | Comment |
 | GET | `/api/v1/comments/{commentId}` | Public | Comment |
 | GET | `/api/v1/comments/{commentId}/replies` | Public | Comment |
 | GET | `/api/v1/comments/song/{songId}/count` | Public | Comment |
-| PATCH | `/api/v1/comments/{commentId}` | Public* | Comment |
-| DELETE | `/api/v1/comments/{commentId}` | Public* | Comment |
+| PATCH | `/api/v1/comments/{commentId}` | Required (C6) | Comment |
+| DELETE | `/api/v1/comments/{commentId}` | Required (C6) | Comment |
 | GET | `/api/v1/earnings/{artistId}` | Public* | Earnings |
 | GET | `/api/v1/earnings/{artistId}/breakdown` | Public* | Earnings |
 | GET | `/uploads/{filename}` | Public | File |
-| GET | `/api/v1/admin/cache/stats` | **Public (bug)** | Admin |
-| DELETE | `/api/v1/admin/cache/clear` | **Public (bug)** | Admin |
-| DELETE | `/api/v1/admin/cache/clear/{cacheName}` | **Public (bug)** | Admin |
-| GET | `/api/v1/admin/cache/names` | **Public (bug)** | Admin |
+| GET | `/api/v1/admin/cache/stats` | Admin only (C3) | Admin |
+| DELETE | `/api/v1/admin/cache/clear` | Admin only (C3) | Admin |
+| DELETE | `/api/v1/admin/cache/clear/{cacheName}` | Admin only (C3) | Admin |
+| GET | `/api/v1/admin/cache/names` | Admin only (C3) | Admin |
 
 ---
 
@@ -687,7 +754,7 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 - Soft delete preserves votes and awards for historical integrity — confirmed intentional
 - `getTopArtistsByJurisdiction` returns partial entities — `userId`, `username`, `defaultSongId` only
 
-**Refactor Flag:** Ownership not validated in service either — `PUT /profile/{userId}/*` fix must be applied at both controller and service layers.
+**C4 Fix Note:** Ownership is now validated at the controller layer via `SecurityUtils.getAuthenticatedUserId()` — controller rejects mismatched userId before calling service methods.
 
 ---
 
@@ -700,7 +767,9 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 - Unlike does not deduct points — intentional; points represent historical engagement
 - Duration computed via Apache Tika — falls back silently to 180s (3 min) if detection fails
 
-**Refactor Flags:** `SongWithStatsRowMapper` N+1 per row. `addVideo` and `deleteVideo` have no cache eviction.
+**C6 Fix Applied:** `addSong()` now derives `artistId` from `SecurityUtils.getAuthenticatedUserId()` instead of the client-supplied value in the JSON metadata. The `req.getArtistId()` field is ignored.
+
+**Remaining Refactor Flags:** `SongWithStatsRowMapper` N+1 per row. `addVideo` and `deleteVideo` have no cache eviction.
 
 ---
 
@@ -772,7 +841,9 @@ AWS S3 SDK v2 with R2 endpoint override. `@PostConstruct initializeS3Client()`. 
 ### `UserDetailsServiceImpl.java`
 Loads `UserDetails` by email for JWT filter. Empty authorities list — role enforcement via JWT claims and `SecurityConfig` only.
 
-**Refactor Flag:** No `deletedAt` filter — soft-deleted users can authenticate with valid JWT.
+**C5 Fix Applied:** Now calls `userRepository.findActiveByEmail(email)` instead of `findByEmail(email)`. The `findActiveByEmail` method filters `WHERE deleted_at IS NULL`, preventing soft-deleted users from authenticating.
+
+**Auth Flow:** `JwtRequestFilter` → `loadUserByUsername(email)` → `findActiveByEmail(email)` → if user not found (including soft-deleted) → `UsernameNotFoundException` → 401 → frontend clears token and redirects to login.
 
 ---
 
@@ -814,17 +885,23 @@ Switch via `spring.profiles.active` — no code changes needed.
 ### `UserRepository`
 | Method | Type | Description |
 |--------|------|-------------|
-| `findByEmail(email)` | JPQL | `Optional<User>` — primary auth lookup |
-| `findByUsername(username)` | JPQL | Auth by username |
-| `existsByEmail` / `existsByUsername` | JPQL | Registration checks |
-| `findByReferralCode(code)` | JPQL | Referral validation |
+| `findByEmail(email)` | JPQL | `Optional<User>` — general email lookup (includes soft-deleted users) |
+| `findActiveByEmail(email)` | JPQL | `Optional<User>` — auth lookup filtered by `deleted_at IS NULL` (C5) |
+| `findByUsername(username)` | Derived | Auth by username |
+| `existsByEmail` / `existsByUsername` | Derived | Registration checks |
+| `existsByReferralCode(code)` | Derived | Referral code uniqueness |
+| `findByReferralCode(code)` | Derived | Referral validation |
+| `findByIdWithJurisdiction(id)` | JPQL | Fetch join with jurisdiction only |
 | `findByIdWithAssociations(id)` | JPQL | Fetch join with jurisdiction + genre |
 | `findTopArtistsByJurisdictionWithHierarchy(jurisdictionId, limit)` | Native | Recursive CTE + join ordered by score |
 | `computeUserScores()` | Native | Multi-subquery score computation |
-| `incrementScore(id, increment)` | JPQL | Real-time increment |
-| `nullifySupportedArtistForListeners(artistId)` | JPQL | Cleanup on artist deletion |
-
-**Refactor Flag:** Missing `@Where(clause = "deleted_at IS NULL")` — soft-deleted users not filtered from auth.
+| `updateUserScoreAndLevel(id, score, level)` | JPQL `@Modifying` | Batch score update |
+| `incrementScore(id, increment)` | JPQL `@Modifying` | Real-time increment |
+| `nullifySupportedArtistForListeners(artistId)` | JPQL `@Modifying` | Cleanup on artist deletion |
+| `findByRoleOrderByScoreDesc(role)` | JPQL | Artists sorted by score |
+| `findAllByRole(role)` | Derived | All users of a role |
+| `findByRoleAndJurisdiction(role, jurisdictionId)` | JPQL | Filtered by role and jurisdiction |
+| `countBySupportedArtistId(artistId)` | Derived | Supporter count for artist |
 
 ---
 
@@ -1005,17 +1082,29 @@ Mirrors `SongPlayRepository`. **Refactor Flag:** Missing `countTotalPlaysByVideo
 
 ## 13. Utility Classes
 
+### `SecurityUtils.java` (NEW — C6)
+**Package:** `com.unis.util`
+**Purpose:** Extracts the authenticated user's UUID from the Spring SecurityContext. Used by all controllers after C6 fix to derive userId from JWT instead of client-supplied values.
+
+| Method | Description |
+|--------|-------------|
+| `getAuthenticatedUserId()` | Returns `UUID` from the credentials field of `UsernamePasswordAuthenticationToken`, which is populated by `JwtRequestFilter` from the JWT `userId` claim. |
+
+**Requires:** C6 change in `JwtRequestFilter` that stores userId as credentials.
+
+---
+
 ### `ReferralCodeGenerator.java`
 Stateless utility. Generates `USERNAME-XXXXX` format codes using `SecureRandom`. No Spring annotations.
 
 | Method | Description |
 |--------|-------------|
 | `generate(username)` | Sanitizes (uppercase, strip non-alphanumeric, cap 20 chars), appends 5-char random suffix |
-| `generateUnique(username, existsCheck)` | Retry loop max 10 attempts. Falls back to `USERNAME-{currentTimeMillis}`. |
+| `generateUnique(username, existsCheck)` | Retry loop max 10 attempts. Falls back to double-length random suffix. |
 
-**Refactor Flags:**
-- `substring` uses `username.length()` not `sanitized.length()` — `StringIndexOutOfBoundsException` risk with special-character usernames
-- Timestamp fallback produces guessable code — replace with random suffix
+**C7 Fix Applied:** `generate()` now uses `sanitized.length()` instead of `username.length()` in the substring call, preventing `StringIndexOutOfBoundsException` with special-character usernames.
+
+**L13 Fix Applied:** `generateUnique()` fallback now uses a 10-character random suffix instead of `System.currentTimeMillis()`, eliminating guessable codes.
 
 ---
 
@@ -1023,15 +1112,15 @@ Stateless utility. Generates `USERNAME-XXXXX` format codes using `SecureRandom`.
 
 ### 🔴 Critical — Security / Data Integrity
 
-| # | Issue | Location | Action |
+| # | Issue | Location | Status |
 |---|-------|----------|--------|
-| C1 | `POST /api/v1/media/song` is public | `SecurityConfig`, `MediaController` | Require auth. Derive `artistId` from JWT. |
-| C2 | `POST /api/v1/awards/recompute-all` is public and destructive | `SecurityConfig`, `AwardController` | Require `ROLE_ADMIN`. |
-| C3 | All `/api/v1/admin/*` endpoints are public | `SecurityConfig`, `AdminController` | Require `ROLE_ADMIN` on all 4. |
-| C4 | `PUT /profile/{userId}/*` no ownership check | `UserController`, `UserService` | Verify caller JWT matches `userId` before any mutation. |
-| C5 | Soft-deleted users can still authenticate | `UserRepository`, `UserDetailsServiceImpl` | Add `deleted_at IS NULL` to auth query in both places. |
-| C6 | `userId` supplied by client not JWT | `VoteController`, `MediaController`, `CommentController` | Replace all with `SecurityContextHolder` extraction. |
-| C7 | `StringIndexOutOfBoundsException` in `ReferralCodeGenerator` | `ReferralCodeGenerator.java` | Fix `substring` to use `sanitized.length()`. |
+| C1 | `POST /api/v1/media/song` was public | `SecurityConfig`, `MediaController` | ✅ FIXED — requires auth, artistId from JWT |
+| C2 | `POST /api/v1/awards/recompute-all` was public and destructive | `SecurityConfig`, `AwardController` | ✅ FIXED — requires `ROLE_ADMIN` |
+| C3 | All `/api/v1/admin/*` endpoints were public | `SecurityConfig`, `AdminController` | ✅ FIXED — requires `ROLE_ADMIN` |
+| C4 | `PUT /profile/{userId}/*` no ownership check | `UserController` | ✅ FIXED — validates JWT userId matches path userId, returns 403 on mismatch |
+| C5 | Soft-deleted users could still authenticate | `UserRepository`, `UserDetailsServiceImpl` | ✅ FIXED — `findActiveByEmail` filters `deleted_at IS NULL` |
+| C6 | `userId` supplied by client not JWT | `JwtRequestFilter`, `SecurityUtils` (new), `VoteController`, `MediaController`, `CommentController`, `MediaService` | ✅ FIXED — all mutations use `SecurityUtils.getAuthenticatedUserId()` |
+| C7 | `StringIndexOutOfBoundsException` in `ReferralCodeGenerator` | `ReferralCodeGenerator.java` | ✅ FIXED — uses `sanitized.length()` |
 
 ---
 
@@ -1073,7 +1162,7 @@ Stateless utility. Generates `USERNAME-XXXXX` format codes using `SecureRandom`.
 | L10 | Deprecated vote duplicate-check method | `VoteRepository` | Confirm no call sites, delete. |
 | L11 | `PlaylistRepository.findByUser` requires full `User` | `PlaylistRepository` | Add `findByUser_UserId(UUID)`. |
 | L12 | `VotingIntervalRepository` results not cached | `VotingIntervalRepository` | Add Caffeine cache — static config data. |
-| L13 | `ReferralCodeGenerator` timestamp fallback guessable | `ReferralCodeGenerator` | Replace with random suffix. |
+| L13 | ~~`ReferralCodeGenerator` timestamp fallback guessable~~ | `ReferralCodeGenerator` | ✅ FIXED alongside C7. |
 | L14 | No minimum prefix length guard | `ReferralCodeGenerator` | Pad prefix to min 3 chars. |
 | L15 | `createFallbackAwards` calls `findAll()` | `AwardService` | Replace with top-N score query. |
 | L16 | `PATCH /profile/photo` temp endpoint present | `UserController` | Remove or secure before launch. |
@@ -1081,6 +1170,4 @@ Stateless utility. Generates `USERNAME-XXXXX` format codes using `SecureRandom`.
 
 ---
 
-*End of Backend Architecture Documentation*  
-*Frontend equivalent: `unis-web/docs/ARCHITECTURE.md`*  
-*Mobile equivalent: `unis-mobile/docs/ARCHITECTURE.md` (not yet produced)*
+*End of Backend Architecture Documentation*
