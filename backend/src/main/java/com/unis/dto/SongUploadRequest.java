@@ -19,4 +19,5 @@ public class SongUploadRequest {
     private Integer duration;  
     private Boolean explicit = false;
     private String lyrics;
+    private String isrc;
 }

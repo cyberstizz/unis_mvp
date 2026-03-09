@@ -65,7 +65,7 @@ public class MediaController {
             @RequestParam(value = "artwork", required = false) MultipartFile artwork,
             @RequestParam(value = "lyrics", required = false) String lyrics) {
         try {
-            Song updated = mediaService.updateSong(songId, description, artwork, lyrics);
+            Song updated = mediaService.updateSong(songId, description, artwork, lyrics, null);
             return ResponseEntity.ok(updated);
         } catch (Exception e) {
             log.error("Failed to update song {}: {}", songId, e.getMessage());
@@ -286,7 +286,7 @@ public class MediaController {
             @PathVariable UUID songId,
             @RequestBody Map<String, String> body) {
         String lyrics = body.get("lyrics");
-        Song updated = mediaService.updateSong(songId, null, null, lyrics);
+        Song updated = mediaService.updateSong(songId, null, null, lyrics, null);
         return ResponseEntity.ok(updated);
     }
 }

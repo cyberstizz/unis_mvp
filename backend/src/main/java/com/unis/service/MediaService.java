@@ -156,6 +156,16 @@ public class MediaService {
             song.setPlaysToday(0);
             song.setLastPlayResetDate(LocalDate.now());
 
+
+            // ISRC (optional)
+            if (req.getIsrc() != null && !req.getIsrc().isBlank()) {
+                String cleanIsrc = req.getIsrc().replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+                if (cleanIsrc.length() != 12) {
+                    throw new IllegalArgumentException("ISRC must be exactly 12 alphanumeric characters");
+                }
+                song.setIsrc(cleanIsrc);
+            }
+
             Song savedSong = songRepository.save(song);
 
             // If this is the artist's first song (no default song set), make it the default
@@ -281,7 +291,7 @@ public class MediaService {
 
     // Update song (description and artwork only) - EVICTS cache
     @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
-    public Song updateSong(UUID songId, String description, MultipartFile artwork, String lyrics) {
+    public Song updateSong(UUID songId, String description, MultipartFile artwork, String lyrics, String isrc) {
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
 
@@ -300,6 +310,18 @@ public class MediaService {
 
         if (lyrics != null) {
             song.setLyrics(lyrics);
+        }
+
+        if (isrc != null) {
+            if (isrc.isBlank()) {
+                song.setIsrc(null); // Allow clearing
+            } else {
+                String cleanIsrc = isrc.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+                if (cleanIsrc.length() != 12) {
+                    throw new RuntimeException("ISRC must be exactly 12 alphanumeric characters");
+                }
+                song.setIsrc(cleanIsrc);
+            }
         }
 
         return songRepository.save(song);
