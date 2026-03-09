@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.io.IOException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 
 @Repository
@@ -82,4 +84,10 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> findByRoleAndJurisdiction(@Param("role") User.Role role, @Param("jurisdictionId") UUID jurisdictionId);
 
     long countBySupportedArtistId(UUID artistId);
+
+    @Query("SELECT u FROM User u WHERE (LOWER(u.username) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "OR LOWER(u.email) LIKE LOWER(CONCAT('%', :search, '%'))) AND u.deletedAt IS NULL")
+    Page<User> searchUsers(@Param("search") String search, Pageable pageable);
+
+    Page<User> findByRole(User.Role role, Pageable pageable);
 }
