@@ -66,6 +66,32 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/awards/cron/manual").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/v1/vote/awards/compute").hasRole("ADMIN")
 
+
+                // ===== ADMIN DASHBOARD ENDPOINTS =====
+
+                // Super Admin only
+                .requestMatchers("/api/v1/admin/roles/**").hasRole("SUPER_ADMIN")
+                .requestMatchers("/api/v1/admin/audit/**").hasRole("SUPER_ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/users/**").hasRole("SUPER_ADMIN")
+
+                // Admin + Super Admin
+                .requestMatchers("/api/v1/admin/users/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/admin/dmca/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/admin/dmca/*/takedown").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/songs/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/videos/**").hasRole("ADMIN")
+
+                // All admin tiers (moderator and above)
+                .requestMatchers("/api/v1/admin/analytics/**").hasRole("MODERATOR")
+                .requestMatchers(HttpMethod.GET, "/api/v1/admin/dmca/**").hasRole("MODERATOR")
+                .requestMatchers("/api/v1/admin/comments/**").hasRole("MODERATOR")
+
+                // Public endpoints (no auth required)
+                .requestMatchers(HttpMethod.POST, "/api/v1/dmca/submit").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/activity/track").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/auth/forgot-password").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/auth/reset-password").permitAll()
+
                 // ===== AUTHENTICATED MUTATIONS — C1 + C6 =====
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/video").authenticated()

@@ -65,6 +65,12 @@ public class Song {
     @Column(name = "last_play_reset_date")
     private LocalDate lastPlayResetDate = LocalDate.now();
 
+    @Column(length = 15)
+    private String isrc;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     // Transient field (not stored in DB, calculated on fetch)
     @Transient
     private Long playCount;
