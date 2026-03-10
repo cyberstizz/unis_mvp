@@ -25,8 +25,9 @@ public interface DmcaClaimRepository extends JpaRepository<DmcaClaim, UUID> {
     @Query("SELECT COUNT(c) FROM DmcaClaim c WHERE c.createdAt >= :since")
     long countSince(@Param("since") LocalDateTime since);
 
-    @Query("SELECT AVG(EXTRACT(EPOCH FROM (c.resolvedAt - c.createdAt)) / 86400) " +
-           "FROM DmcaClaim c WHERE c.resolvedAt IS NOT NULL AND c.createdAt >= :since")
+    @Query(value = "SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 86400) " +
+           "FROM dmca_claims WHERE resolved_at IS NOT NULL AND created_at >= :since",
+           nativeQuery = true)
     Double averageResolutionDays(@Param("since") LocalDateTime since);
 
     @Query("SELECT c FROM DmcaClaim c WHERE c.infringSong.artist.userId = :artistId AND c.status = 'upheld'")
