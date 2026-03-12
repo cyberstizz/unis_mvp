@@ -2,6 +2,7 @@ package com.unis.controller;
 
 import com.unis.entity.DmcaClaim;
 import com.unis.entity.DmcaCounterNotice;
+import com.unis.entity.Comment;
 import com.unis.repository.CommentRepository;
 import com.unis.service.DmcaService;
 import com.unis.service.ModerationService;
@@ -14,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -111,13 +113,36 @@ public class AdminModerationController {
     /**
      * GET /api/v1/admin/comments/recent?page=0&size=20
      */
-    @GetMapping("/comments/recent")
+   @GetMapping("/comments/recent")
     public ResponseEntity<?> getRecentComments(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return ResponseEntity.ok(
-                commentRepository.findRecentComments(
-                        PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))));
+        Page<Comment> commentPage = commentRepository.findRecentComments(
+                PageRequest.of(page, size));
+
+        // Transform to maps because Comment.song has @JsonBackReference
+        List<Map<String, Object>> content = commentPage.getContent().stream().map(c -> {
+            Map<String, Object> map = new java.util.HashMap<>();
+            map.put("commentId", c.getCommentId());
+            map.put("content", c.getContent());
+            map.put("createdAt", c.getCreatedAt());
+            map.put("user", Map.of(
+                "userId", c.getUser().getUserId(),
+                "username", c.getUser().getUsername()
+            ));
+            map.put("song", Map.of(
+                "songId", c.getSong().getSongId(),
+                "title", c.getSong().getTitle()
+            ));
+            return map;
+        }).collect(java.util.stream.Collectors.toList());
+
+        Map<String, Object> response = new java.util.HashMap<>();
+        response.put("content", content);
+        response.put("totalPages", commentPage.getTotalPages());
+        response.put("totalElements", commentPage.getTotalElements());
+
+        return ResponseEntity.ok(response);
     }
 
     /**

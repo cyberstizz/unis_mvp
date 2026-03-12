@@ -53,7 +53,9 @@ public interface CommentRepository extends JpaRepository<Comment, UUID> {
     @Query("SELECT CASE WHEN COUNT(c) > 0 THEN true ELSE false END FROM Comment c WHERE c.commentId = :commentId AND c.user.userId = :userId AND c.deletedAt IS NULL")
     boolean isCommentOwner(@Param("commentId") UUID commentId, @Param("userId") UUID userId);
 
-    // Get recent comments across all songs (for potential admin/moderation use)
-    @Query("SELECT c FROM Comment c WHERE c.deletedAt IS NULL ORDER BY c.createdAt DESC")
+    // Get recent comments across all songs (for admin moderation)
+    @Query(value = "SELECT c FROM Comment c JOIN FETCH c.user JOIN FETCH c.song WHERE c.deletedAt IS NULL ORDER BY c.createdAt DESC",
+           countQuery = "SELECT COUNT(c) FROM Comment c WHERE c.deletedAt IS NULL")
     Page<Comment> findRecentComments(Pageable pageable);
+    
 }
