@@ -113,6 +113,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT, "/api/v1/users/profile/*").authenticated()
 
                 // ===== PUBLIC ENDPOINTS =====
+                .requestMatchers(HttpMethod.POST, "/auth/**").permitAll()
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/v1/users/register").permitAll()
                 .requestMatchers("/api/v1/users/login").permitAll()
