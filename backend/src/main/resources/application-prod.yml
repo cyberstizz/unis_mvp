@@ -27,3 +27,9 @@ file:
 
 unis:
   auto-populate-awards: true
+
+logging:
+  level:
+    com.unis: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.web: DEBUG
