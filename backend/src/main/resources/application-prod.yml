@@ -1,27 +1,4 @@
 spring:
-  profiles:
-    active: prod
-
-  servlet:
-    multipart:
-      max-file-size: 50MB
-      max-request-size: 50MB
-
-  task:
-    scheduling:
-      pool:
-        size: 2
-
-  file:
-    storage-mode: r2
-
-  jwt:
-    secret: ${JWT_SECRET}
-    expiration: 86400000
-
-  unis:
-    auto-populate-awards: true
-
   datasource:
     url: ${SPRING_DATASOURCE_URL}
     username: ${DB_USERNAME}
@@ -35,3 +12,18 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: 86400000
+
+file:
+  storage-mode: r2
+
+unis:
+  auto-populate-awards: true
