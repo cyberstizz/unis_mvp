@@ -19,6 +19,8 @@ public class CorsConfig {
         config.addAllowedOriginPattern("http://127.0.0.1:5173");
         config.addAllowedOriginPattern("http://127.0.0.1:3000");
         config.addAllowedOriginPattern("http://192.168.*.*");
+        config.addAllowedOriginPattern("https://unisprototypetwo.netlify.app");
+        config.addAllowedOriginPattern("https://*.netlify.app");
         config.addAllowedHeader("*");
         config.addAllowedMethod("*");
         source.registerCorsConfiguration("/**", config); 
