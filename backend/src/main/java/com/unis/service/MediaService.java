@@ -722,6 +722,7 @@ public class MediaService {
             song.setExplicit(rs.getBoolean("explicit"));
             song.setLyrics(rs.getString("lyrics"));
             song.setPlaysToday(rs.getInt("plays_today"));
+            song.setIsrc(rs.getString("isrc"));
             
             // Handle duration (might be null)
             int duration = rs.getInt("duration");
