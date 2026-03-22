@@ -29,7 +29,8 @@ spring:
   api:
     key: ${RESEND_API_KEY}
   from:
-    email: noreply@unis.app
+    email: onboarding@resend.dev
+
 
   unis:
     auto-populate-awards: true

@@ -14,7 +14,8 @@ resend:
   api:
     key: re_UWqwuSLp_Geoq9zZqCXFWW4k8APiM61mz
   from:
-    email: noreply@unis.app
+    email: onboarding@resend.dev
+
 
 spring:
   application:

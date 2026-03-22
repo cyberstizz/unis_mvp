@@ -27,9 +27,8 @@ public class PasswordResetService {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
-    // TODO: Inject Resend API email service when ready
-    // @Autowired
-    // private EmailService emailService;
+    @Autowired
+    private EmailService emailService;
 
     @Value("${app.frontend.url:https://unisprototypetwo.netlify.app}")
     private String frontendBaseUrl;
@@ -63,15 +62,8 @@ public class PasswordResetService {
         // Build reset URL
         String resetUrl = frontendBaseUrl + "/reset-password?token=" + token;
 
-        // TODO: Send email via Resend API
-        // emailService.sendResetEmail(user.getEmail(), user.getUsername(), resetUrl);
-
-        // For now, log to console so you can test locally
-        System.out.println("=== PASSWORD RESET LINK ===");
-        System.out.println("User: " + user.getEmail());
-        System.out.println("URL: " + resetUrl);
-        System.out.println("Expires: " + resetToken.getExpiresAt());
-        System.out.println("===========================");
+        // Send email (falls back to console if Resend key not configured)
+        emailService.sendResetEmail(user.getEmail(), user.getUsername(), resetUrl);
     }
 
     /**
