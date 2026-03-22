@@ -11,7 +11,10 @@ file:
   storage-mode: local   
 
 resend:
-  api-key: ${RESEND_API_KEY}
+  api:
+    key: re_UWqwuSLp_Geoq9zZqCXFWW4k8APiM61mz
+  from:
+    email: noreply@unis.app
 
 spring:
   application:

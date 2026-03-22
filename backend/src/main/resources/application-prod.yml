@@ -18,18 +18,24 @@ spring:
       max-file-size: 50MB
       max-request-size: 50MB
 
-jwt:
-  secret: ${JWT_SECRET}
-  expiration: 86400000
+  jwt:
+    secret: ${JWT_SECRET}
+    expiration: 86400000
 
-file:
-  storage-mode: r2
+  file:
+    storage-mode: r2
 
-unis:
-  auto-populate-awards: true
+  resend:
+  api:
+    key: ${RESEND_API_KEY}
+  from:
+    email: noreply@unis.app
 
-logging:
-  level:
-    com.unis: DEBUG
-    org.springframework.security: DEBUG
-    org.springframework.web: DEBUG
+  unis:
+    auto-populate-awards: true
+
+  logging:
+    level:
+      com.unis: DEBUG
+      org.springframework.security: DEBUG
+      org.springframework.web: DEBUG
