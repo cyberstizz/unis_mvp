@@ -14,7 +14,7 @@ public class EmailService {
     @Value("${resend.api.key:}")
     private String resendApiKey;
 
-    @Value("${resend.from.email:onboarding@resend.dev }")
+    @Value("${resend.from.email:onboarding@charleslambjr.com}")
     private String fromEmail;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
