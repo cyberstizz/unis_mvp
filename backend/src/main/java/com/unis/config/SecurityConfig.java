@@ -104,7 +104,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/vote/submit").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/v1/comments").authenticated()
                 .requestMatchers(HttpMethod.PATCH, "/api/v1/comments/**").authenticated()
-                .requestMatchers(HttpMethod.DELETE, "/api/v1/comments/**").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/earnings/track-view").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/earnings/my-summary").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/earnings/my-referrals").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/earnings/my-history").authenticated()
 
                 // ===== AUTHENTICATED PROFILE MUTATIONS — C4 =====
                 .requestMatchers(HttpMethod.PUT, "/api/v1/users/profile/*/photo").authenticated()
