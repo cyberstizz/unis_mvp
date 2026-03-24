@@ -92,6 +92,13 @@ public class User {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    @Column(name = "stripe_account_id")
+    private String stripeAccountId;
+
+    @Builder.Default
+    @Column(name = "stripe_onboarding_complete")
+    private Boolean stripeOnboardingComplete = false;
+
     public enum Role {
         listener, artist
     }
