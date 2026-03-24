@@ -16,6 +16,9 @@ resend:
   from:
     email: onboarding@charleslambjr.com
 
+stripe:
+  secret:
+    key: ${STRIPE_SECRET_KEY}
 
 spring:
   application:
