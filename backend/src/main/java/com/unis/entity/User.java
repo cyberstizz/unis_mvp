@@ -2,6 +2,8 @@ package com.unis.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -94,6 +96,13 @@ public class User {
 
     @Column(name = "stripe_account_id")
     private String stripeAccountId;
+
+    @Column(name = "date_of_birth")
+    private LocalDate dateOfBirth;
+
+    @Builder.Default
+    @Column(name = "explicit_content_enabled")
+    private Boolean explicitContentEnabled = true;
 
     @Builder.Default
     @Column(name = "stripe_onboarding_complete")

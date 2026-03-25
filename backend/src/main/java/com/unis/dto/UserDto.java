@@ -1,6 +1,8 @@
 package com.unis.dto;
 
 import lombok.Data;
+
+import java.time.LocalDate;
 import java.util.UUID;
 
 @Data  // Lombok for getters/setters
@@ -18,4 +20,5 @@ public class UserDto {
     private UUID genreId;  // for artist registration
     private UUID defaultSongId;  // Default song  when clicking "play" on artist card)
     private String referralCode;
+    private LocalDate dateOfBirth;
 }

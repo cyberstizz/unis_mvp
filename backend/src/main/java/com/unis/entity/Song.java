@@ -71,7 +71,9 @@ public class Song {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
-    // Transient field (not stored in DB, calculated on fetch)
+    @Column(name = "clean_version_id")
+    private UUID cleanVersionId;
+
     @Transient
     private Long playCount;
 
