@@ -289,16 +289,16 @@ public class MediaService {
         songRepository.deleteById(songId);
     }
 
-    // Update song (description and artwork only) - EVICTS cache
+    // Update song — EVICTS cache
     @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
-    public Song updateSong(UUID songId, String description, MultipartFile artwork, String lyrics, String isrc) {
+    public Song updateSong(UUID songId, String description, MultipartFile artwork, String lyrics, String isrc, UUID cleanVersionId) {
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
-
+ 
         if (description != null && !description.isBlank()) {
             song.setDescription(description.trim());
         }
-
+ 
         if (artwork != null && !artwork.isEmpty()) {
             try {
                 String artworkUrl = fileStorageService.storeFile(artwork);
@@ -307,11 +307,11 @@ public class MediaService {
                 throw new RuntimeException("Failed to upload artwork", e);
             }
         }
-
+ 
         if (lyrics != null) {
             song.setLyrics(lyrics);
         }
-
+ 
         if (isrc != null) {
             if (isrc.isBlank()) {
                 song.setIsrc(null); // Allow clearing
@@ -323,9 +323,29 @@ public class MediaService {
                 song.setIsrc(cleanIsrc);
             }
         }
-
+ 
+        // NEW: Link clean version
+        if (cleanVersionId != null) {
+            // Verify the clean version song actually exists
+            Song cleanSong = songRepository.findById(cleanVersionId)
+                .orElseThrow(() -> new RuntimeException("Clean version song not found: " + cleanVersionId));
+            
+            // Verify the clean version belongs to the same artist
+            if (!cleanSong.getArtist().getUserId().equals(song.getArtist().getUserId())) {
+                throw new RuntimeException("Clean version must belong to the same artist");
+            }
+ 
+            // Verify the clean version is not itself explicit
+            if (Boolean.TRUE.equals(cleanSong.getExplicit())) {
+                throw new RuntimeException("Clean version cannot be marked as explicit");
+            }
+ 
+            song.setCleanVersionId(cleanVersionId);
+        }
+ 
         return songRepository.save(song);
     }
+ 
 
     // NOT CACHED - video delete
     public void deleteVideo(UUID videoId) {

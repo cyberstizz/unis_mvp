@@ -77,6 +77,9 @@ public class UserController {
             .photoUrl(dto.getPhotoUrl())
             .build();
 
+            user.setDateOfBirth(dto.getDateOfBirth());
+
+
         // Fetch jurisdiction entity and set
         Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
             .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));

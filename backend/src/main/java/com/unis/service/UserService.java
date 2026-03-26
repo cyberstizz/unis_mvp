@@ -25,6 +25,8 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -81,24 +83,46 @@ public class UserService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    // Register new user - NOT CACHED (write operation)
+// Register new user - NOT CACHED (write operation)
     public User register(User newUser, UUID supportedArtistId, String referralCode) {
+        // === NEW: Date of birth validation ===
+        if (newUser.getDateOfBirth() != null) {
+            LocalDate today = LocalDate.now();
+            // Calculate age
+            int age = today.getYear() - newUser.getDateOfBirth().getYear();
+            LocalDate birthdayThisYear = newUser.getDateOfBirth().withYear(today.getYear());
+            if (today.isBefore(birthdayThisYear)) {
+                age--;
+            }
+ 
+            // Reject under 13
+            if (age < 13) {
+                throw new RuntimeException("You must be at least 13 years old to join Unis.");
+            }
+ 
+            // Under 18: force explicit content disabled
+            if (age < 18) {
+                newUser.setExplicitContentEnabled(false);
+            }
+        }
+        // === END NEW ===
+ 
         // Hash password
         newUser.setPasswordHash(passwordEncoder.encode(newUser.getPasswordHash()));
         newUser.setCreatedAt(LocalDateTime.now());
         newUser.setScore(0);
         newUser.setLevel("silver");
-
+ 
         // Generate a referral code for this user
         String uniqueReferralCode = ReferralCodeGenerator.generateUnique(
             newUser.getUsername(),
             code -> userRepository.existsByReferralCode(code)
         );
         newUser.setReferralCode(uniqueReferralCode);
-
+ 
         // Save user
         User savedUser = userRepository.save(newUser);
-
+ 
         // Handle referral tracking
         if (referralCode != null && !referralCode.trim().isEmpty()) {
             Optional<User> referrerOpt = userRepository.findByReferralCode(referralCode);
@@ -122,7 +146,7 @@ public class UserService {
                 System.out.println("Warning: Referral code '" + referralCode + "' not found. Proceeding without referral.");
             }
         }
-
+ 
         // For ALL users (listeners AND artists): Validate and set supported artist
         if (supportedArtistId != null) {
             Optional<User> optionalArtist = userRepository.findById(supportedArtistId);
@@ -136,24 +160,28 @@ public class UserService {
             if (supportedArtistId.equals(savedUser.getUserId())) {
                 throw new RuntimeException("Cannot support yourself");
             }
-
+ 
             savedUser.setSupportedArtistId(supportedArtistId);
             userRepository.save(savedUser);
-
+ 
             Supporter supporter = Supporter.builder()
                 .listener(savedUser)
                 .artist(supportedArtist)
                 .createdAt(LocalDateTime.now())
                 .build();
             supporterRepository.save(supporter);
-
+ 
             scoreUpdateService.onSupporterAdded(supportedArtistId);
             System.out.println("Supporter created: " + savedUser.getUsername() + " supports " + supportedArtist.getUsername());
         }
-
-        System.out.println("User registered successfully: " + savedUser.getUsername() + " (Referral Code: " + savedUser.getReferralCode() + ")");
+ 
+        System.out.println("User registered successfully: " + savedUser.getUsername() 
+            + " (Referral Code: " + savedUser.getReferralCode() + ")"
+            + (newUser.getDateOfBirth() != null ? " (DOB: " + newUser.getDateOfBirth() + ")" : "")
+            + " (Explicit content: " + savedUser.getExplicitContentEnabled() + ")");
         return savedUser;
     }
+ 
 
     // CACHED: Fetch user profile (5 min TTL via "userProfiles" cache)
     @Cacheable(value = "userProfiles", key = "#userId")
