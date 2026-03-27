@@ -355,8 +355,30 @@ public class MediaService {
     // Play song - EVICTS song cache and trending cache because playsToday changes
     @CacheEvict(value = {"songs", "trending"}, allEntries = true)
     public void playSong(UUID songId, UUID userId) {
+        // Guard: userId is required for play tracking
+        if (userId == null) {
+            System.out.println(">>> Play rejected: no userId provided for song " + songId);
+            return;
+        }
+ 
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
+ 
+        // === ANTI-ABUSE: 30-minute cooldown per user per song ===
+        // Check if this user played this exact song within the last 30 minutes.
+        // If so, silently skip — no error, no exception, song still plays in the UI.
+        String cooldownCheckSql = """
+            SELECT COUNT(*) FROM song_plays 
+            WHERE user_id = ? AND song_id = ? 
+            AND played_at > NOW() - INTERVAL '30 minutes'
+            """;
+        Integer recentPlays = jdbcTemplate.queryForObject(cooldownCheckSql, Integer.class, userId, songId);
+        
+        if (recentPlays != null && recentPlays > 0) {
+            System.out.println(">>> Play cooldown: user " + userId + " already played song " + songId + " within 30 min — skipping");
+            return; // Silent rejection — no error, no exception
+        }
+        // === END ANTI-ABUSE ===
         
         // Update plays_today directly with native query
         LocalDate today = LocalDate.now();
@@ -390,7 +412,7 @@ public class MediaService {
             .durationSecs(durationInSeconds)
             .build();
         songPlayRepository.save(play);
-
+ 
         // Increment artist's total_plays using a single query that gets artist_id from the song
         String incrementArtistPlays = """
             UPDATE users 
@@ -400,12 +422,12 @@ public class MediaService {
         Query artistQuery = entityManager.createNativeQuery(incrementArtistPlays);
         artistQuery.setParameter("songId", songId);
         int rowsUpdated = artistQuery.executeUpdate();
-
+ 
         entityManager.flush();
         entityManager.clear();
-
-        System.out.println(">>> total_plays increment: songId=" + songId + ", rowsUpdated=" + rowsUpdated);
-
+ 
+        System.out.println(">>> Play recorded: user=" + userId + " song=" + songId + " rowsUpdated=" + rowsUpdated);
+ 
         scoreUpdateService.onPlay(userId, songId, "song");
     }
 
