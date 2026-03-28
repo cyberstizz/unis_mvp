@@ -108,6 +108,9 @@ public class User {
     @Column(name = "stripe_onboarding_complete")
     private Boolean stripeOnboardingComplete = false;
 
+    @Column(name = "theme_preference", length = 20)
+    private String themePreference = "blue";
+
     public enum Role {
         listener, artist
     }
