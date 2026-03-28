@@ -21,4 +21,5 @@ public class UserDto {
     private UUID defaultSongId;  // Default song  when clicking "play" on artist card)
     private String referralCode;
     private LocalDate dateOfBirth;
+    private String themePreference;
 }
