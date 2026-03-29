@@ -23,12 +23,10 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     // (e.g., checking if a deleted user's email is taken during registration).
     Optional<User> findByEmail(String email);
 
-    // C5 FIX: New method — only returns active (non-deleted) users.
     // Used by UserDetailsServiceImpl for authentication.
-    @Query("SELECT u FROM User u WHERE u.email = :email AND u.deletedAt IS NULL")
+    @Query("SELECT u FROM User u WHERE LOWER(u.email) = LOWER(:email) AND u.deletedAt IS NULL")
     Optional<User> findActiveByEmail(@Param("email") String email);
 
-    
     boolean existsByReferralCode(String referralCode);
 
     @Query("SELECT u FROM User u LEFT JOIN FETCH u.jurisdiction WHERE u.userId = :id")

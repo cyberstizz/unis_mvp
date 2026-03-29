@@ -38,7 +38,8 @@ public class PasswordResetService {
      * Always succeeds silently — never reveals whether the email exists.
      */
     public void requestPasswordReset(String email) {
-        Optional<User> userOpt = userRepository.findActiveByEmail(email);
+        String normalizedEmail = email.trim().toLowerCase();
+        Optional<User> userOpt = userRepository.findActiveByEmail(normalizedEmail);
 
         if (userOpt.isEmpty()) {
             // Silent return — don't reveal that the email doesn't exist
