@@ -29,7 +29,7 @@ spring:
   api:
     key: ${RESEND_API_KEY}
   from:
-    email: onboarding@charleslambjr.com
+    email: Unis <onboarding@resend.dev>
 
 
   unis:
