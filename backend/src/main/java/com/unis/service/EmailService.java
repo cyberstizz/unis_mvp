@@ -1,5 +1,6 @@
 package com.unis.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -7,6 +8,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Map;
 
 @Service
 public class EmailService {
@@ -18,16 +20,19 @@ public class EmailService {
     private String fromEmail;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
+    private static final ObjectMapper mapper = new ObjectMapper();
 
     /**
      * Send a password reset email via Resend API.
      * Falls back to console logging if API key is not configured.
      */
     public void sendResetEmail(String toEmail, String username, String resetUrl) {
+        // Normalize to lowercase — Resend's test-mode restriction is case-sensitive
+        String normalizedEmail = toEmail.toLowerCase();
+
         if (resendApiKey == null || resendApiKey.isBlank()) {
-            // Fallback: log to console for local development
             System.out.println("=== PASSWORD RESET EMAIL (no Resend key configured) ===");
-            System.out.println("To: " + toEmail);
+            System.out.println("To: " + normalizedEmail);
             System.out.println("URL: " + resetUrl);
             System.out.println("========================================================");
             return;
@@ -35,20 +40,16 @@ public class EmailService {
 
         String htmlBody = buildResetEmailHtml(username, resetUrl);
 
-        String jsonPayload = String.format("""
-            {
-                "from": "%s",
-                "to": "%s",
-                "subject": "Reset Your Unis Password",
-                "html": %s
-            }
-            """,
-            fromEmail,
-            toEmail,
-            escapeJsonString(htmlBody)
-        );
-
         try {
+            // Use Jackson to serialize — eliminates all manual escaping bugs
+            Map<String, String> payload = Map.of(
+                    "from", fromEmail,
+                    "to", normalizedEmail,
+                    "subject", "Reset Your Unis Password",
+                    "html", htmlBody
+            );
+            String jsonPayload = mapper.writeValueAsString(payload);
+
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create("https://api.resend.com/emails"))
                     .header("Content-Type", "application/json")
@@ -58,15 +59,19 @@ public class EmailService {
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
+            // Always log status + body so failures are never silent
+            System.out.println("Resend status: " + response.statusCode());
+            System.out.println("Resend response: " + response.body());
+
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                System.out.println("Password reset email sent to " + toEmail);
+                System.out.println("Password reset email sent to " + normalizedEmail);
             } else {
                 System.err.println("Resend API error (" + response.statusCode() + "): " + response.body());
-                // Still log the URL as fallback so the user isn't stuck
                 System.out.println("FALLBACK RESET URL: " + resetUrl);
             }
         } catch (Exception e) {
             System.err.println("Failed to send reset email: " + e.getMessage());
+            e.printStackTrace();
             System.out.println("FALLBACK RESET URL: " + resetUrl);
         }
     }
@@ -121,18 +126,5 @@ public class EmailService {
             </body>
             </html>
             """.formatted(username, resetUrl, resetUrl);
-    }
-
-    /**
-     * Escape a string for safe JSON embedding.
-     */
-    private String escapeJsonString(String raw) {
-        return "\"" + raw
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t")
-                + "\"";
     }
 }
