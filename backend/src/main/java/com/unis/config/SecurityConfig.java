@@ -91,7 +91,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/dmca/submit").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/activity/track").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/forgot-password").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/forgot-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/reset-password").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/reset-password").permitAll()
 
                 // ===== AUTHENTICATED MUTATIONS — C1 + C6 =====
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song").authenticated()
