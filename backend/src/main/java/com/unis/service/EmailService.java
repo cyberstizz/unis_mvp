@@ -38,7 +38,7 @@ public class EmailService {
         String jsonPayload = String.format("""
             {
                 "from": "%s",
-                "to": ["%s"],
+                "to": "%s",
                 "subject": "Reset Your Unis Password",
                 "html": %s
             }

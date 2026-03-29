@@ -12,9 +12,9 @@ file:
 
 resend:
   api:
-    key: re_UWqwuSLp_Geoq9zZqCXFWW4k8APiM61mz
+    key: re_czhVPEit_NuiGJ7jhokGywdQpWAH9ebRT
   from:
-    email: onboarding@charleslambjr.com
+    email: onboarding@resend.dev
 
 stripe:
   secret:
