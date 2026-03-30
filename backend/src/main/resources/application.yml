@@ -14,7 +14,7 @@ resend:
   api:
     key: re_czhVPEit_NuiGJ7jhokGywdQpWAH9ebRT
   from:
-    email: onboarding@resend.dev
+    email: noreply@charleslambjr.com
 
 stripe:
   secret:
