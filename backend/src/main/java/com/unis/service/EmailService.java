@@ -86,7 +86,10 @@ public class EmailService {
 
                 <!-- Header -->
                 <div style="background:linear-gradient(135deg,#163387,#0a0e1a); padding:40px 32px 32px; text-align:center;">
-                  <h1 style="color:#ffffff; font-size:28px; font-weight:700; margin:0 0 8px;">UNIS</h1>
+                  <img src="https://pub-fdce5bcbb7b14f3ead9299d58be5fbe6.r2.dev/unisLogoThree.svg"
+                       alt="UNIS"
+                       width="120"
+                       style="display:block; margin:0 auto 16px; height:auto;" />
                   <p style="color:rgba(255,255,255,0.6); font-size:14px; margin:0;">Password Reset Request</p>
                 </div>
 
