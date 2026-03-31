@@ -112,6 +112,7 @@ public class UserService {
         newUser.setCreatedAt(LocalDateTime.now());
         newUser.setScore(0);
         newUser.setLevel("silver");
+        newUser.setThemePreference("blue");
  
         // Generate a referral code for this user
         String uniqueReferralCode = ReferralCodeGenerator.generateUnique(
