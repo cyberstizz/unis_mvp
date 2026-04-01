@@ -57,5 +57,12 @@ public interface CommentRepository extends JpaRepository<Comment, UUID> {
     @Query(value = "SELECT c FROM Comment c JOIN FETCH c.user JOIN FETCH c.song WHERE c.deletedAt IS NULL ORDER BY c.createdAt DESC",
            countQuery = "SELECT COUNT(c) FROM Comment c WHERE c.deletedAt IS NULL")
     Page<Comment> findRecentComments(Pageable pageable);
+
+    // === CommentRepository.java — ADD THESE TWO METHODS ===
+    // Add these to your existing CommentRepository interface.
+
+    // Count all comments (top-level + replies) by a user on a specific song
+    @Query("SELECT COUNT(c) FROM Comment c WHERE c.user.userId = :userId AND c.song.songId = :songId AND c.deletedAt IS NULL")
+    long countByUserIdAndSongId(@Param("userId") UUID userId, @Param("songId") UUID songId);
     
 }

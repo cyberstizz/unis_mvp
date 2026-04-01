@@ -104,4 +104,13 @@ public class CommentDTO {
         private boolean hasNext;
         private boolean hasPrevious;
     }
+
+    @Data
+    @AllArgsConstructor
+    public static class UserCommentCountResponse {
+        private long count;
+        private int limit;
+        private long remaining;
+        private boolean limitReached;
+    }
 }

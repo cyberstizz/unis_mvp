@@ -35,6 +35,8 @@ public class CommentService {
     // Maximum nesting depth (we only allow 1 level of replies)
     private static final int MAX_DEPTH = 1;
 
+    private static final int MAX_COMMENTS_PER_USER_PER_SONG = 3;
+
     /**
      * Create a new comment or reply
      */
@@ -48,39 +50,64 @@ public class CommentService {
         if (request.getContent().length() > MAX_COMMENT_LENGTH) {
             throw new IllegalArgumentException("Comment exceeds maximum length of " + MAX_COMMENT_LENGTH + " characters");
         }
-
+ 
         // Get song
         Song song = songRepository.findById(request.getSongId())
                 .orElseThrow(() -> new IllegalArgumentException("Song not found"));
-
+ 
         // Get user
         User user = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
-
+ 
+        // Resolve parent comment early (needed for both rate limit and nesting checks)
+        Comment parentComment = null;
+        if (request.getParentCommentId() != null) {
+            parentComment = commentRepository.findActiveById(request.getParentCommentId())
+                    .orElseThrow(() -> new IllegalArgumentException("Parent comment not found"));
+ 
+            // Prevent deep nesting - replies can only target top-level comments
+            if (parentComment.getParentComment() != null) {
+                throw new IllegalArgumentException("Cannot reply to a reply. Please reply to the original comment.");
+            }
+ 
+            // Verify parent is on the same song
+            if (!parentComment.getSong().getSongId().equals(song.getSongId())) {
+                throw new IllegalArgumentException("Parent comment belongs to a different song");
+            }
+        }
+ 
+        // === RATE LIMIT: 3 comments per user per song ===
+        long userCommentCount = commentRepository.countByUserIdAndSongId(user.getUserId(), song.getSongId());
+ 
+        if (userCommentCount >= MAX_COMMENTS_PER_USER_PER_SONG) {
+            // Over limit — only allowed action is replying under your OWN top-level comment.
+            // This covers the scenario:
+            //   1. User X posts a top-level comment
+            //   2. User Y replies to User X's comment
+            //   3. User X wants to respond — they reply under their own top-level comment
+            //
+            // So: parentComment must exist AND parentComment must belong to the current user.
+            boolean isReplyingToOwnComment = parentComment != null
+                    && parentComment.getUser().getUserId().equals(user.getUserId());
+ 
+            if (!isReplyingToOwnComment) {
+                throw new IllegalArgumentException(
+                    "You've reached the comment limit for this song. You can still reply when someone responds to your comments."
+                );
+            }
+        }
+        // === END RATE LIMIT ===
+ 
         // Create comment
         Comment comment = new Comment();
         comment.setSong(song);
         comment.setUser(user);
         comment.setContent(request.getContent().trim());
-
-        // Handle reply
-        if (request.getParentCommentId() != null) {
-            Comment parentComment = commentRepository.findActiveById(request.getParentCommentId())
-                    .orElseThrow(() -> new IllegalArgumentException("Parent comment not found"));
-            
-            // Prevent deep nesting - replies can only be on top-level comments
-            if (parentComment.getParentComment() != null) {
-                throw new IllegalArgumentException("Cannot reply to a reply. Please reply to the original comment.");
-            }
-            
-            // Verify parent is on the same song
-            if (!parentComment.getSong().getSongId().equals(song.getSongId())) {
-                throw new IllegalArgumentException("Parent comment belongs to a different song");
-            }
-            
+ 
+        if (parentComment != null) {
             comment.setParentComment(parentComment);
         }
-
+ 
         Comment saved = commentRepository.save(comment);
         log.info("Created comment {} on song {} by user {}", saved.getCommentId(), song.getSongId(), user.getUserId());
         
@@ -200,4 +227,16 @@ public class CommentService {
                 .orElseThrow(() -> new IllegalArgumentException("Comment not found"));
         return CommentDTO.Response.fromEntity(comment, true);
     }
+
+      @Transactional(readOnly = true)
+    public CommentDTO.UserCommentCountResponse getUserCommentCountForSong(UUID userId, UUID songId) {
+        long count = commentRepository.countByUserIdAndSongId(userId, songId);
+        return new CommentDTO.UserCommentCountResponse(
+            count,
+            MAX_COMMENTS_PER_USER_PER_SONG,
+            Math.max(0, MAX_COMMENTS_PER_USER_PER_SONG - count),
+            count >= MAX_COMMENTS_PER_USER_PER_SONG
+        );
+    }
+    
 }
