@@ -160,4 +160,17 @@ public class CommentController {
                     .body(Map.of("error", "Failed to delete comment"));
         }
     }
+
+    @GetMapping("/song/{songId}/user-count")
+    public ResponseEntity<?> getUserCommentCount(@PathVariable UUID songId) {
+        try {
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+            CommentDTO.UserCommentCountResponse count = commentService.getUserCommentCountForSong(authenticatedUserId, songId);
+            return ResponseEntity.ok(count);
+        } catch (Exception e) {
+            // If not authenticated, return 0 (guest users can't comment anyway)
+            return ResponseEntity.ok(Map.of("count", 0, "limit", 3, "remaining", 3, "limitReached", false));
+        }
+    }
+
 }
