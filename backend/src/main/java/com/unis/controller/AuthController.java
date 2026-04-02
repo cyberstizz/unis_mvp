@@ -3,6 +3,9 @@ package com.unis.controller;
 import com.unis.config.JwtUtil;
 import com.unis.dto.AuthResponse;
 import com.unis.dto.LoginRequest;
+import com.unis.entity.PreRegistration;
+import com.unis.repository.PreRegistrationRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import com.unis.entity.User;
 import com.unis.service.PasswordResetService;
 import com.unis.service.UserService;
@@ -15,7 +18,10 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -33,7 +39,13 @@ public class AuthController {
     @Autowired
     private PasswordResetService passwordResetService;
 
-    @PostMapping("/login")
+    @Autowired
+    private PreRegistrationRepository preRegistrationRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+   @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest loginRequest) {
         try {
             Authentication authentication = authenticationManager.authenticate(
@@ -46,10 +58,64 @@ public class AuthController {
 
             return ResponseEntity.ok(new AuthResponse(token));
         } catch (BadCredentialsException e) {
+            // Normal login failed — check if they're a waitlist user
+            try {
+                Optional<PreRegistration> waitlistUser = preRegistrationRepository
+                    .findByEmail(loginRequest.getEmail().toLowerCase().trim());
+
+                if (waitlistUser.isPresent()) {
+                    PreRegistration pr = waitlistUser.get();
+
+                    if (passwordEncoder.matches(loginRequest.getPassword(), pr.getPasswordHash())) {
+                        long regionCount = preRegistrationRepository
+                            .countByStateCodeAndMetroRegion(pr.getStateCode(), pr.getMetroRegion());
+
+                        int threshold = getThresholdForRegion(pr.getMetroRegion());
+
+                        Map<String, Object> response = new LinkedHashMap<>();
+                        response.put("waitlist", true);
+                        response.put("username", pr.getUsername());
+                        response.put("referralCode", pr.getReferralCode());
+                        response.put("metroRegion", pr.getMetroRegion());
+                        response.put("stateCode", pr.getStateCode());
+                        response.put("stateName", pr.getStateName());
+                        response.put("regionSignupCount", regionCount);
+                        response.put("regionThreshold", threshold);
+                        response.put("message", "Your region isn't active yet. Share your referral code to unlock it faster!");
+
+                        return ResponseEntity.status(403).body(response);
+                    }
+                }
+            } catch (Exception ignored) {
+                // Waitlist check failed — fall through to normal error
+            }
+
             return ResponseEntity.status(401).body("Invalid email or password");
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Login failed: " + e.getMessage());
         }
+    }
+
+    private int getThresholdForRegion(String metroRegion) {
+        Set<String> majorMetros = Set.of(
+            "Los Angeles", "Chicago", "Atlanta",
+            "Houston", "Miami", "Dallas",
+            "Phoenix", "Philadelphia", "San Francisco Bay Area",
+            "Seattle", "Boston", "Denver",
+            "Detroit", "Minneapolis", "Washington DC"
+        );
+        Set<String> midMarkets = Set.of(
+            "Nashville", "Memphis", "New Orleans",
+            "Charlotte", "Las Vegas", "Austin",
+            "Portland", "San Antonio", "San Diego",
+            "Tampa", "Orlando", "Sacramento",
+            "Kansas City", "Columbus", "St. Louis",
+            "Baltimore", "Milwaukee", "Indianapolis",
+            "Cleveland", "Pittsburgh"
+        );
+        if (majorMetros.contains(metroRegion)) return 1000;
+        if (midMarkets.contains(metroRegion)) return 500;
+        return 250;
     }
 
     @PostMapping("/logout")

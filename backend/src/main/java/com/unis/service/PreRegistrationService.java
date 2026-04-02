@@ -27,21 +27,21 @@ public class PreRegistrationService {
     // ─── Major metro threshold tiers ───
     // In production, pull these from jurisdiction_activation_thresholds table
     private static final Set<String> MAJOR_METROS = Set.of(
-        "Greater Los Angeles", "Greater Chicago", "Greater Atlanta",
-        "Greater Houston", "Greater Miami", "Greater Dallas",
-        "Greater Phoenix", "Greater Philadelphia", "San Francisco Bay Area",
-        "Greater Seattle", "Greater Boston", "Greater Denver",
-        "Greater Detroit", "Greater Minneapolis", "Greater Washington DC"
+        "Los Angeles", "Chicago", "Atlanta",
+        "Houston", "Miami", "Dallas",
+        "Phoenix", "Philadelphia", "San Francisco Bay Area",
+        "Seattle", "Boston", "Denver",
+        "Detroit", "Minneapolis", "Washington DC"
     );
 
     private static final Set<String> MID_MARKETS = Set.of(
-        "Greater Nashville", "Greater Memphis", "Greater New Orleans",
-        "Greater Charlotte", "Greater Las Vegas", "Greater Austin",
-        "Greater Portland", "Greater San Antonio", "Greater San Diego",
-        "Greater Tampa", "Greater Orlando", "Greater Sacramento",
-        "Greater Kansas City", "Greater Columbus", "Greater St. Louis",
-        "Greater Baltimore", "Greater Milwaukee", "Greater Indianapolis",
-        "Greater Cleveland", "Greater Pittsburgh"
+        "Nashville", "Memphis", "New Orleans",
+        "Charlotte", "Las Vegas", "Austin",
+        "Portland", "San Antonio", "San Diego",
+        "Tampa", "Orlando", "Sacramento",
+        "Kansas City", "Columbus", "St. Louis",
+        "Baltimore", "Milwaukee", "Indianapolis",
+        "Cleveland", "Pittsburgh"
     );
 
     private int getThresholdForRegion(String metroRegion) {
