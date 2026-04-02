@@ -138,7 +138,7 @@ public class SecurityConfig {
                 .requestMatchers("/uploads/**").permitAll()
                 .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/error/**").permitAll()
-                .requestMatchers("/v1/waitlist/**").permitAll()
+                .requestMatchers("/api/v1/waitlist/**").permitAll()
                 .anyRequest().authenticated()
             )
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
