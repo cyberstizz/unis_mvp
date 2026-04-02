@@ -24,7 +24,7 @@ public class WaitlistController {
      * POST /v1/waitlist/register
      * Sign up for the waitlist from anywhere in the US.
      */
-    @PostMapping("/v1/waitlist/register")
+    @PostMapping("/api/v1/waitlist/register")
     public ResponseEntity<?> register(@RequestBody PreRegistrationRequest request) {
         try {
             PreRegistrationResponse response = preRegService.register(request);
@@ -38,7 +38,7 @@ public class WaitlistController {
      * GET /v1/waitlist/check-referral/{code}
      * Validate a referral code before form submission.
      */
-    @GetMapping("/v1/waitlist/check-referral/{code}")
+    @GetMapping("/api/v1/waitlist/check-referral/{code}")
     public ResponseEntity<?> checkReferral(@PathVariable String code) {
         return preRegService.findByReferralCode(code)
                 .map(r -> ResponseEntity.ok(Map.of(
@@ -54,7 +54,7 @@ public class WaitlistController {
      * Check how close a region is to activation. Public so the
      * confirmation screen can show "247 of 500 signed up!"
      */
-    @GetMapping("/v1/waitlist/region-progress")
+    @GetMapping("/api/v1/waitlist/region-progress")
     public ResponseEntity<?> regionProgress(
             @RequestParam String state,
             @RequestParam String metro) {
@@ -69,7 +69,7 @@ public class WaitlistController {
      * GET /v1/admin/analytics/waitlist
      * Full waitlist overview for the admin dashboard.
      */
-    @GetMapping("/v1/admin/analytics/waitlist")
+    @GetMapping("/api/v1/admin/analytics/waitlist")
     public ResponseEntity<?> waitlistOverview() {
         return ResponseEntity.ok(preRegService.getWaitlistOverview());
     }
@@ -78,7 +78,7 @@ public class WaitlistController {
      * GET /v1/admin/analytics/waitlist/daily?days=30
      * Daily signup trend for chart rendering.
      */
-    @GetMapping("/v1/admin/analytics/waitlist/daily")
+    @GetMapping("/api/v1/admin/analytics/waitlist/daily")
     public ResponseEntity<?> waitlistDaily(
             @RequestParam(defaultValue = "30") int days) {
         return ResponseEntity.ok(preRegService.getWaitlistDailySignups(days));
