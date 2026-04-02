@@ -1,4 +1,4 @@
-package com.unis.backend.entity;
+package com.unis.entity;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;

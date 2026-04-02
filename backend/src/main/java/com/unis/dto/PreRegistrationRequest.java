@@ -1,4 +1,4 @@
-package com.unis.backend.dto;
+package com.unis.dto;
 
 // ─── Request DTO ───
 public class PreRegistrationRequest {
