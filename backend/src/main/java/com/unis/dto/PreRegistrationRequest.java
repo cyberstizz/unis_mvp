@@ -44,6 +44,3 @@ public class PreRegistrationRequest {
     public void setReferredByCode(String referredByCode) { this.referredByCode = referredByCode; }
 }
 
-// ─── Response DTO ───
-// Use as a separate file or inner static — shown here for reference colocation
-// File: PreRegistrationResponse.java
