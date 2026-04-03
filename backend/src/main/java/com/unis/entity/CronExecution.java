@@ -1,4 +1,4 @@
-package com.unis.model;
+package com.unis.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
