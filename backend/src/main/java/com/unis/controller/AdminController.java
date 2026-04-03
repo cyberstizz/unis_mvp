@@ -21,6 +21,11 @@ public class AdminController {
     private CacheManager cacheManager;
 
     private final CronMonitorService cronMonitorService;
+
+    @Autowired
+    public AdminController(CronMonitorService cronMonitorService) {
+        this.cronMonitorService = cronMonitorService;
+    }
     
     @GetMapping("/cache/stats")
     public Map<String, Object> getCacheStats() {
