@@ -40,6 +40,8 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.addAllowedOriginPattern("http://localhost:5173");
         configuration.addAllowedOriginPattern("https://unisprototypetwo.netlify.app");
+        configuration.addAllowedOriginPattern("https://www.unismusic.com");
+        configuration.addAllowedOriginPattern("https://unismusic.com");
         configuration.addAllowedOriginPattern("http://localhost:3000");
         configuration.addAllowedOriginPattern("http://127.0.0.1:5173");
         configuration.addAllowedOriginPattern("http://127.0.0.1:3000");
