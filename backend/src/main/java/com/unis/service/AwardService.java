@@ -4,6 +4,8 @@ import com.unis.entity.Award;
 import com.unis.entity.Song;
 import com.unis.entity.User;
 import com.unis.entity.Genre;
+import com.unis.entity.CronExecution;
+import com.unis.service.CronMonitorService;
 import com.unis.entity.Jurisdiction;
 import com.unis.entity.VotingInterval;
 import com.unis.repository.AwardRepository;
@@ -68,6 +70,8 @@ public class AwardService {
 
     @Autowired
     private EntityManager entityManager;
+
+    private final CronMonitorService cronMonitorService;
     
     @Lazy
     @Autowired
@@ -75,6 +79,12 @@ public class AwardService {
 
     @Value("${unis.auto-populate-awards:true}")
     private boolean autoPopulateAwards;
+
+    // Constructor injection for CronMonitorService
+    @Autowired
+    public AwardService(CronMonitorService cronMonitorService) {
+        this.cronMonitorService = cronMonitorService;
+    }
 
     // =========================================================================
     // AWARD POINT VALUES - Points added to winner's score
@@ -714,43 +724,87 @@ public class AwardService {
     }
 
     // =========================================================================
-    // SCHEDULED CRON JOBS
+    // SCHEDULED CRON JOBS (with CronMonitorService tracking)
     // =========================================================================
 
     @Scheduled(cron = "0 1 0 * * ?")
     @Transactional(readOnly = false)
     public void computeDailyAwards() {
-        LocalDate yesterday = LocalDate.now().minusDays(1);
-        System.out.println("=== DAILY AWARD CRON: Computing for " + yesterday + " ===");
-        
-        Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
-        if (dailyInterval.isEmpty()) {
-            System.out.println("ERROR: Daily interval not found!");
-            return;
-        }
+        CronExecution exec = cronMonitorService.startExecution("DAILY_AWARDS");
+        try {
+            LocalDate yesterday = LocalDate.now().minusDays(1);
+            System.out.println("=== DAILY AWARD CRON: Computing for " + yesterday + " ===");
 
-        computeAwardsInternal(yesterday, dailyInterval.get().getIntervalId(), null, null);
-        songRepository.resetPlaysToday(LocalDate.now());
-        
-        System.out.println("=== DAILY AWARD CRON COMPLETE ===");
+            Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
+            if (dailyInterval.isEmpty()) {
+                System.out.println("ERROR: Daily interval not found!");
+                cronMonitorService.markFailed(exec, "Daily interval not found");
+                return;
+            }
+
+            long countBefore = awardRepository.count();
+            computeAwardsInternal(yesterday, dailyInterval.get().getIntervalId(), null, null);
+            songRepository.resetPlaysToday(LocalDate.now());
+            long countAfter = awardRepository.count();
+
+            int created = (int) (countAfter - countBefore);
+            cronMonitorService.markSuccess(exec, created);
+            System.out.println("=== DAILY AWARD CRON COMPLETE: " + created + " awards created ===");
+        } catch (Exception e) {
+            cronMonitorService.markFailed(exec, e.getMessage());
+            System.out.println("=== DAILY AWARD CRON FAILED: " + e.getMessage() + " ===");
+            throw e;
+        }
     }
 
     @Scheduled(cron = "0 1 0 * * MON")
     @Transactional(readOnly = false)
     public void computeWeeklyAwards() {
-        System.out.println("=== WEEKLY AWARD CRON ===");
-        Optional<VotingInterval> weekly = votingIntervalRepository.findByName("Weekly");
-        if (weekly.isEmpty()) return;
-        computeAwardsInternal(LocalDate.now().minusDays(1), weekly.get().getIntervalId(), null, null);
+        CronExecution exec = cronMonitorService.startExecution("WEEKLY_AWARDS");
+        try {
+            System.out.println("=== WEEKLY AWARD CRON ===");
+            Optional<VotingInterval> weekly = votingIntervalRepository.findByName("Weekly");
+            if (weekly.isEmpty()) {
+                cronMonitorService.markFailed(exec, "Weekly interval not found");
+                return;
+            }
+
+            long countBefore = awardRepository.count();
+            computeAwardsInternal(LocalDate.now().minusDays(1), weekly.get().getIntervalId(), null, null);
+            long countAfter = awardRepository.count();
+
+            cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
+            System.out.println("=== WEEKLY AWARD CRON COMPLETE ===");
+        } catch (Exception e) {
+            cronMonitorService.markFailed(exec, e.getMessage());
+            System.out.println("=== WEEKLY AWARD CRON FAILED: " + e.getMessage() + " ===");
+            throw e;
+        }
     }
 
     @Scheduled(cron = "0 1 0 1 * ?")
     @Transactional(readOnly = false)
     public void computeMonthlyAwards() {
-        System.out.println("=== MONTHLY AWARD CRON ===");
-        Optional<VotingInterval> monthly = votingIntervalRepository.findByName("Monthly");
-        if (monthly.isEmpty()) return;
-        computeAwardsInternal(LocalDate.now().minusDays(1), monthly.get().getIntervalId(), null, null);
+        CronExecution exec = cronMonitorService.startExecution("MONTHLY_AWARDS");
+        try {
+            System.out.println("=== MONTHLY AWARD CRON ===");
+            Optional<VotingInterval> monthly = votingIntervalRepository.findByName("Monthly");
+            if (monthly.isEmpty()) {
+                cronMonitorService.markFailed(exec, "Monthly interval not found");
+                return;
+            }
+
+            long countBefore = awardRepository.count();
+            computeAwardsInternal(LocalDate.now().minusDays(1), monthly.get().getIntervalId(), null, null);
+            long countAfter = awardRepository.count();
+
+            cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
+            System.out.println("=== MONTHLY AWARD CRON COMPLETE ===");
+        } catch (Exception e) {
+            cronMonitorService.markFailed(exec, e.getMessage());
+            System.out.println("=== MONTHLY AWARD CRON FAILED: " + e.getMessage() + " ===");
+            throw e;
+        }
     }
 
     @Scheduled(cron = "0 1 0 1 * ?")
@@ -759,10 +813,26 @@ public class AwardService {
         LocalDate now = LocalDate.now();
         int month = now.getMonthValue();
         if (month == 1 || month == 4 || month == 7 || month == 10) {
-            System.out.println("=== QUARTERLY AWARD CRON ===");
-            Optional<VotingInterval> quarterly = votingIntervalRepository.findByName("Quarterly");
-            if (quarterly.isEmpty()) return;
-            computeAwardsInternal(now.minusDays(1), quarterly.get().getIntervalId(), null, null);
+            CronExecution exec = cronMonitorService.startExecution("QUARTERLY_AWARDS");
+            try {
+                System.out.println("=== QUARTERLY AWARD CRON ===");
+                Optional<VotingInterval> quarterly = votingIntervalRepository.findByName("Quarterly");
+                if (quarterly.isEmpty()) {
+                    cronMonitorService.markFailed(exec, "Quarterly interval not found");
+                    return;
+                }
+
+                long countBefore = awardRepository.count();
+                computeAwardsInternal(now.minusDays(1), quarterly.get().getIntervalId(), null, null);
+                long countAfter = awardRepository.count();
+
+                cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
+                System.out.println("=== QUARTERLY AWARD CRON COMPLETE ===");
+            } catch (Exception e) {
+                cronMonitorService.markFailed(exec, e.getMessage());
+                System.out.println("=== QUARTERLY AWARD CRON FAILED: " + e.getMessage() + " ===");
+                throw e;
+            }
         }
     }
 
@@ -772,20 +842,52 @@ public class AwardService {
         LocalDate now = LocalDate.now();
         int month = now.getMonthValue();
         if (month == 1 || month == 7) {
-            System.out.println("=== MIDTERM AWARD CRON ===");
-            Optional<VotingInterval> midterm = votingIntervalRepository.findByName("Midterm");
-            if (midterm.isEmpty()) return;
-            computeAwardsInternal(now.minusDays(1), midterm.get().getIntervalId(), null, null);
+            CronExecution exec = cronMonitorService.startExecution("MIDTERM_AWARDS");
+            try {
+                System.out.println("=== MIDTERM AWARD CRON ===");
+                Optional<VotingInterval> midterm = votingIntervalRepository.findByName("Midterm");
+                if (midterm.isEmpty()) {
+                    cronMonitorService.markFailed(exec, "Midterm interval not found");
+                    return;
+                }
+
+                long countBefore = awardRepository.count();
+                computeAwardsInternal(now.minusDays(1), midterm.get().getIntervalId(), null, null);
+                long countAfter = awardRepository.count();
+
+                cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
+                System.out.println("=== MIDTERM AWARD CRON COMPLETE ===");
+            } catch (Exception e) {
+                cronMonitorService.markFailed(exec, e.getMessage());
+                System.out.println("=== MIDTERM AWARD CRON FAILED: " + e.getMessage() + " ===");
+                throw e;
+            }
         }
     }
 
     @Scheduled(cron = "0 1 0 1 1 ?")
     @Transactional(readOnly = false)
     public void computeAnnualAwards() {
-        System.out.println("=== ANNUAL AWARD CRON ===");
-        Optional<VotingInterval> annual = votingIntervalRepository.findByName("Annual");
-        if (annual.isEmpty()) return;
-        computeAwardsInternal(LocalDate.now().minusDays(1), annual.get().getIntervalId(), null, null);
+        CronExecution exec = cronMonitorService.startExecution("ANNUAL_AWARDS");
+        try {
+            System.out.println("=== ANNUAL AWARD CRON ===");
+            Optional<VotingInterval> annual = votingIntervalRepository.findByName("Annual");
+            if (annual.isEmpty()) {
+                cronMonitorService.markFailed(exec, "Annual interval not found");
+                return;
+            }
+
+            long countBefore = awardRepository.count();
+            computeAwardsInternal(LocalDate.now().minusDays(1), annual.get().getIntervalId(), null, null);
+            long countAfter = awardRepository.count();
+
+            cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
+            System.out.println("=== ANNUAL AWARD CRON COMPLETE ===");
+        } catch (Exception e) {
+            cronMonitorService.markFailed(exec, e.getMessage());
+            System.out.println("=== ANNUAL AWARD CRON FAILED: " + e.getMessage() + " ===");
+            throw e;
+        }
     }
 
     // =========================================================================
