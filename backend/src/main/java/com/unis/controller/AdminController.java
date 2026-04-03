@@ -4,7 +4,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.caffeine.CaffeineCache;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.unis.service.CronMonitorService;
+import com.unis.entity.CronExecution;
+
 
 import java.util.HashMap;
 import java.util.Map;
@@ -15,6 +19,8 @@ public class AdminController {
     
     @Autowired
     private CacheManager cacheManager;
+
+    private final CronMonitorService cronMonitorService;
     
     @GetMapping("/cache/stats")
     public Map<String, Object> getCacheStats() {
@@ -75,5 +81,15 @@ public class AdminController {
     @GetMapping("/cache/names")
     public Map<String, Object> getCacheNames() {
         return Map.of("caches", cacheManager.getCacheNames());
+    }
+
+    @GetMapping("/cron/status")
+    public ResponseEntity<?> getCronStatus() {
+        return ResponseEntity.ok(cronMonitorService.getStatusSummary());
+    }
+
+    @GetMapping("/cron/history/{jobName}")
+    public ResponseEntity<?> getCronHistory(@PathVariable String jobName) {
+        return ResponseEntity.ok(cronMonitorService.getJobHistory(jobName));
     }
 }
