@@ -125,6 +125,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/v1/users/register").permitAll()
                 .requestMatchers("/api/v1/users/login").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/search/**").permitAll()
                 .requestMatchers("/api/v1/users/default-song").permitAll()
                 .requestMatchers("/api/v1/users/artists/active").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/profile").permitAll()
