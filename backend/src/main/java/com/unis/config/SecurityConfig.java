@@ -69,25 +69,37 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/awards/cron/manual").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/v1/vote/awards/compute").hasRole("ADMIN")
 
-
                 // ===== ADMIN DASHBOARD ENDPOINTS =====
-
-                // Super Admin only
                 .requestMatchers("/api/v1/admin/roles/**").hasRole("SUPER_ADMIN")
                 .requestMatchers("/api/v1/admin/audit/**").hasRole("SUPER_ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/users/**").hasRole("SUPER_ADMIN")
-
-                // Admin + Super Admin
                 .requestMatchers("/api/v1/admin/users/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PATCH, "/api/v1/admin/dmca/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/dmca/*/takedown").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/songs/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/videos/**").hasRole("ADMIN")
-
-                // All admin tiers (moderator and above)
                 .requestMatchers("/api/v1/admin/analytics/**").hasRole("MODERATOR")
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/dmca/**").hasRole("MODERATOR")
                 .requestMatchers("/api/v1/admin/comments/**").hasRole("MODERATOR")
+
+                // ===== PLAYLIST — ADMIN =====
+                .requestMatchers(HttpMethod.POST, "/api/v1/playlists/official").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/playlists/official/*/sync").hasRole("ADMIN")
+
+                // ===== PLAYLIST — AUTHENTICATED (must come BEFORE public wildcard) =====
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/mine").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/following").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/blocked-songs").authenticated()
+
+                // ===== PLAYLIST — PUBLIC DISCOVERY =====
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/discover").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/community/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/official").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/search").permitAll()
+                // Individual playlist + sub-resources (visibility enforced in service layer)
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/*/pending").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/*/activity").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/*").permitAll()
 
                 // Public endpoints (no auth required)
                 .requestMatchers(HttpMethod.POST, "/api/v1/dmca/submit").permitAll()
@@ -96,7 +108,6 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/forgot-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/reset-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/reset-password").permitAll()
-                
 
                 // ===== AUTHENTICATED MUTATIONS — C1 + C6 =====
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song").authenticated()
@@ -130,7 +141,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/users/artists/active").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/profile").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/profile/photo").permitAll()
-                .requestMatchers(HttpMethod.PATCH, "/api/v1/users/profile/photo").permitAll()                
+                .requestMatchers(HttpMethod.PATCH, "/api/v1/users/profile/photo").permitAll()
                 .requestMatchers("/api/v1/users/me").permitAll()
                 .requestMatchers("/api/v1/jurisdictions/by-location").permitAll()
                 .requestMatchers("/api/v1/users/validate-referral/**").permitAll()
@@ -138,6 +149,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/users/check-username").permitAll()
                 .requestMatchers("/api/v1/users/*/default-song").permitAll()
                 .requestMatchers("/api/v1/waitlist/**").permitAll()
+
+                // ===== CATCH-ALL: everything else under /api/v1 requires auth =====
                 .requestMatchers("/api/v1/**").authenticated()
                 .requestMatchers("/uploads/**").permitAll()
                 .requestMatchers("/actuator/**").permitAll()
