@@ -25,7 +25,6 @@ public class PlaylistService {
     private final SongRepository songRepository;
     private final UserRepository userRepository;
     private final JurisdictionRepository jurisdictionRepository;
-    private final ScoreUpdateService scoreUpdateService;
 
     // Community playlist vote thresholds
     private static final int APPROVE_THRESHOLD = 5;   // net +5 to auto-approve
@@ -39,8 +38,7 @@ public class PlaylistService {
                            BlockedSongRepository blockedSongRepository,
                            SongRepository songRepository,
                            UserRepository userRepository,
-                           JurisdictionRepository jurisdictionRepository,
-                           ScoreUpdateService scoreUpdateService) {
+                           JurisdictionRepository jurisdictionRepository) {
         this.playlistRepository = playlistRepository;
         this.playlistTrackRepository = playlistTrackRepository;
         this.playlistFollowRepository = playlistFollowRepository;
@@ -50,7 +48,6 @@ public class PlaylistService {
         this.songRepository = songRepository;
         this.userRepository = userRepository;
         this.jurisdictionRepository = jurisdictionRepository;
-        this.scoreUpdateService = scoreUpdateService;
     }
 
     // ========================================================================
@@ -109,9 +106,6 @@ public class PlaylistService {
         if ("community".equals(type)) {
             logActivity(playlist, user, "playlist_created", null, null);
         }
-
-        // Award points for creating a community playlist (+5)
-        scoreUpdateService.onPlaylistCreated(userId, type);
 
         return toFullResponse(playlist, userId);
     }
@@ -334,9 +328,6 @@ public class PlaylistService {
             playlistVoteRepository.save(vote);
         }
 
-        // Award +1 to the voter for participating in community curation
-        scoreUpdateService.onPlaylistVoteCast(userId);
-
         // Recount votes
         int upvotes = playlistVoteRepository.countUpvotes(itemId);
         int downvotes = playlistVoteRepository.countDownvotes(itemId);
@@ -350,11 +341,6 @@ public class PlaylistService {
             playlistRepository.updateSongCount(track.getPlaylist().getPlaylistId(), 1);
             logActivity(track.getPlaylist(), user, "song_approved", track.getSong().getSongId(),
                     "Approved with " + netVotes + " net votes");
-
-            // Award +2 to the user who originally suggested the song
-            if (track.getAddedBy() != null) {
-                scoreUpdateService.onSongSuggestionApproved(track.getAddedBy().getUserId());
-            }
         } else if (netVotes <= REJECT_THRESHOLD) {
             track.setStatus("removed");
             logActivity(track.getPlaylist(), user, "song_rejected", track.getSong().getSongId(),
@@ -463,15 +449,6 @@ public class PlaylistService {
 
         playlistFollowRepository.save(follow);
         playlistRepository.updateFollowerCount(playlistId, 1);
-
-        // Award creator +10 points if this follow brings them to the 10-follower milestone
-        int newFollowerCount = playlist.getFollowerCount() + 1;
-        if (playlist.getUser() != null) {
-            scoreUpdateService.onPlaylistFollowerMilestone(
-                    playlist.getUser().getUserId(),
-                    newFollowerCount
-            );
-        }
     }
 
     @Transactional
