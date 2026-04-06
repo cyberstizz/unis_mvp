@@ -19,6 +19,7 @@ public class CacheConfig {
     public CacheManager cacheManager() {
         SimpleCacheManager cacheManager = new SimpleCacheManager();
         
+        // Configure each cache with its own TTL based on data volatility
         cacheManager.setCaches(Arrays.asList(
             // Standard caches - 5 minute TTL (moderate change frequency)
             buildCache("songs", 5, TimeUnit.MINUTES),
@@ -27,24 +28,26 @@ public class CacheConfig {
             buildCache("genres", 5, TimeUnit.MINUTES),
             buildCache("userProfiles", 5, TimeUnit.MINUTES),
             buildCache("awards", 10, TimeUnit.MINUTES),           // Historical awards - rarely change
-            buildCache("leaderboards", 1, TimeUnit.MINUTES),      // Live rankings - frequent updates
-            buildCache("nominees", 1, TimeUnit.MINUTES),          // Voting page nominees - frequent updates
-            buildCache("voteCounts", 1, TimeUnit.MINUTES),        // Vote totals displayed on cards
-            buildCache("trending", 1, TimeUnit.MINUTES),          // Trending songs - changes constantly
-
-            // Playlist system caches
-            buildCache("playlists", 2, TimeUnit.MINUTES),         // Playlist lists/details - matches frontend TTL
-            buildCache("blockedSongs", 10, TimeUnit.MINUTES)      // Blocked song IDs - rarely changes
+            buildCache("leaderboards", 1, TimeUnit.MINUTES),      // Live rankings - frequent updates + immediate eviction
+            buildCache("nominees", 1, TimeUnit.MINUTES),          // Voting page nominees - frequent updates + immediate eviction
+            buildCache("voteCounts", 1, TimeUnit.MINUTES),        // Vote totals displayed on cards - frequent updates + immediate eviction
+            buildCache("trending", 1, TimeUnit.MINUTES)           // Trending songs - changes constantly
         ));
         
         return cacheManager;
     }
     
+    /**
+     * @param name Cache name (must match @Cacheable value)
+     * @param duration TTL duration
+     * @param unit TTL time unit
+     * @return Configured CaffeineCache
+     */
     private CaffeineCache buildCache(String name, long duration, TimeUnit unit) {
         return new CaffeineCache(name, Caffeine.newBuilder()
-            .maximumSize(1000)
-            .expireAfterWrite(duration, unit)
-            .recordStats()
+            .maximumSize(1000)                          // Max 1000 entries per cache
+            .expireAfterWrite(duration, unit)           // TTL after write
+            .recordStats()                              // Enable monitoring stats
             .build());
     }
 }
