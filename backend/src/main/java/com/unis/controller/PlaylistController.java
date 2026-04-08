@@ -1,11 +1,14 @@
 package com.unis.controller;
 
 import com.unis.dto.PlaylistDtos.*;
+import com.unis.service.FileStorageService;
 import com.unis.service.PlaylistService;
 import com.unis.util.SecurityUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -15,43 +18,38 @@ import java.util.UUID;
 public class PlaylistController {
 
     private final PlaylistService playlistService;
+    private final FileStorageService fileStorageService;
 
-    public PlaylistController(PlaylistService playlistService) {
+    public PlaylistController(PlaylistService playlistService, FileStorageService fileStorageService) {
         this.playlistService = playlistService;
+        this.fileStorageService = fileStorageService;
     }
 
     // ========================================================================
     // PERSONAL PLAYLIST CRUD
     // ========================================================================
 
-    /** Get all playlists owned by the authenticated user */
     @GetMapping("/mine")
     public ResponseEntity<List<PlaylistSummaryResponse>> myPlaylists() {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
         return ResponseEntity.ok(playlistService.getMyPlaylists(userId));
     }
 
-    /** Create a new playlist (personal, community, or official) */
     @PostMapping
     public ResponseEntity<PlaylistResponse> createPlaylist(@RequestBody CreatePlaylistRequest req) {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
         return ResponseEntity.ok(playlistService.createPlaylist(userId, req));
     }
 
-    /** Get a single playlist with tracks (visibility-gated) */
     @GetMapping("/{playlistId}")
     public ResponseEntity<PlaylistResponse> getPlaylist(@PathVariable UUID playlistId) {
-        // Try to get authenticated user, but allow anonymous for public playlists
         UUID viewerUserId = null;
         try {
             viewerUserId = SecurityUtils.getAuthenticatedUserId();
-        } catch (Exception ignored) {
-            // Anonymous viewer — will only see public/unlisted playlists
-        }
+        } catch (Exception ignored) {}
         return ResponseEntity.ok(playlistService.getPlaylistById(playlistId, viewerUserId));
     }
 
-    /** Update playlist metadata (name, visibility, description, cover) */
     @PutMapping("/{playlistId}")
     public ResponseEntity<PlaylistResponse> updatePlaylist(
             @PathVariable UUID playlistId,
@@ -60,7 +58,6 @@ public class PlaylistController {
         return ResponseEntity.ok(playlistService.updatePlaylist(playlistId, userId, req));
     }
 
-    /** Soft-delete a playlist (owner only) */
     @DeleteMapping("/{playlistId}")
     public ResponseEntity<Void> deletePlaylist(@PathVariable UUID playlistId) {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
@@ -68,7 +65,45 @@ public class PlaylistController {
         return ResponseEntity.noContent().build();
     }
 
-    /** Add a track to a personal playlist (owner only) */
+    // ========================================================================
+    // COVER IMAGE UPLOAD
+    // ========================================================================
+
+    /**
+     * Upload a cover image and return the URL.
+     * Frontend uploads first, gets the URL, then includes it in
+     * createPlaylist or updatePlaylist.
+     */
+    @PostMapping("/cover")
+    public ResponseEntity<Map<String, String>> uploadCover(
+            @RequestParam("cover") MultipartFile file) throws IOException {
+        // Authenticated users only — security rule added in SecurityConfig
+        SecurityUtils.getAuthenticatedUserId();
+
+        String coverUrl = fileStorageService.storeFile(file);
+        return ResponseEntity.ok(Map.of("coverImageUrl", coverUrl));
+    }
+
+    /**
+     * Update an existing playlist's cover image directly.
+     * Owner-only — checked in PlaylistService.updatePlaylist.
+     */
+    @PostMapping("/{playlistId}/cover")
+    public ResponseEntity<PlaylistResponse> updatePlaylistCover(
+            @PathVariable UUID playlistId,
+            @RequestParam("cover") MultipartFile file) throws IOException {
+        UUID userId = SecurityUtils.getAuthenticatedUserId();
+        String coverUrl = fileStorageService.storeFile(file);
+
+        UpdatePlaylistRequest req = new UpdatePlaylistRequest();
+        req.setCoverImageUrl(coverUrl);
+        return ResponseEntity.ok(playlistService.updatePlaylist(playlistId, userId, req));
+    }
+
+    // ========================================================================
+    // TRACK MANAGEMENT
+    // ========================================================================
+
     @PostMapping("/{playlistId}/tracks")
     public ResponseEntity<PlaylistResponse> addTrack(
             @PathVariable UUID playlistId,
@@ -77,7 +112,6 @@ public class PlaylistController {
         return ResponseEntity.ok(playlistService.addTrack(playlistId, userId, req.getSongId()));
     }
 
-    /** Remove a track from a playlist (owner only) */
     @DeleteMapping("/{playlistId}/tracks/{itemId}")
     public ResponseEntity<PlaylistResponse> removeTrack(
             @PathVariable UUID playlistId,
@@ -86,7 +120,6 @@ public class PlaylistController {
         return ResponseEntity.ok(playlistService.removeTrack(playlistId, userId, itemId));
     }
 
-    /** Reorder tracks in a playlist (owner only) */
     @PutMapping("/{playlistId}/reorder")
     public ResponseEntity<PlaylistResponse> reorderTracks(
             @PathVariable UUID playlistId,
@@ -99,7 +132,6 @@ public class PlaylistController {
     // COMMUNITY PLAYLIST ENDPOINTS
     // ========================================================================
 
-    /** Suggest a song for a community playlist */
     @PostMapping("/{playlistId}/suggest")
     public ResponseEntity<TrackResponse> suggestSong(
             @PathVariable UUID playlistId,
@@ -108,7 +140,6 @@ public class PlaylistController {
         return ResponseEntity.ok(playlistService.suggestSong(playlistId, userId, req.getSongId()));
     }
 
-    /** Vote on a pending suggestion in a community playlist */
     @PostMapping("/{playlistId}/tracks/{itemId}/vote")
     public ResponseEntity<TrackResponse> voteOnSuggestion(
             @PathVariable UUID playlistId,
@@ -118,7 +149,6 @@ public class PlaylistController {
         return ResponseEntity.ok(playlistService.voteOnSuggestion(itemId, userId, req.getVoteType()));
     }
 
-    /** Curator removes a song from a community playlist */
     @DeleteMapping("/{playlistId}/tracks/{itemId}/curator-remove")
     public ResponseEntity<Void> curatorRemoveSong(
             @PathVariable UUID playlistId,
@@ -129,34 +159,27 @@ public class PlaylistController {
         return ResponseEntity.noContent().build();
     }
 
-    /** Get pending song suggestions for a community playlist */
     @GetMapping("/{playlistId}/pending")
     public ResponseEntity<List<TrackResponse>> getPendingSuggestions(@PathVariable UUID playlistId) {
         UUID viewerUserId = null;
-        try {
-            viewerUserId = SecurityUtils.getAuthenticatedUserId();
-        } catch (Exception ignored) {}
+        try { viewerUserId = SecurityUtils.getAuthenticatedUserId(); } catch (Exception ignored) {}
         return ResponseEntity.ok(playlistService.getPendingSuggestions(playlistId, viewerUserId));
     }
 
-    /** Get activity feed for a community playlist */
     @GetMapping("/{playlistId}/activity")
     public ResponseEntity<List<ActivityResponse>> getActivity(
             @PathVariable UUID playlistId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         UUID viewerUserId = null;
-        try {
-            viewerUserId = SecurityUtils.getAuthenticatedUserId();
-        } catch (Exception ignored) {}
+        try { viewerUserId = SecurityUtils.getAuthenticatedUserId(); } catch (Exception ignored) {}
         return ResponseEntity.ok(playlistService.getPlaylistActivity(playlistId, viewerUserId, page, size));
     }
 
     // ========================================================================
-    // FOLLOW / UNFOLLOW
+    // FOLLOW
     // ========================================================================
 
-    /** Follow a public or unlisted playlist */
     @PostMapping("/{playlistId}/follow")
     public ResponseEntity<Void> followPlaylist(@PathVariable UUID playlistId) {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
@@ -164,7 +187,6 @@ public class PlaylistController {
         return ResponseEntity.ok().build();
     }
 
-    /** Unfollow a playlist */
     @DeleteMapping("/{playlistId}/follow")
     public ResponseEntity<Void> unfollowPlaylist(@PathVariable UUID playlistId) {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
@@ -172,7 +194,6 @@ public class PlaylistController {
         return ResponseEntity.noContent().build();
     }
 
-    /** Get playlists the authenticated user is following */
     @GetMapping("/following")
     public ResponseEntity<List<PlaylistSummaryResponse>> getFollowedPlaylists() {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
@@ -180,30 +201,26 @@ public class PlaylistController {
     }
 
     // ========================================================================
-    // DISCOVERY (PUBLIC)
+    // DISCOVERY
     // ========================================================================
 
-    /** Browse public playlists, optionally filtered by jurisdiction */
     @GetMapping("/discover")
     public ResponseEntity<List<PlaylistSummaryResponse>> discoverPlaylists(
             @RequestParam(required = false) UUID jurisdictionId) {
         return ResponseEntity.ok(playlistService.discoverPlaylists(jurisdictionId));
     }
 
-    /** Get community playlists for a jurisdiction */
     @GetMapping("/community/{jurisdictionId}")
     public ResponseEntity<List<PlaylistSummaryResponse>> getCommunityPlaylists(
             @PathVariable UUID jurisdictionId) {
         return ResponseEntity.ok(playlistService.getCommunityPlaylists(jurisdictionId));
     }
 
-    /** Get all official (admin-curated / award-driven) playlists */
     @GetMapping("/official")
     public ResponseEntity<List<PlaylistSummaryResponse>> getOfficialPlaylists() {
         return ResponseEntity.ok(playlistService.getOfficialPlaylists());
     }
 
-    /** Search public playlists by name */
     @GetMapping("/search")
     public ResponseEntity<List<PlaylistSummaryResponse>> searchPlaylists(
             @RequestParam String q) {
@@ -214,19 +231,15 @@ public class PlaylistController {
     // BLOCKED SONGS
     // ========================================================================
 
-    /** Block a song from appearing in recommendations/autoplay */
     @PostMapping("/blocked-songs")
     public ResponseEntity<Void> blockSong(@RequestBody Map<String, UUID> body) {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
         UUID songId = body.get("songId");
-        if (songId == null) {
-            return ResponseEntity.badRequest().build();
-        }
+        if (songId == null) return ResponseEntity.badRequest().build();
         playlistService.blockSong(userId, songId);
         return ResponseEntity.ok().build();
     }
 
-    /** Unblock a song */
     @DeleteMapping("/blocked-songs/{songId}")
     public ResponseEntity<Void> unblockSong(@PathVariable UUID songId) {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
@@ -234,7 +247,6 @@ public class PlaylistController {
         return ResponseEntity.noContent().build();
     }
 
-    /** Get all blocked songs for the authenticated user */
     @GetMapping("/blocked-songs")
     public ResponseEntity<List<BlockedSongResponse>> getBlockedSongs() {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
