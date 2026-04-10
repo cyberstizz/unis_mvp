@@ -90,6 +90,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/playlists/mine").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/playlists/following").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/playlists/blocked-songs").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/playlists/cover").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/playlists/*/cover").authenticated()
 
                 // ===== PLAYLIST — PUBLIC DISCOVERY =====
                 .requestMatchers(HttpMethod.GET, "/api/v1/playlists/discover").permitAll()
