@@ -162,6 +162,9 @@ public class UserController {
         if (payload.containsKey("tiktokUrl")) {
             user.setTiktokUrl(payload.get("tiktokUrl"));
         }
+         if (payload.containsKey("themePreference")) {
+        user.setThemePreference(payload.get("themePreference"));
+        }
 
         userRepository.save(user);
 
