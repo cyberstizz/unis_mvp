@@ -152,6 +152,45 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/users/*/default-song").permitAll()
                 .requestMatchers("/api/v1/waitlist/**").permitAll()
 
+                // ===== PUBLIC READ-ONLY — Guest browsing =====
+                // Media discovery & playback
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/trending/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/new").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/lyrics").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/likes/count").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/is-liked").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/artist/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/jurisdiction/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/artist/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/jurisdiction/*").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/media/song/*/play").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/media/video/*/play").permitAll()
+
+                // User profiles & artists (read-only)
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/profile/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/artist/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/artist/top").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/supporters/count").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/followers/count").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-plays").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-votes").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-likes").permitAll()
+
+                // Awards & voting (read-only)
+                .requestMatchers(HttpMethod.GET, "/api/v1/awards/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/vote/nominees").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/vote/leaderboards").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/vote/results").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/vote/total/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/vote/check-eligibility").permitAll()
+
+                // Jurisdictions (all read-only)
+                .requestMatchers(HttpMethod.GET, "/api/v1/jurisdictions/**").permitAll()
+
+                // Comments (read-only)
+                .requestMatchers(HttpMethod.GET, "/api/v1/comments/**").permitAll()
+
                 // ===== CATCH-ALL: everything else under /api/v1 requires auth =====
                 .requestMatchers("/api/v1/**").authenticated()
                 .requestMatchers("/uploads/**").permitAll()
