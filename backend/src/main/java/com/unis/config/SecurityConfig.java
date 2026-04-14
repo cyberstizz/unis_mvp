@@ -166,6 +166,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/jurisdiction/*").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song/*/play").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/video/*/play").permitAll()
+                .requestMatchers(HttpMethod.PUT, "/api/v1/songs/*/download-settings").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/songs/*/purchase").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/songs/*/purchase/confirm").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/songs/*/download").authenticated()
 
                 // User profiles & artists (read-only)
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/profile/*").permitAll()
@@ -176,6 +180,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-plays").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-votes").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-likes").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/songs/my-purchases").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/songs/my-sales").authenticated()
 
                 // Awards & voting (read-only)
                 .requestMatchers(HttpMethod.GET, "/api/v1/awards/**").permitAll()
