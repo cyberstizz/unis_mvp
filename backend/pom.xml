@@ -137,6 +137,11 @@
 		<groupId>com.fasterxml.jackson.core</groupId>
 		<artifactId>jackson-databind</artifactId>
 	</dependency>
+	<dependency>
+		<groupId>com.stripe</groupId>
+		<artifactId>stripe-java</artifactId>
+		<version>28.2.0</version>
+	</dependency>
 </dependencies>
 
 	<build>
