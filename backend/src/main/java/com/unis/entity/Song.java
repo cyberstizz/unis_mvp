@@ -74,6 +74,13 @@ public class Song {
     @Column(name = "clean_version_id")
     private UUID cleanVersionId;
 
+    @Column(name = "download_policy", nullable = false)
+    @Builder.Default
+    private String downloadPolicy = "free";  // "free", "paid", "unavailable"
+ 
+    @Column(name = "download_price")
+    private Integer downloadPrice; 
+
     @Transient
     private Long playCount;
 
