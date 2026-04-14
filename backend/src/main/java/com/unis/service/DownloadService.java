@@ -27,14 +27,13 @@ public class DownloadService {
     private final PurchaseRepository purchaseRepository;
     private final UserRepository userRepository;
 
-    // Your Stripe secret key — should already be in application.properties
     @Value("${stripe.secret.key}")
     private String stripeSecretKey;
 
-    // Platform fee percentage (10% = 0.10). Adjust as you decide.
+    // Platform fee percentage — 10%. Adjust as needed.
     private static final double PLATFORM_FEE_PERCENT = 0.10;
 
-    // Minimum price in cents ($1.99) to cover Stripe fees
+    // Minimum price in cents ($1.99) to cover Stripe processing fees
     private static final int MINIMUM_PRICE_CENTS = 199;
 
     public DownloadService(SongRepository songRepository,
@@ -46,7 +45,7 @@ public class DownloadService {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 3: Update Download Settings (called by artist)
+    // UPDATE DOWNLOAD SETTINGS (called by artist)
     // ═══════════════════════════════════════════════════════════
 
     @Transactional
@@ -56,22 +55,21 @@ public class DownloadService {
         Song song = songRepository.findById(songId)
                 .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
 
-        // Verify the requesting user owns this song
-        if (!song.getArtist().getId().equals(artistId)) {
+        // Verify ownership — getUserId() is the correct method on Unis User entity
+        if (!song.getArtist().getUserId().equals(artistId)) {
             throw new RuntimeException("You do not own this song.");
         }
 
-        // Validate the policy value
         if (!List.of("free", "paid", "unavailable").contains(downloadPolicy)) {
-            throw new IllegalArgumentException("Invalid download policy. Must be: free, paid, or unavailable");
+            throw new IllegalArgumentException(
+                    "Invalid download policy. Must be: free, paid, or unavailable");
         }
 
-        // Validate price logic
         if ("paid".equals(downloadPolicy)) {
             if (downloadPrice == null || downloadPrice < MINIMUM_PRICE_CENTS) {
                 throw new IllegalArgumentException(
-                        "Paid downloads require a minimum price of $" +
-                                String.format("%.2f", MINIMUM_PRICE_CENTS / 100.0));
+                        "Paid downloads require a minimum price of $"
+                                + String.format("%.2f", MINIMUM_PRICE_CENTS / 100.0));
             }
             song.setDownloadPolicy("paid");
             song.setDownloadPrice(downloadPrice);
@@ -87,14 +85,11 @@ public class DownloadService {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 4A: Create a Purchase (PaymentIntent) for a paid song
+    // CREATE PURCHASE INTENT (Stripe Direct Charge)
     //
-    // This creates a Stripe PaymentIntent using Direct Charges.
-    // Money goes straight to the artist's connected Stripe account.
-    // Unis takes an application fee (your 10% cut).
-    //
-    // Returns a client_secret that the frontend uses with Stripe.js
-    // to collect the buyer's card info and confirm payment.
+    // Money goes straight to artist's connected Stripe account.
+    // Unis takes application_fee (your 10% cut).
+    // Returns client_secret for Stripe.js on the frontend.
     // ═══════════════════════════════════════════════════════════
 
     public Map<String, Object> createPurchaseIntent(UUID songId, UUID buyerId) {
@@ -103,35 +98,33 @@ public class DownloadService {
         Song song = songRepository.findById(songId)
                 .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
 
-        // Validate the song is actually for sale
         if (!"paid".equals(song.getDownloadPolicy())) {
             throw new RuntimeException("This song is not available for purchase.");
         }
 
-        // Check if buyer already owns this song
         if (purchaseRepository.existsByBuyerIdAndSongId(buyerId, songId)) {
             throw new RuntimeException("You already own this song.");
         }
 
-        // Look up the artist's Stripe Connect account ID
-        // IMPORTANT: Adjust this field name to match your User entity.
-        // Your User entity should have a stripeAccountId field that was set
-        // during Stripe Connect onboarding.
-        User artist = userRepository.findById(song.getArtist().getId())
+        // Get the artist's Stripe Connect account ID
+        // IMPORTANT: Verify your User entity has this field.
+        // It should have been added when you implemented Stripe Connect onboarding.
+        // If the field is named differently (e.g. stripeConnectId), adjust here.
+        UUID artistUserId = song.getArtist().getUserId();
+        User artist = userRepository.findById(artistUserId)
                 .orElseThrow(() -> new RuntimeException("Artist not found"));
 
         String artistStripeAccountId = artist.getStripeAccountId();
         if (artistStripeAccountId == null || artistStripeAccountId.isEmpty()) {
-            throw new RuntimeException("This artist has not set up payouts yet.");
+            throw new RuntimeException(
+                    "This artist has not set up payouts yet. "
+                            + "They need to connect their Stripe account before selling tracks.");
         }
 
         int priceInCents = song.getDownloadPrice();
         int platformFee = (int) Math.round(priceInCents * PLATFORM_FEE_PERCENT);
 
         try {
-            // Create the PaymentIntent with Direct Charge
-            // The charge is created ON the artist's connected account.
-            // The application_fee goes to YOUR platform account automatically.
             PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
                     .setAmount((long) priceInCents)
                     .setCurrency("usd")
@@ -141,10 +134,9 @@ public class DownloadService {
                                     .setDestination(artistStripeAccountId)
                                     .build()
                     )
-                    // Store metadata so we can look this up later
                     .putMetadata("song_id", songId.toString())
                     .putMetadata("buyer_id", buyerId.toString())
-                    .putMetadata("artist_id", song.getArtist().getId().toString())
+                    .putMetadata("artist_id", artistUserId.toString())
                     .putMetadata("type", "song_purchase")
                     .build();
 
@@ -153,8 +145,6 @@ public class DownloadService {
             log.info("PaymentIntent created: {} for song {} buyer {} amount {}",
                     paymentIntent.getId(), songId, buyerId, priceInCents);
 
-            // Return the client_secret to the frontend
-            // The frontend uses this with Stripe.js to confirm the payment
             Map<String, Object> response = new HashMap<>();
             response.put("clientSecret", paymentIntent.getClientSecret());
             response.put("paymentIntentId", paymentIntent.getId());
@@ -170,11 +160,10 @@ public class DownloadService {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 4B: Confirm a Purchase (after Stripe.js confirms payment)
+    // CONFIRM PURCHASE (after Stripe.js confirms payment)
     //
-    // The frontend calls this AFTER the buyer's card is charged.
-    // We verify the PaymentIntent succeeded, then record the purchase
-    // and return a download URL.
+    // Verifies PaymentIntent succeeded, records purchase,
+    // returns download URL.
     // ═══════════════════════════════════════════════════════════
 
     @Transactional
@@ -185,9 +174,8 @@ public class DownloadService {
         Song song = songRepository.findById(songId)
                 .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
 
-        // Double-check they haven't already been recorded (idempotency)
+        // Idempotency — if already purchased, just return the download URL
         if (purchaseRepository.existsByBuyerIdAndSongId(buyerId, songId)) {
-            // Already purchased — just return the download URL
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("downloadUrl", song.getFileUrl());
@@ -196,7 +184,6 @@ public class DownloadService {
         }
 
         try {
-            // Verify the PaymentIntent actually succeeded with Stripe
             PaymentIntent paymentIntent = PaymentIntent.retrieve(paymentIntentId);
 
             if (!"succeeded".equals(paymentIntent.getStatus())) {
@@ -204,11 +191,11 @@ public class DownloadService {
                         "Payment not completed. Status: " + paymentIntent.getStatus());
             }
 
-            // Verify the metadata matches (security check — prevents someone
-            // from using a PaymentIntent from a different purchase)
+            // Security check — verify metadata matches
             String metaSongId = paymentIntent.getMetadata().get("song_id");
             String metaBuyerId = paymentIntent.getMetadata().get("buyer_id");
-            if (!songId.toString().equals(metaSongId) || !buyerId.toString().equals(metaBuyerId)) {
+            if (!songId.toString().equals(metaSongId)
+                    || !buyerId.toString().equals(metaBuyerId)) {
                 throw new RuntimeException("Payment verification failed — metadata mismatch.");
             }
 
@@ -216,11 +203,10 @@ public class DownloadService {
             int platformFee = paymentIntent.getApplicationFeeAmount() != null
                     ? paymentIntent.getApplicationFeeAmount().intValue() : 0;
 
-            // Record the purchase
             Purchase purchase = Purchase.builder()
                     .buyerId(buyerId)
                     .songId(songId)
-                    .artistId(song.getArtist().getId())
+                    .artistId(song.getArtist().getUserId())
                     .amount(amount)
                     .platformFee(platformFee)
                     .stripePaymentIntentId(paymentIntentId)
@@ -245,11 +231,7 @@ public class DownloadService {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 5: Get Download URL (checks ownership)
-    //
-    // For free songs: returns the URL immediately.
-    // For paid songs: checks if buyer has purchased, returns URL if yes.
-    // For unavailable songs: returns an error.
+    // GET DOWNLOAD INFO (determines DownloadModal state)
     // ═══════════════════════════════════════════════════════════
 
     public Map<String, Object> getDownloadInfo(UUID songId, UUID userId) {
@@ -290,7 +272,7 @@ public class DownloadService {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // HELPERS: Get purchase history for a user or artist
+    // PURCHASE HISTORY
     // ═══════════════════════════════════════════════════════════
 
     public List<Purchase> getBuyerPurchases(UUID buyerId) {
