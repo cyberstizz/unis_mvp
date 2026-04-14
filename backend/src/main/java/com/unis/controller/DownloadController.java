@@ -3,10 +3,10 @@ package com.unis.controller;
 import com.unis.entity.Purchase;
 import com.unis.entity.Song;
 import com.unis.service.DownloadService;
+import com.unis.util.SecurityUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -25,28 +25,19 @@ public class DownloadController {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 3 ENDPOINT: Update Download Settings
+    // UPDATE DOWNLOAD SETTINGS (artist only)
     //
     // PUT /api/v1/songs/{songId}/download-settings
-    //
     // Body: { "downloadPolicy": "paid", "downloadPrice": 500 }
-    //
-    // Called by the artist from:
-    //   - EditWizard (changing settings on existing song)
-    //   - ArtistDashboard (quick toggle)
-    //
-    // The UploadWizard and CreateAccountWizard send these fields
-    // as part of the normal song creation payload, so they don't
-    // need this endpoint — they just include downloadPolicy and
-    // downloadPrice in the song creation request body.
     // ═══════════════════════════════════════════════════════════
 
     @PutMapping("/{songId}/download-settings")
     public ResponseEntity<?> updateDownloadSettings(
             @PathVariable UUID songId,
-            @RequestBody Map<String, Object> body,
-            @AuthenticationPrincipal UUID userId) {  // Adjust based on your auth setup
+            @RequestBody Map<String, Object> body) {
         try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
+
             String policy = (String) body.get("downloadPolicy");
             Integer price = body.get("downloadPrice") != null
                     ? Integer.parseInt(body.get("downloadPrice").toString())
@@ -68,22 +59,16 @@ public class DownloadController {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 4A ENDPOINT: Create Purchase Intent (start payment)
+    // CREATE PURCHASE INTENT (buyer starts payment)
     //
     // POST /api/v1/songs/{songId}/purchase
-    //
-    // Returns: { "clientSecret": "pi_xxx_secret_xxx", "amount": 500, ... }
-    //
-    // Called when buyer clicks "Purchase & Download" in DownloadModal.
-    // The frontend takes the clientSecret and uses it with Stripe.js
-    // to show the card form and confirm payment.
+    // Returns: { "clientSecret": "pi_xxx_secret_xxx", ... }
     // ═══════════════════════════════════════════════════════════
 
     @PostMapping("/{songId}/purchase")
-    public ResponseEntity<?> createPurchaseIntent(
-            @PathVariable UUID songId,
-            @AuthenticationPrincipal UUID userId) {
+    public ResponseEntity<?> createPurchaseIntent(@PathVariable UUID songId) {
         try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
             Map<String, Object> result = downloadService.createPurchaseIntent(songId, userId);
             return ResponseEntity.ok(result);
         } catch (RuntimeException e) {
@@ -92,24 +77,20 @@ public class DownloadController {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 4B ENDPOINT: Confirm Purchase (after card charged)
+    // CONFIRM PURCHASE (after Stripe.js charges the card)
     //
     // POST /api/v1/songs/{songId}/purchase/confirm
-    //
     // Body: { "paymentIntentId": "pi_xxx" }
-    //
     // Returns: { "success": true, "downloadUrl": "https://..." }
-    //
-    // Called by frontend AFTER Stripe.js confirms the payment.
-    // This records the purchase and returns the download URL.
     // ═══════════════════════════════════════════════════════════
 
     @PostMapping("/{songId}/purchase/confirm")
     public ResponseEntity<?> confirmPurchase(
             @PathVariable UUID songId,
-            @RequestBody Map<String, String> body,
-            @AuthenticationPrincipal UUID userId) {
+            @RequestBody Map<String, String> body) {
         try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
+
             String paymentIntentId = body.get("paymentIntentId");
             if (paymentIntentId == null || paymentIntentId.isEmpty()) {
                 return ResponseEntity.badRequest()
@@ -125,22 +106,16 @@ public class DownloadController {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // STEP 5 ENDPOINT: Get Download Info
+    // GET DOWNLOAD INFO (determines what DownloadModal shows)
     //
     // GET /api/v1/songs/{songId}/download
-    //
-    // Returns download policy, price, whether user already owns it,
-    // and the download URL if they have access.
-    //
-    // Called by frontend when user clicks the download button —
-    // this determines which state the DownloadModal shows.
+    // Returns: { downloadPolicy, price, canDownload, downloadUrl }
     // ═══════════════════════════════════════════════════════════
 
     @GetMapping("/{songId}/download")
-    public ResponseEntity<?> getDownloadInfo(
-            @PathVariable UUID songId,
-            @AuthenticationPrincipal UUID userId) {
+    public ResponseEntity<?> getDownloadInfo(@PathVariable UUID songId) {
         try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
             Map<String, Object> result = downloadService.getDownloadInfo(songId, userId);
             return ResponseEntity.ok(result);
         } catch (RuntimeException e) {
@@ -150,13 +125,14 @@ public class DownloadController {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // HELPER ENDPOINTS: Purchase History
+    // PURCHASE HISTORY
     // ═══════════════════════════════════════════════════════════
 
-    // GET /api/v1/songs/my-purchases — songs the current user has bought
+    // GET /api/v1/songs/my-purchases
     @GetMapping("/my-purchases")
-    public ResponseEntity<?> getMyPurchases(@AuthenticationPrincipal UUID userId) {
+    public ResponseEntity<?> getMyPurchases() {
         try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
             List<Purchase> purchases = downloadService.getBuyerPurchases(userId);
             return ResponseEntity.ok(purchases);
         } catch (RuntimeException e) {
@@ -165,10 +141,11 @@ public class DownloadController {
         }
     }
 
-    // GET /api/v1/songs/my-sales — songs other users have bought from the current artist
+    // GET /api/v1/songs/my-sales
     @GetMapping("/my-sales")
-    public ResponseEntity<?> getMySales(@AuthenticationPrincipal UUID userId) {
+    public ResponseEntity<?> getMySales() {
         try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
             List<Purchase> sales = downloadService.getArtistSales(userId);
             return ResponseEntity.ok(sales);
         } catch (RuntimeException e) {
