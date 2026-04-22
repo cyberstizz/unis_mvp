@@ -555,12 +555,12 @@ public class VoteService {
                 UNION ALL
                 SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
             )
-            SELECT s.song_id, s.title, COALESCE(COUNT(v.vote_id), 0) + COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist
+            SELECT s.song_id, s.title, COALESCE(COUNT(v.vote_id), 0) + COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist, s.file_url
             FROM songs s LEFT JOIN votes v ON v.target_id = s.song_id AND v.target_type = 'song' AND v.genre_id = :genreId AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId AND v.vote_date BETWEEN :startDate AND :endDate
             LEFT JOIN song_plays sp ON sp.song_id = s.song_id AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
             INNER JOIN users a ON s.artist_id = a.user_id JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
             WHERE s.genre_id = :genreId
-            GROUP BY s.song_id, s.title, s.artwork_url, a.username
+            GROUP BY s.song_id, s.title, s.artwork_url, a.username, s.file_url
             ORDER BY score DESC, COUNT(v.vote_id) DESC
             LIMIT :limit
             """;
@@ -582,11 +582,11 @@ public class VoteService {
                     UNION ALL
                     SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
                 )
-                SELECT s.song_id, s.title, COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist
+                SELECT s.song_id, s.title, COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist, s.file_url
                 FROM songs s LEFT JOIN song_plays sp ON sp.song_id = s.song_id AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
                 INNER JOIN users a ON s.artist_id = a.user_id JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
                 WHERE s.genre_id = :genreId
-                GROUP BY s.song_id, s.title, s.artwork_url, a.username
+                GROUP BY s.song_id, s.title, s.artwork_url, a.username, s.file_url
                 ORDER BY score DESC
                 LIMIT :fallbackLimit
                 """;
@@ -600,7 +600,7 @@ public class VoteService {
                 results.addAll(fallback);
             }
 
-            // FIXED: Add targetId (song_id from row[0])
+            // FIXED: Add targetId (song_id from row[0]) and fileUrl (row[5])
             List<LeaderboardDto> leaderboard = new ArrayList<>();
             for (int i = 0; i < results.size(); i++) {
                 Object[] row = results.get(i);
@@ -611,6 +611,7 @@ public class VoteService {
                     .votes((Long) row[2])
                     .artwork(row[3] != null ? row[3].toString() : null)
                     .artist(row[4] != null ? row[4].toString() : null)
+                    .fileUrl(row[5] != null ? row[5].toString() : null)
                     .build());
             }
             return leaderboard;
