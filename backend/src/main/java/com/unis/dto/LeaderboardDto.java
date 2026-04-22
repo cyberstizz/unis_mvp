@@ -17,5 +17,6 @@ public class LeaderboardDto {
     private Long votes;
     private String artwork;
     private String artist;
-    private UUID targetId;  
+    private UUID targetId;
+    private String fileUrl;
 }
