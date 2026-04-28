@@ -72,6 +72,8 @@ public class AwardService {
     private EntityManager entityManager;
 
     private final CronMonitorService cronMonitorService;
+
+    private static final java.time.ZoneId UNIS_ZONE = java.time.ZoneId.of("America/New_York");
     
     @Lazy
     @Autowired
@@ -126,8 +128,8 @@ public class AwardService {
             }
         }
         
-        LocalDate start = LocalDate.now().minusDays(30);
-        LocalDate end = LocalDate.now();
+        LocalDate start = LocalDate.now(UNIS_ZONE).minusDays(30);
+        LocalDate end = LocalDate.now(UNIS_ZONE);
         List<Award> awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
         
         if (awards.isEmpty() && autoPopulateAwards) {
@@ -727,12 +729,12 @@ public class AwardService {
     // SCHEDULED CRON JOBS (with CronMonitorService tracking)
     // =========================================================================
 
-    @Scheduled(cron = "0 1 0 * * ?")
+    @Scheduled(cron = "0 1 0 * * ?", zone = "America/New_York")
     @Transactional(readOnly = false)
     public void computeDailyAwards() {
         CronExecution exec = cronMonitorService.startExecution("DAILY_AWARDS");
         try {
-            LocalDate yesterday = LocalDate.now().minusDays(1);
+            LocalDate yesterday = LocalDate.now(UNIS_ZONE).minusDays(1);
             System.out.println("=== DAILY AWARD CRON: Computing for " + yesterday + " ===");
 
             Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
@@ -744,7 +746,7 @@ public class AwardService {
 
             long countBefore = awardRepository.count();
             computeAwardsInternal(yesterday, dailyInterval.get().getIntervalId(), null, null);
-            songRepository.resetPlaysToday(LocalDate.now());
+            songRepository.resetPlaysToday(LocalDate.now(UNIS_ZONE));
             long countAfter = awardRepository.count();
 
             int created = (int) (countAfter - countBefore);
@@ -757,7 +759,7 @@ public class AwardService {
         }
     }
 
-    @Scheduled(cron = "0 1 0 * * MON")
+    @Scheduled(cron = "0 1 0 * * MON", zone = "America/New_York")
     @Transactional(readOnly = false)
     public void computeWeeklyAwards() {
         CronExecution exec = cronMonitorService.startExecution("WEEKLY_AWARDS");
@@ -770,7 +772,7 @@ public class AwardService {
             }
 
             long countBefore = awardRepository.count();
-            computeAwardsInternal(LocalDate.now().minusDays(1), weekly.get().getIntervalId(), null, null);
+            computeAwardsInternal(LocalDate.now(UNIS_ZONE).minusDays(1), weekly.get().getIntervalId(), null, null);
             long countAfter = awardRepository.count();
 
             cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
@@ -782,7 +784,7 @@ public class AwardService {
         }
     }
 
-    @Scheduled(cron = "0 1 0 1 * ?")
+    @Scheduled(cron = "0 1 0 1 * ?", zone = "America/New_York")
     @Transactional(readOnly = false)
     public void computeMonthlyAwards() {
         CronExecution exec = cronMonitorService.startExecution("MONTHLY_AWARDS");
@@ -795,7 +797,7 @@ public class AwardService {
             }
 
             long countBefore = awardRepository.count();
-            computeAwardsInternal(LocalDate.now().minusDays(1), monthly.get().getIntervalId(), null, null);
+            computeAwardsInternal(LocalDate.now(UNIS_ZONE).minusDays(1), monthly.get().getIntervalId(), null, null);
             long countAfter = awardRepository.count();
 
             cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
@@ -807,10 +809,10 @@ public class AwardService {
         }
     }
 
-    @Scheduled(cron = "0 1 0 1 * ?")
+    @Scheduled(cron = "0 1 0 1 * ?", zone = "America/New_York")
     @Transactional(readOnly = false)
     public void computeQuarterlyAwards() {
-        LocalDate now = LocalDate.now();
+        LocalDate now = LocalDate.now(UNIS_ZONE);
         int month = now.getMonthValue();
         if (month == 1 || month == 4 || month == 7 || month == 10) {
             CronExecution exec = cronMonitorService.startExecution("QUARTERLY_AWARDS");
@@ -836,10 +838,10 @@ public class AwardService {
         }
     }
 
-    @Scheduled(cron = "0 1 0 1 * ?")
+    @Scheduled(cron = "0 1 0 1 * ?", zone = "America/New_York")
     @Transactional(readOnly = false)
     public void computeMidtermAwards() {
-        LocalDate now = LocalDate.now();
+        LocalDate now = LocalDate.now(UNIS_ZONE);
         int month = now.getMonthValue();
         if (month == 1 || month == 7) {
             CronExecution exec = cronMonitorService.startExecution("MIDTERM_AWARDS");
@@ -865,7 +867,7 @@ public class AwardService {
         }
     }
 
-    @Scheduled(cron = "0 1 0 1 1 ?")
+    @Scheduled(cron = "0 1 0 1 1 ?", zone = "America/New_York")
     @Transactional(readOnly = false)
     public void computeAnnualAwards() {
         CronExecution exec = cronMonitorService.startExecution("ANNUAL_AWARDS");
@@ -878,7 +880,7 @@ public class AwardService {
             }
 
             long countBefore = awardRepository.count();
-            computeAwardsInternal(LocalDate.now().minusDays(1), annual.get().getIntervalId(), null, null);
+            computeAwardsInternal(LocalDate.now(UNIS_ZONE).minusDays(1), annual.get().getIntervalId(), null, null);
             long countAfter = awardRepository.count();
 
             cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
