@@ -1,11 +1,12 @@
 package com.unis.controller;
 
+import com.unis.dto.PeriodLeaderboardDto;
 import com.unis.entity.Award;
 import com.unis.service.AwardService;
-import com.unis.dto.PeriodLeaderboardDto;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -23,7 +24,7 @@ public class AwardController {
      */
     @GetMapping("/leaderboards")
     public ResponseEntity<List<Award>> getLeaderboards(
-            @RequestParam String type,  // "song" or "artist"
+            @RequestParam String type,
             @RequestParam(required = false) UUID intervalId,
             @RequestParam(required = false) UUID jurisdictionId) {
         List<Award> awards = awardService.getLeaderboards(type, intervalId, jurisdictionId);
@@ -32,9 +33,7 @@ public class AwardController {
 
     /**
      * GET /api/v1/awards/past
-     * Past awards/milestones (Milestones page)
-     * 
-     * UPDATED: Added intervalId parameter for proper filtering
+     * Past awards/milestones (legacy endpoint — winner only)
      */
     @GetMapping("/past")
     public ResponseEntity<List<Award>> getPastAwards(
@@ -43,29 +42,29 @@ public class AwardController {
             @RequestParam LocalDate endDate,
             @RequestParam(required = false) UUID jurisdictionId,
             @RequestParam(required = false) UUID genreId,
-            @RequestParam(required = false) UUID intervalId) {  // NEW PARAMETER
+            @RequestParam(required = false) UUID intervalId) {
         List<Award> awards = awardService.getPastAwards(type, startDate, endDate, jurisdictionId, genreId, intervalId);
         return ResponseEntity.ok(awards);
     }
 
     /**
- * GET /api/v1/awards/period-leaderboard
- * Returns the winner + top N candidates for a specific period.
- * Backs the redesigned Milestones page.
- */
-@GetMapping("/period-leaderboard")
-public ResponseEntity<PeriodLeaderboardDto> getPeriodLeaderboard(
-        @RequestParam String type,
-        @RequestParam LocalDate startDate,
-        @RequestParam LocalDate endDate,
-        @RequestParam UUID jurisdictionId,
-        @RequestParam UUID genreId,
-        @RequestParam UUID intervalId,
-        @RequestParam(defaultValue = "5") int limit) {
-    PeriodLeaderboardDto result = awardService.getPeriodLeaderboard(
-        type, startDate, endDate, jurisdictionId, genreId, intervalId, limit);
-    return ResponseEntity.ok(result);
-}
+     * GET /api/v1/awards/period-leaderboard
+     * Returns the winner + top N candidates for a specific period.
+     * Backs the redesigned Milestones page.
+     */
+    @GetMapping("/period-leaderboard")
+    public ResponseEntity<PeriodLeaderboardDto> getPeriodLeaderboard(
+            @RequestParam String type,
+            @RequestParam LocalDate startDate,
+            @RequestParam LocalDate endDate,
+            @RequestParam UUID jurisdictionId,
+            @RequestParam UUID genreId,
+            @RequestParam UUID intervalId,
+            @RequestParam(defaultValue = "5") int limit) {
+        PeriodLeaderboardDto result = awardService.getPeriodLeaderboard(
+                type, startDate, endDate, jurisdictionId, genreId, intervalId, limit);
+        return ResponseEntity.ok(result);
+    }
 
     /**
      * GET /api/v1/awards/cron/manual
@@ -84,7 +83,7 @@ public ResponseEntity<PeriodLeaderboardDto> getPeriodLeaderboard(
      */
     @PostMapping("/compute")
     public ResponseEntity<String> computeAwards(
-            @RequestParam UUID intervalId, 
+            @RequestParam UUID intervalId,
             @RequestParam(required = false) UUID jurisdictionId,
             @RequestParam(required = false) UUID genreId,
             @RequestParam(required = false) LocalDate date) {
