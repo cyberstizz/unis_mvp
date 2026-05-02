@@ -2,6 +2,7 @@ package com.unis.controller;
 
 import com.unis.entity.Award;
 import com.unis.service.AwardService;
+import com.unis.dto.PeriodLeaderboardDto;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -46,6 +47,25 @@ public class AwardController {
         List<Award> awards = awardService.getPastAwards(type, startDate, endDate, jurisdictionId, genreId, intervalId);
         return ResponseEntity.ok(awards);
     }
+
+    /**
+ * GET /api/v1/awards/period-leaderboard
+ * Returns the winner + top N candidates for a specific period.
+ * Backs the redesigned Milestones page.
+ */
+@GetMapping("/period-leaderboard")
+public ResponseEntity<PeriodLeaderboardDto> getPeriodLeaderboard(
+        @RequestParam String type,
+        @RequestParam LocalDate startDate,
+        @RequestParam LocalDate endDate,
+        @RequestParam UUID jurisdictionId,
+        @RequestParam UUID genreId,
+        @RequestParam UUID intervalId,
+        @RequestParam(defaultValue = "5") int limit) {
+    PeriodLeaderboardDto result = awardService.getPeriodLeaderboard(
+        type, startDate, endDate, jurisdictionId, genreId, intervalId, limit);
+    return ResponseEntity.ok(result);
+}
 
     /**
      * GET /api/v1/awards/cron/manual

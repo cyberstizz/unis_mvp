@@ -15,6 +15,9 @@ import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.GenreRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.UserRepository;
+import com.unis.dto.LeaderboardEntryDto;
+import com.unis.dto.LeaderboardEntrydto;
+import com.unis.dto.PeriodLeaderboardDto;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
@@ -194,6 +197,116 @@ public class AwardService {
                                       UUID jurisdictionId, UUID genreId) {
         return getPastAwards(type, startDate, endDate, jurisdictionId, genreId, null);
     }
+
+
+    /**
+ * Get the full ranked leaderboard for a period, plus the saved winner Award.
+ * Reuses getCandidatesWithWeightedVotes (and the engagement fallback) so the
+ * ranking matches what the cron uses to determine winners.
+ */
+@Transactional(readOnly = true)
+public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDate, LocalDate endDate,
+                                                  UUID jurisdictionId, UUID genreId, UUID intervalId,
+                                                  int limit) {
+    System.out.println("=== getPeriodLeaderboard CALLED ===");
+    System.out.println("Type: " + type + ", Start: " + startDate + ", End: " + endDate);
+    System.out.println("Jur: " + jurisdictionId + ", Genre: " + genreId + ", Interval: " + intervalId);
+
+    // 1. Fetch the saved winner Award (auto-populate if missing — same pattern as getPastAwards)
+    List<Award> awards = awardRepository.findByFilters(
+        type, jurisdictionId, genreId, intervalId, startDate, endDate);
+
+    if (awards.isEmpty() && autoPopulateAwards) {
+        System.out.println("No winner award found — triggering computation");
+        self.computeAndSaveAwardsInNewTransaction(endDate, intervalId, jurisdictionId, genreId);
+        awards = awardRepository.findByFilters(
+            type, jurisdictionId, genreId, intervalId, startDate, endDate);
+    }
+
+    Award winner = awards.isEmpty() ? null : awards.get(0);
+    if (winner != null) {
+        populateAwardEntities(awards);
+    }
+
+    // 2. Compute the full ranked candidate list, live, using the same cascade
+    //    (weighted points → plays → likes → score → seniority).
+    List<CandidateResult> candidates = getCandidatesWithWeightedVotes(
+        type, jurisdictionId, genreId, startDate, endDate);
+
+    // 3. Engagement fallback when no votes exist for the period
+    if (candidates.isEmpty()) {
+        candidates = getCandidatesByEngagement(
+            type, jurisdictionId, genreId, startDate, endDate);
+    }
+
+    // 4. Build response
+    int totalVotes = candidates.stream().mapToInt(c -> c.rawVoteCount).sum();
+    UUID winnerId = winner != null
+        ? winner.getTargetId()
+        : (candidates.isEmpty() ? null : candidates.get(0).targetId);
+
+    List<LeaderboardEntryDto> leaderboard = new ArrayList<>();
+    int rank = 1;
+    for (CandidateResult c : candidates.stream().limit(limit).collect(Collectors.toList())) {
+        boolean isWinner = c.targetId.equals(winnerId);
+        leaderboard.add(hydrateLeaderboardEntry(c, type, rank++, isWinner, winner));
+    }
+
+    return PeriodLeaderboardDto.builder()
+        .winner(winner)
+        .leaderboard(leaderboard)
+        .totalVotes(totalVotes)
+        .build();
+}
+
+/**
+ * Hydrate a CandidateResult into a leaderboard entry by pulling
+ * title/artist/artwork from the song or user repository.
+ * The winning entry also receives the Award's determination metadata.
+ */
+private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String type, int rank,
+                                                     boolean isWinner, Award winnerAward) {
+    String title = "";
+    String artist = "";
+    String artwork = null;
+
+    if ("song".equals(type)) {
+        Song song = songRepository.findById(c.targetId).orElse(null);
+        if (song != null) {
+            title = song.getTitle();
+            artist = song.getArtist() != null ? song.getArtist().getUsername() : "Unknown Artist";
+            artwork = song.getArtworkUrl();
+        }
+    } else {
+        User user = userRepository.findById(c.targetId).orElse(null);
+        if (user != null) {
+            title = user.getUsername();
+            artist = user.getUsername();
+            artwork = user.getPhotoUrl();
+        }
+    }
+
+    LeaderboardEntryDto.LeaderboardEntryDtoBuilder builder = LeaderboardEntryDto.builder()
+        .rank(rank)
+        .targetId(c.targetId)
+        .targetType(type)
+        .title(title)
+        .artist(artist)
+        .artwork(artwork)
+        .votes((long) c.rawVoteCount)
+        .weightedPoints(c.weightedPoints)
+        .playsCount(c.playsCount)
+        .likesCount(c.likesCount)
+        .isWinner(isWinner);
+
+    // Determination metadata only meaningful on the winning entry
+    if (isWinner && winnerAward != null) {
+        builder.determinationMethod(winnerAward.getDeterminationMethod());
+        builder.tiedCandidatesCount(winnerAward.getTiedCandidatesCount());
+    }
+
+    return builder.build();
+}
 
     // =========================================================================
     // TRANSACTION BOUNDARY FIX
