@@ -16,7 +16,6 @@ import com.unis.repository.GenreRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.UserRepository;
 import com.unis.dto.LeaderboardEntryDto;
-import com.unis.dto.LeaderboardEntrydto;
 import com.unis.dto.PeriodLeaderboardDto;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
