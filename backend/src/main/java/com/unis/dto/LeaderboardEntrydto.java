@@ -7,18 +7,18 @@ import java.util.UUID;
 
 @Data
 @Builder
-public class LeaderboardEntrydto {
+public class LeaderboardEntryDto {
     private int rank;
     private UUID targetId;
-    private String targetType;       // "song" or "artist"
+    private String targetType;
     private String title;
     private String artist;
-    private String artwork;          // raw URL/path; frontend prepends API_BASE_URL if relative
-    private long votes;              // raw vote count during the period
-    private int weightedPoints;      // sum of vote weights (the determinant)
+    private String artwork;
+    private long votes;
+    private int weightedPoints;
     private int playsCount;
     private int likesCount;
-    private boolean isWinner;        // true for the entry that was awarded
+    private boolean isWinner;
     private String determinationMethod;
     private Integer tiedCandidatesCount;
 }
