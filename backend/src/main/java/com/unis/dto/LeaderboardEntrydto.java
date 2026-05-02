@@ -14,7 +14,7 @@ import java.util.UUID;
  */
 @Data
 @Builder
-public class LeaderboardEntryDto {
+public class LeaderboardEntrydto {
     private int rank;
     private UUID targetId;
     private String targetType;       // "song" or "artist"
