@@ -26,6 +26,7 @@ public class CacheConfig {
             buildCache("jurisdictions", 5, TimeUnit.MINUTES),
             buildCache("genres", 5, TimeUnit.MINUTES),
             buildCache("userProfiles", 5, TimeUnit.MINUTES),
+            buildCache("profileSummaries", 2, TimeUnit.MINUTES),
             buildCache("awards", 10, TimeUnit.MINUTES),           // Historical awards - rarely change
             buildCache("leaderboards", 1, TimeUnit.MINUTES),      // Live rankings - frequent updates
             buildCache("nominees", 1, TimeUnit.MINUTES),          // Voting page nominees - frequent updates
