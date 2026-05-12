@@ -298,7 +298,7 @@ public class UserService {
     }
 
     // Update photo - EVICTS user profile cache
-    @CacheEvict(value = {"userProfiles", "artists"}, key = "#userId")
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
     public User updatePhoto(UUID userId, String photoUrl) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -307,7 +307,7 @@ public class UserService {
     }
 
     // Update bio - EVICTS user profile cache
-    @CacheEvict(value = {"userProfiles", "artists"}, key = "#userId")
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
     public User updateBio(UUID userId, String bio) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -316,7 +316,7 @@ public class UserService {
     }
 
     // Update default song - EVICTS user profile and artist cache
-    @CacheEvict(value = {"userProfiles", "artists"}, key = "#userId")
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
     public User updateDefaultSong(UUID userId, UUID defaultSongId) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -340,7 +340,7 @@ public class UserService {
     }
 
     // Update password - EVICTS user profile cache (even though password not visible)
-    @CacheEvict(value = "userProfiles", key = "#userId")
+    @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId")
     public User updatePassword(UUID userId, String oldPassword, String newPassword) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -421,7 +421,7 @@ public class UserService {
 
     // Delete user - EVICTS all relevant caches
     @Transactional
-    @CacheEvict(value = {"userProfiles", "artists"}, allEntries = true)
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, allEntries = true)
     public void deleteCurrentUserAndAllData(UUID currentUserId) {
         // First, verify user exists
         User user = userRepository.findById(currentUserId)
@@ -493,7 +493,7 @@ public class UserService {
 
 
     @Transactional
-    @CacheEvict(value = "userProfiles", key = "#userId")
+    @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId")
     public User changeSupportedArtist(UUID userId, UUID newArtistId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
