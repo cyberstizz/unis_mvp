@@ -157,13 +157,20 @@ public class UserService {
         }
     
         // ---- Vote history -----------------------------------------------------
-        // Left null intentionally. Wiring this up requires VoteRepository, which
-        // I haven't seen yet. Once you share it, this block will populate with:
-        //   - totalCount: count of votes cast by this user
-        //   - recent: last ~10 votes with pre-resolved target names
-        // The frontend handles null voteHistory gracefully (falls back to 0 count).
-        ProfileSummaryDto.VoteHistorySummary voteHistory = null;
-    
+        ProfileSummaryDto.VoteHistorySummary voteHistory;
+        try {
+            List<Vote> userVotes = voteRepository.findByUserUserIdOrderByVoteDateDesc(userId);
+            voteHistory = ProfileSummaryDto.VoteHistorySummary.builder()
+                .totalCount(userVotes.size())
+                .recent(new java.util.ArrayList<>())  // empty for now; modal can fetch its own list
+                .build();
+        } catch (Exception e) {
+            System.out.println("[ProfileSummary] WARNING: vote history failed for " + userId + ": " + e.getMessage());
+            voteHistory = ProfileSummaryDto.VoteHistorySummary.builder()
+                .totalCount(0)
+                .recent(new java.util.ArrayList<>())
+                .build();
+        }    
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
         System.out.println("[ProfileSummary] action=fetch userId=" + userId
             + " status=ok durationMs=" + durationMs
