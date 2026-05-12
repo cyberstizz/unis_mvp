@@ -1,5 +1,6 @@
 package com.unis.service;
 
+import com.unis.entity.Vote;
 import com.unis.entity.User;
 import com.unis.entity.Referral;
 import com.unis.entity.Song;
@@ -26,6 +27,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.unis.dto.ProfileSummaryDto;
+import java.util.ArrayList;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -82,6 +85,97 @@ public class UserService {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+
+
+    @Cacheable(value = "profileSummaries", key = "#userId")
+    public ProfileSummaryDto getProfileSummary(UUID userId) {
+        long startNs = System.nanoTime();
+    
+        User user = userRepository.findByIdWithJurisdiction(userId)
+            .orElseThrow(() -> new RuntimeException("User not found: " + userId));
+    
+        if (user.getDeletedAt() != null) {
+            throw new RuntimeException("User is deleted: " + userId);
+        }
+    
+        // ---- Self profile ------------------------------------------------------
+        ProfileSummaryDto.SelfProfile selfProfile = ProfileSummaryDto.SelfProfile.builder()
+            .userId(user.getUserId())
+            .username(user.getUsername())
+            .email(user.getEmail())
+            .bio(user.getBio())
+            .photoUrl(user.getPhotoUrl())
+            .score(user.getScore())
+            .level(user.getLevel())
+            .themePreference(user.getThemePreference())
+            .role(user.getRole() != null ? user.getRole().toString() : null)
+            .supportedArtistId(user.getSupportedArtistId())
+            .instagramUrl(user.getInstagramUrl())
+            .twitterUrl(user.getTwitterUrl())
+            .tiktokUrl(user.getTiktokUrl())
+            .createdAt(user.getCreatedAt())
+            .jurisdiction(user.getJurisdiction() == null ? null :
+                ProfileSummaryDto.JurisdictionInfo.builder()
+                    .jurisdictionId(user.getJurisdiction().getJurisdictionId())
+                    .name(user.getJurisdiction().getName())
+                    .build())
+            .build();
+    
+        // ---- Supported artist (optional) --------------------------------------
+        ProfileSummaryDto.SupportedArtistInfo supportedArtist = null;
+        if (user.getSupportedArtistId() != null) {
+            Optional<User> artistOpt = userRepository.findById(user.getSupportedArtistId());
+            if (artistOpt.isPresent()) {
+                User artist = artistOpt.get();
+                ProfileSummaryDto.DefaultSongInfo defaultSong = null;
+                if (artist.getDefaultSongId() != null) {
+                    Optional<Song> songOpt = songRepository.findById(artist.getDefaultSongId());
+                    if (songOpt.isPresent()) {
+                        Song s = songOpt.get();
+                        defaultSong = ProfileSummaryDto.DefaultSongInfo.builder()
+                            .songId(s.getSongId())
+                            .title(s.getTitle())
+                            .fileUrl(s.getFileUrl())
+                            .artworkUrl(s.getArtworkUrl())
+                            .duration(s.getDuration())
+                            .build();
+                    }
+                }
+                supportedArtist = ProfileSummaryDto.SupportedArtistInfo.builder()
+                    .userId(artist.getUserId())
+                    .username(artist.getUsername())
+                    .photoUrl(artist.getPhotoUrl())
+                    .defaultSong(defaultSong)
+                    .build();
+            } else {
+                // Stale supportedArtistId pointing to a deleted user — log and continue.
+                System.out.println("[ProfileSummary] WARNING: user " + userId
+                    + " has supportedArtistId " + user.getSupportedArtistId()
+                    + " but that artist was not found");
+            }
+        }
+    
+        // ---- Vote history -----------------------------------------------------
+        // Left null intentionally. Wiring this up requires VoteRepository, which
+        // I haven't seen yet. Once you share it, this block will populate with:
+        //   - totalCount: count of votes cast by this user
+        //   - recent: last ~10 votes with pre-resolved target names
+        // The frontend handles null voteHistory gracefully (falls back to 0 count).
+        ProfileSummaryDto.VoteHistorySummary voteHistory = null;
+    
+        long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+        System.out.println("[ProfileSummary] action=fetch userId=" + userId
+            + " status=ok durationMs=" + durationMs
+            + " hasArtist=" + (supportedArtist != null));
+    
+        return ProfileSummaryDto.builder()
+            .profile(selfProfile)
+            .supportedArtist(supportedArtist)
+            .voteHistory(voteHistory)
+            .referralCode(user.getReferralCode())
+            .build();
+    }
 
 // Register new user - NOT CACHED (write operation)
     public User register(User newUser, UUID supportedArtistId, String referralCode) {
