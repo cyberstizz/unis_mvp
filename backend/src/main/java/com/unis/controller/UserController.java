@@ -1,6 +1,7 @@
 package com.unis.controller;
 
 import com.unis.dto.UserDto;
+import com.unis.dto.ProfileSummaryDto;
 import com.unis.util.SecurityUtils;
 
 import org.slf4j.Logger;
@@ -63,6 +64,52 @@ public class UserController {
     private FollowRepository followRepository;
 
     private static final Logger log = LoggerFactory.getLogger(UserController.class);
+
+    /**
+     * GET /api/v1/users/profile-summary/{userId}
+     *
+     * Consolidated payload for the user's own profile page. Replaces 5–6
+     * separate round trips with a single request and a single cache key.
+     *
+     * Authorization: caller must be the user themselves. This is enforced
+     * here in the controller — never trust the client to send the right userId.
+     */
+    
+    @GetMapping("/profile-summary/{userId}")
+    public ResponseEntity<?> getProfileSummary(@PathVariable UUID userId) {
+        UUID authenticatedUserId;
+        try {
+            authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            log.warn("[ProfileSummary] action=auth_resolve status=fail err={}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("error", "Not authenticated"));
+        }
+    
+        if (!authenticatedUserId.equals(userId)) {
+            log.warn("[ProfileSummary] action=ownership_check status=fail authUser={} pathUser={}",
+                authenticatedUserId, userId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("error", "You can only fetch your own profile summary"));
+        }
+    
+        try {
+            ProfileSummaryDto summary = userService.getProfileSummary(userId);
+            return ResponseEntity.ok(summary);
+        } catch (RuntimeException e) {
+            log.error("[ProfileSummary] action=fetch status=fail userId={} err={}",
+                userId, e.getMessage());
+            // Distinguish 404 (user not found / deleted) from 500 (other failures)
+            if (e.getMessage() != null &&
+                (e.getMessage().contains("not found") || e.getMessage().contains("deleted"))) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "Profile not found"));
+            }
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("error", "Failed to load profile summary"));
+        }
+    }
+
 
 
     // POST /api/v1/users/register (page 6 signup)
