@@ -111,6 +111,31 @@ public class User {
     @Column(name = "theme_preference", length = 20)
     private String themePreference = "blue";
 
+    // -----------------------------------------------------------------------
+    // Preference flags (backing columns for AccountSettings toggles).
+    // @Builder.Default is required: with @Builder, an un-set field is null,
+    // and these columns are NOT NULL — without the default, builder-created
+    // users fail to insert.
+    // -----------------------------------------------------------------------
+    @Builder.Default
+    @Column(name = "email_notifications", nullable = false)
+    private Boolean emailNotifications = true;
+
+    @Builder.Default
+    @Column(name = "public_profile", nullable = false)
+    private Boolean publicProfile = true;
+
+    @Builder.Default
+    @Column(name = "show_vote_history", nullable = false)
+    private Boolean showVoteHistory = false;
+
+    // Per-user token for one-click email unsubscribe (clicked from an email,
+    // so it can't rely on a session — the unguessable token is the auth).
+    // updatable=false: it's assigned once at creation and never rotated here.
+    @Builder.Default
+    @Column(name = "unsubscribe_token", nullable = false, unique = true, updatable = false)
+    private UUID unsubscribeToken = UUID.randomUUID();
+
     public enum Role {
         listener, artist
     }

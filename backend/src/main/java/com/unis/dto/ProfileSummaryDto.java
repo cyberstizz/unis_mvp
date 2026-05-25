@@ -16,12 +16,10 @@ import lombok.NoArgsConstructor;
  * Returned ONLY for the authenticated user fetching their own summary —
  * the controller enforces this with an ownership check.
  *
- * Every field below corresponds to a real column on the User entity.
- * Settings/preferences toggles that the UI shows as placeholders
- * (publicProfile, showVoteHistory, emailNotifications, pushNotifications,
- * language) are intentionally NOT in this DTO yet, because they have no
- * backing columns. When those columns are added to User, add a `settings`
- * field to this DTO at the same time so the frontend can read real values.
+ * The `settings` block carries the user's preference toggles
+ * (emailNotifications, publicProfile, showVoteHistory), which are now
+ * real NOT NULL columns on the User entity. The frontend reads these
+ * instead of falling back to client-side DEFAULTS.
  */
 @Data
 @Builder
@@ -33,6 +31,7 @@ public class ProfileSummaryDto {
     private SupportedArtistInfo supportedArtist; // nullable
     private VoteHistorySummary voteHistory;       // nullable until VoteRepository is wired
     private String referralCode;
+    private Settings settings;
 
     // -----------------------------------------------------------------------
     // Self-profile: what the user sees about themselves
@@ -118,5 +117,18 @@ public class ProfileSummaryDto {
         private String targetType;
         private String targetName;
         private LocalDateTime votedAt;
+    }
+
+    // -----------------------------------------------------------------------
+    // Preference toggles — backed by real NOT NULL columns on User.
+    // -----------------------------------------------------------------------
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Settings {
+        private Boolean emailNotifications;
+        private Boolean publicProfile;
+        private Boolean showVoteHistory;
     }
 }
