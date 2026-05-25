@@ -51,7 +51,7 @@ public class DigestEmailScheduler {
         this.apiBaseUrl = apiBaseUrl;
     }
 
-    @Scheduled(cron = "${unis.digest.cron:0 0 13 * * *}", zone = "UTC")
+    @Scheduled(cron = "${unis.digest.cron:0 0 13 * * SUN}", zone = "UTC")
     public void sendDailyDigest() {
         long startNs = System.nanoTime();
 

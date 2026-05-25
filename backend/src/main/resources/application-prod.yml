@@ -34,6 +34,12 @@ spring:
 
   unis:
     auto-populate-awards: true
+    app-base-url: ${UNIS_APP_BASE_URL:http://localhost:5173}
+    api-base-url: ${UNIS_API_BASE_URL:http://localhost:8080}
+    digest:
+      enabled: ${UNIS_DIGEST_ENABLED:true}
+      cron: "0 0 13 * * SUN"
+      daily-limit: 90
 
   logging:
     level:
