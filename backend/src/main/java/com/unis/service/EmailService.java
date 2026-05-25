@@ -22,12 +22,75 @@ public class EmailService {
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private static final ObjectMapper mapper = new ObjectMapper();
 
+    /** True when a Resend API key is configured. Lets callers (e.g. the digest
+     *  scheduler) skip cleanly in local dev rather than firing doomed requests. */
+    public boolean isConfigured() {
+        return resendApiKey != null && !resendApiKey.isBlank();
+    }
+
+    /**
+     * Generic transactional send via Resend. Provider-agnostic from the
+     * caller's view: the digest scheduler hands over a rendered email and
+     * doesn't care that Resend is underneath. Moving to Amazon SES later
+     * changes only the body of this method.
+     *
+     * Never throws -- failure is logged and returned as false so a batch
+     * caller can keep going through the rest of its recipients.
+     */
+    public boolean sendTransactional(String toEmail, String subject, String htmlContent) {
+        if (!isConfigured()) {
+            System.out.println("[Email] action=send status=skip reason=not_configured to=" + toEmail);
+            return false;
+        }
+        if (toEmail == null || toEmail.isBlank()) {
+            System.out.println("[Email] action=send status=skip reason=no_recipient");
+            return false;
+        }
+
+        String normalizedEmail = toEmail.toLowerCase();
+        long startNs = System.nanoTime();
+        try {
+            Map<String, String> payload = Map.of(
+                    "from", fromEmail,
+                    "to", normalizedEmail,
+                    "subject", subject,
+                    "html", htmlContent
+            );
+            String jsonPayload = mapper.writeValueAsString(payload);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.resend.com/emails"))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + resendApiKey)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            long ms = (System.nanoTime() - startNs) / 1_000_000;
+            int code = response.statusCode();
+
+            if (code >= 200 && code < 300) {
+                System.out.println("[Email] action=send status=ok to=" + normalizedEmail
+                    + " httpStatus=" + code + " durationMs=" + ms);
+                return true;
+            }
+            System.err.println("[Email] action=send status=fail to=" + normalizedEmail
+                + " httpStatus=" + code + " durationMs=" + ms + " body=" + response.body());
+            return false;
+        } catch (Exception e) {
+            long ms = (System.nanoTime() - startNs) / 1_000_000;
+            System.err.println("[Email] action=send status=error to=" + normalizedEmail
+                + " durationMs=" + ms + " err=" + e.getMessage());
+            return false;
+        }
+    }
+
     /**
      * Send a password reset email via Resend API.
      * Falls back to console logging if API key is not configured.
      */
     public void sendResetEmail(String toEmail, String username, String resetUrl) {
-        // Normalize to lowercase — Resend's test-mode restriction is case-sensitive
+        // Normalize to lowercase -- Resend's test-mode restriction is case-sensitive
         String normalizedEmail = toEmail.toLowerCase();
 
         if (resendApiKey == null || resendApiKey.isBlank()) {
@@ -41,7 +104,7 @@ public class EmailService {
         String htmlBody = buildResetEmailHtml(username, resetUrl);
 
         try {
-            // Use Jackson to serialize — eliminates all manual escaping bugs
+            // Use Jackson to serialize -- eliminates all manual escaping bugs
             Map<String, String> payload = Map.of(
                     "from", fromEmail,
                     "to", normalizedEmail,
@@ -123,7 +186,7 @@ public class EmailService {
 
                 <!-- Footer -->
                 <div style="padding:20px 32px; background:rgba(0,0,0,0.3); text-align:center;">
-                  <p style="color:#4b5563; font-size:12px; margin:0;">Unis Music Platform — Your block's beats.</p>
+                  <p style="color:#4b5563; font-size:12px; margin:0;">Unis Music Platform -- Your block's beats.</p>
                 </div>
               </div>
             </body>

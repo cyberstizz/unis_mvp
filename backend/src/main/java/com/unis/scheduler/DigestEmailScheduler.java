@@ -10,19 +10,20 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * DigestEmailScheduler — sends the daily digest to opted-in users.
+ * DigestEmailScheduler -- sends the daily digest to opted-in users.
  *
- * Targeting is DB-driven (not Brevo's scheduler): we query users where
+ * Targeting is DB-driven (not the provider's scheduler): we query users where
  * email_notifications = true AND deleted_at IS NULL, render each email from
- * our own data, and hand it to EmailService. This is why the provider is
- * swappable and why the "list" never drifts from the source of truth.
+ * our own data, and hand it to EmailService.sendTransactional. The provider
+ * (currently Resend) is just a pipe -- moving to SES changes only EmailService.
  *
- * Free-tier guard: Brevo's free plan allows 300 emails/day. The daily-limit
- * config caps the batch below that. Once opt-ins exceed it, move to Amazon SES
- * (~$0.10 per 1,000) and raise the cap — only EmailService changes.
+ * Free-tier guard: Resend's free plan allows ~100 emails/day, 3,000/month,
+ * SHARED with password-reset sends. daily-limit defaults to 90 to leave
+ * headroom for resets. Once opt-ins approach that, upgrade Resend's paid tier
+ * or move to Amazon SES and raise the cap.
  *
- * Cron defaults to 13:00 UTC (~8–9am ET). Requires @EnableScheduling on the
- * application (see integration notes).
+ * Cron defaults to 13:00 UTC (~8-9am ET). Requires @EnableScheduling on the
+ * application class.
  */
 @Component
 public class DigestEmailScheduler {
@@ -39,9 +40,9 @@ public class DigestEmailScheduler {
             UserRepository userRepository,
             EmailService emailService,
             @Value("${unis.digest.enabled:true}") boolean enabled,
-            @Value("${unis.digest.daily-limit:280}") int dailyLimit,
-            @Value("${unis.app-base-url:https://unis.com}") String appBaseUrl,
-            @Value("${unis.api-base-url:https://api.unis.com}") String apiBaseUrl) {
+            @Value("${unis.digest.daily-limit:90}") int dailyLimit,
+            @Value("${unis.app-base-url:http://localhost:5173}") String appBaseUrl,
+            @Value("${unis.api-base-url:http://localhost:8080}") String apiBaseUrl) {
         this.userRepository = userRepository;
         this.emailService = emailService;
         this.enabled = enabled;
@@ -67,7 +68,7 @@ public class DigestEmailScheduler {
         try {
             targets = userRepository.findByEmailNotificationsTrueAndDeletedAtIsNull();
         } catch (Exception e) {
-            System.out.println("[Digest] action=run status=error phase=query err=" + e.getMessage());
+            System.err.println("[Digest] action=run status=error phase=query err=" + e.getMessage());
             return;
         }
 
@@ -89,7 +90,6 @@ public class DigestEmailScheduler {
             String html = buildDigestHtml(u);
             boolean ok = emailService.sendTransactional(
                 u.getEmail(),
-                u.getUsername(),
                 "Your UNIS daily digest",
                 html
             );
@@ -104,13 +104,13 @@ public class DigestEmailScheduler {
 
     // -------------------------------------------------------------------------
     // Minimal working digest. Enrich with real data (jurisdiction standings,
-    // new winners, supported-artist movement) once those queries are defined —
+    // new winners, supported-artist movement) once those queries are defined --
     // that's a product decision, so this ships as a functional skeleton.
     // -------------------------------------------------------------------------
     private String buildDigestHtml(User u) {
         String name = esc(u.getUsername() == null ? "there" : u.getUsername());
         int score = u.getScore() == null ? 0 : u.getScore();
-        String unsubscribeUrl = apiBaseUrl + "/v1/users/unsubscribe?token=" + u.getUnsubscribeToken();
+        String unsubscribeUrl = apiBaseUrl + "/api/v1/users/unsubscribe?token=" + u.getUnsubscribeToken();
 
         return "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;color:#111114;\">"
             + "<h1 style=\"color:#163387;font-size:22px;margin:0 0 4px;\">UNIS</h1>"

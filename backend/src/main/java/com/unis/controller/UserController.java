@@ -233,6 +233,57 @@ public class UserController {
         return ResponseEntity.ok(updated);
     }
 
+    // PATCH /api/v1/users/{userId}/preferences (AccountSettings toggles)
+    // Ownership check + whitelist enforced in service. Must be authenticated.
+    @PatchMapping("/{userId}/preferences")
+    public ResponseEntity<?> updatePreferences(
+            @PathVariable UUID userId,
+            @RequestBody Map<String, Boolean> updates) {
+
+        UUID authenticatedUserId;
+        try {
+            authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            log.warn("[Preferences] action=auth_resolve status=fail err={}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("error", "Not authenticated"));
+        }
+
+        if (!authenticatedUserId.equals(userId)) {
+            log.warn("[Preferences] action=ownership_check status=fail authUser={} pathUser={}",
+                authenticatedUserId, userId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("error", "You can only update your own preferences"));
+        }
+
+        try {
+            ProfileSummaryDto.Settings updated = userService.updatePreferences(userId, updates);
+            return ResponseEntity.ok(updated);
+        } catch (RuntimeException e) {
+            log.error("[Preferences] action=update status=fail userId={} err={}", userId, e.getMessage());
+            if (e.getMessage() != null && e.getMessage().contains("not found")) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "User not found"));
+            }
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("error", "Failed to update preferences"));
+        }
+    }
+
+    // GET /api/v1/users/unsubscribe?token=... (one-click email unsubscribe)
+    // PUBLIC: clicked from an email with no session. Security is the unguessable
+    // token. MUST be permitAll in SecurityConfig.
+    @GetMapping("/unsubscribe")
+    public ResponseEntity<String> unsubscribe(@RequestParam("token") UUID token) {
+        boolean ok = userService.unsubscribeByToken(token);
+        String msg = ok
+            ? "You've been unsubscribed from UNIS emails."
+            : "This unsubscribe link is invalid or already used.";
+        String body = "<html><body style=\"font-family:sans-serif;text-align:center;padding:48px;\">"
+            + "<h2 style=\"color:#163387;\">UNIS</h2><p>" + msg + "</p></body></html>";
+        return ResponseEntity.ok().header("Content-Type", "text/html").body(body);
+    }
+
     // GET /api/v1/users/artist/{id} (page 10 artist page)
     @GetMapping("/artist/{artistId}")
     public ResponseEntity<User> getArtistProfile(@PathVariable UUID artistId) {

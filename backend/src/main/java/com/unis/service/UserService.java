@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -170,7 +171,15 @@ public class UserService {
                 .totalCount(0)
                 .recent(new java.util.ArrayList<>())
                 .build();
-        }    
+        }
+
+        // ---- Settings (preference toggles, backed by real columns) ------------
+        ProfileSummaryDto.Settings settings = ProfileSummaryDto.Settings.builder()
+            .emailNotifications(user.getEmailNotifications() != null ? user.getEmailNotifications() : true)
+            .publicProfile(user.getPublicProfile() != null ? user.getPublicProfile() : true)
+            .showVoteHistory(user.getShowVoteHistory() != null ? user.getShowVoteHistory() : false)
+            .build();
+
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
         System.out.println("[ProfileSummary] action=fetch userId=" + userId
             + " status=ok durationMs=" + durationMs
@@ -181,7 +190,70 @@ public class UserService {
             .supportedArtist(supportedArtist)
             .voteHistory(voteHistory)
             .referralCode(user.getReferralCode())
+            .settings(settings)
             .build();
+    }
+
+    // -----------------------------------------------------------------------
+    // Preference toggles (AccountSettings). Whitelist of three keys IS the
+    // security boundary — any other key in the payload is ignored, so a
+    // malicious { "role": "admin" } can never reach the entity.
+    // -----------------------------------------------------------------------
+    @CacheEvict(value = "profileSummaries", key = "#userId")
+    public ProfileSummaryDto.Settings updatePreferences(UUID userId, Map<String, Boolean> updates) {
+        long startNs = System.nanoTime();
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found: " + userId));
+
+        boolean changed = false;
+        if (updates.containsKey("emailNotifications") && updates.get("emailNotifications") != null) {
+            user.setEmailNotifications(updates.get("emailNotifications"));
+            changed = true;
+        }
+        if (updates.containsKey("publicProfile") && updates.get("publicProfile") != null) {
+            user.setPublicProfile(updates.get("publicProfile"));
+            changed = true;
+        }
+        if (updates.containsKey("showVoteHistory") && updates.get("showVoteHistory") != null) {
+            user.setShowVoteHistory(updates.get("showVoteHistory"));
+            changed = true;
+        }
+
+        if (changed) {
+            userRepository.save(user);
+        } else {
+            System.out.println("[Preferences] action=update userId=" + userId
+                + " status=noop reason=no_valid_keys keys=" + updates.keySet());
+        }
+
+        long ms = (System.nanoTime() - startNs) / 1_000_000;
+        System.out.println("[Preferences] action=update userId=" + userId
+            + " status=ok changed=" + changed + " durationMs=" + ms);
+
+        return ProfileSummaryDto.Settings.builder()
+            .emailNotifications(user.getEmailNotifications())
+            .publicProfile(user.getPublicProfile())
+            .showVoteHistory(user.getShowVoteHistory())
+            .build();
+    }
+
+    // -----------------------------------------------------------------------
+    // One-click email unsubscribe. We only have the token (clicked from an
+    // email, no session), so a full profileSummaries evict is acceptable —
+    // unsubscribe is rare and we can't target the specific userId key here.
+    // -----------------------------------------------------------------------
+    @CacheEvict(value = "profileSummaries", allEntries = true)
+    public boolean unsubscribeByToken(UUID token) {
+        Optional<User> opt = userRepository.findByUnsubscribeToken(token);
+        if (opt.isEmpty()) {
+            System.out.println("[Preferences] action=unsubscribe status=noop reason=token_not_found");
+            return false;
+        }
+        User user = opt.get();
+        user.setEmailNotifications(false);
+        userRepository.save(user);
+        System.out.println("[Preferences] action=unsubscribe userId=" + user.getUserId() + " status=ok");
+        return true;
     }
 
 // Register new user - NOT CACHED (write operation)

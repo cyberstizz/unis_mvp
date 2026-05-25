@@ -88,4 +88,7 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Page<User> searchUsers(@Param("search") String search, Pageable pageable);
 
     Page<User> findByRole(User.Role role, Pageable pageable);
+
+    java.util.Optional<User> findByUnsubscribeToken(java.util.UUID token);
+    java.util.List<User> findByEmailNotificationsTrueAndDeletedAtIsNull();
 }
