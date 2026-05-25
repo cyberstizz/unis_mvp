@@ -147,6 +147,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/users/me").permitAll()
                 .requestMatchers("/api/v1/jurisdictions/by-location").permitAll()
                 .requestMatchers("/api/v1/users/validate-referral/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/unsubscribe").permitAll()
                 .requestMatchers("/api/v1/users/check-email").permitAll()
                 .requestMatchers("/api/v1/users/check-username").permitAll()
                 .requestMatchers("/api/v1/users/*/default-song").permitAll()
