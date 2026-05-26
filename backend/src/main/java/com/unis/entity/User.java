@@ -114,7 +114,7 @@ public class User {
     // -----------------------------------------------------------------------
     // Preference flags (backing columns for AccountSettings toggles).
     // @Builder.Default is required: with @Builder, an un-set field is null,
-    // and these columns are NOT NULL — without the default, builder-created
+    // and these columns are NOT NULL -- without the default, builder-created
     // users fail to insert.
     // -----------------------------------------------------------------------
     @Builder.Default
@@ -130,11 +130,24 @@ public class User {
     private Boolean showVoteHistory = false;
 
     // Per-user token for one-click email unsubscribe (clicked from an email,
-    // so it can't rely on a session — the unguessable token is the auth).
+    // so it can't rely on a session -- the unguessable token is the auth).
     // updatable=false: it's assigned once at creation and never rotated here.
     @Builder.Default
     @Column(name = "unsubscribe_token", nullable = false, unique = true, updatable = false)
     private UUID unsubscribeToken = UUID.randomUUID();
+
+    // -----------------------------------------------------------------------
+    // Pending supported-artist change. The effective artist (supportedArtistId
+    // above) only changes at the month boundary; a fan's mid-month change is
+    // queued here and promoted by SupportedArtistScheduler on the 1st. Nullable:
+    // null means "no change queued". Overwritable any number of times before
+    // promotion. since-timestamp captured for the tracking/quality audit.
+    // -----------------------------------------------------------------------
+    @Column(name = "pending_supported_artist_id")
+    private UUID pendingSupportedArtistId;
+
+    @Column(name = "pending_supported_artist_since")
+    private LocalDateTime pendingSupportedArtistSince;
 
     public enum Role {
         listener, artist
