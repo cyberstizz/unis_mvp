@@ -11,15 +11,18 @@ import lombok.NoArgsConstructor;
 
 /**
  * Consolidated payload for the user's own profile page.
- * Replaces 5–6 separate round trips with a single request.
+ * Replaces 5-6 separate round trips with a single request.
  *
- * Returned ONLY for the authenticated user fetching their own summary —
+ * Returned ONLY for the authenticated user fetching their own summary --
  * the controller enforces this with an ownership check.
  *
  * The `settings` block carries the user's preference toggles
  * (emailNotifications, publicProfile, showVoteHistory), which are now
  * real NOT NULL columns on the User entity. The frontend reads these
  * instead of falling back to client-side DEFAULTS.
+ *
+ * `pendingSupportedArtist` is non-null only when the user has queued a
+ * supported-artist change that takes effect at the next month boundary.
  */
 @Data
 @Builder
@@ -28,8 +31,9 @@ import lombok.NoArgsConstructor;
 public class ProfileSummaryDto {
 
     private SelfProfile profile;
-    private SupportedArtistInfo supportedArtist; // nullable
-    private VoteHistorySummary voteHistory;       // nullable until VoteRepository is wired
+    private SupportedArtistInfo supportedArtist;        // nullable -- the EFFECTIVE artist
+    private PendingSupportedArtistInfo pendingSupportedArtist; // nullable -- queued change
+    private VoteHistorySummary voteHistory;             // nullable until VoteRepository is wired
     private String referralCode;
     private Settings settings;
 
@@ -68,7 +72,7 @@ public class ProfileSummaryDto {
     }
 
     // -----------------------------------------------------------------------
-    // Supported artist (the artist this user supports, if any)
+    // Supported artist (the artist this user currently/effectively supports)
     // -----------------------------------------------------------------------
     @Data
     @Builder
@@ -79,6 +83,20 @@ public class ProfileSummaryDto {
         private String username;
         private String photoUrl;
         private DefaultSongInfo defaultSong; // nullable
+    }
+
+    // -----------------------------------------------------------------------
+    // Pending supported-artist change -- the queued pick + when it goes live.
+    // -----------------------------------------------------------------------
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PendingSupportedArtistInfo {
+        private UUID userId;
+        private String username;
+        private String photoUrl;
+        private LocalDateTime effectiveDate; // first moment of next month (ET)
     }
 
     @Data
@@ -94,7 +112,7 @@ public class ProfileSummaryDto {
     }
 
     // -----------------------------------------------------------------------
-    // Vote history summary — count + a small recent slice
+    // Vote history summary -- count + a small recent slice
     // TODO: structure is in place but service method returns null for now,
     //       pending verification of VoteRepository methods.
     // -----------------------------------------------------------------------
@@ -120,7 +138,7 @@ public class ProfileSummaryDto {
     }
 
     // -----------------------------------------------------------------------
-    // Preference toggles — backed by real NOT NULL columns on User.
+    // Preference toggles -- backed by real NOT NULL columns on User.
     // -----------------------------------------------------------------------
     @Data
     @Builder
