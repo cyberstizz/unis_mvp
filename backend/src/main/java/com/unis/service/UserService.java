@@ -156,6 +156,24 @@ public class UserService {
                     + " but that artist was not found");
             }
         }
+
+
+
+        // ---- Pending supported-artist change (queued, not yet effective) -------
+        ProfileSummaryDto.PendingSupportedArtistInfo pendingSupportedArtist = null;
+        if (user.getPendingSupportedArtistId() != null) {
+            Optional<User> pendingOpt = userRepository.findById(user.getPendingSupportedArtistId());
+            if (pendingOpt.isPresent() && pendingOpt.get().getDeletedAt() == null) {
+                User p = pendingOpt.get();
+                pendingSupportedArtist = ProfileSummaryDto.PendingSupportedArtistInfo.builder()
+                    .userId(p.getUserId())
+                    .username(p.getUsername())
+                    .photoUrl(p.getPhotoUrl())
+                    .effectiveDate(java.time.LocalDate.now(java.time.ZoneId.of("America/New_York"))
+                        .plusMonths(1).withDayOfMonth(1).atStartOfDay())
+                    .build();
+            }
+        }
     
         // ---- Vote history -----------------------------------------------------
         ProfileSummaryDto.VoteHistorySummary voteHistory;
@@ -188,6 +206,7 @@ public class UserService {
         return ProfileSummaryDto.builder()
             .profile(selfProfile)
             .supportedArtist(supportedArtist)
+            .pendingSupportedArtist(pendingSupportedArtist)
             .voteHistory(voteHistory)
             .referralCode(user.getReferralCode())
             .settings(settings)

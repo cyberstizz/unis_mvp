@@ -90,5 +90,8 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Page<User> findByRole(User.Role role, Pageable pageable);
 
     java.util.Optional<User> findByUnsubscribeToken(java.util.UUID token);
+    
     java.util.List<User> findByEmailNotificationsTrueAndDeletedAtIsNull();
+
+    java.util.List<User> findByPendingSupportedArtistIdIsNotNull();
 }
