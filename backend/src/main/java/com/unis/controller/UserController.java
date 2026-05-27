@@ -630,4 +630,48 @@ public class UserController {
             return ResponseEntity.ok(Map.of("totalLikes", 0));
         }
     }
+
+
+    // PUT /api/v1/users/{userId}/supported-artist  body: { "artistId": "<uuid>" }
+@PutMapping("/{userId}/supported-artist")
+public ResponseEntity<?> setSupportedArtist(
+        @PathVariable UUID userId,
+        @RequestBody Map<String, UUID> body) {
+
+    UUID authedId;
+    try {
+        authedId = SecurityUtils.getAuthenticatedUserId();
+    } catch (Exception e) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Not authenticated"));
+    }
+    if (!authedId.equals(userId)) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(Map.of("error", "You can only change your own supported artist"));
+    }
+
+    try {
+        return ResponseEntity.ok(userService.setSupportedArtist(userId, body.get("artistId")));
+    } catch (RuntimeException e) {
+        log.warn("[Support] action=set status=fail userId={} err={}", userId, e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", e.getMessage()));
+    }
+}
+
+    // DELETE /api/v1/users/{userId}/supported-artist/pending  (cancel queued change)
+    @DeleteMapping("/{userId}/supported-artist/pending")
+    public ResponseEntity<?> cancelPendingSupportedArtist(@PathVariable UUID userId) {
+        UUID authedId;
+        try {
+            authedId = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Not authenticated"));
+        }
+        if (!authedId.equals(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("error", "You can only change your own supported artist"));
+        }
+        userService.cancelPendingSupportedArtist(userId);
+        return ResponseEntity.ok(Map.of("status", "cancelled"));
+    }
+
 }
