@@ -590,48 +590,90 @@ public class UserService {
 
 
 
-    @Transactional
+    // First pick is immediate (no attribution history to protect). A change to an
+    // existing pick is QUEUED to month-end -- the scheduler promotes it. Overwrite
+    // semantics: calling again before promotion just replaces the pending target.
     @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId")
-    public User changeSupportedArtist(UUID userId, UUID newArtistId) {
+    public java.util.Map<String, Object> setSupportedArtist(UUID userId, UUID newArtistId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
-        
-        if (!"listener".equals(user.getRole().toString())) {
-            throw new RuntimeException("Only listeners can support artists");
+
+        if (newArtistId == null) {
+            throw new RuntimeException("Artist id is required");
         }
-        
-        // Verify new artist exists and is actually an artist
+        if (newArtistId.equals(userId)) {
+            throw new RuntimeException("Cannot support yourself");
+        }
+
         User newArtist = userRepository.findById(newArtistId)
                 .orElseThrow(() -> new RuntimeException("Artist not found"));
-        if (!"artist".equals(newArtist.getRole().toString())) {
+        if (newArtist.getDeletedAt() != null || !"artist".equals(newArtist.getRole().toString())) {
             throw new RuntimeException("Supported user must be an artist");
         }
-        
-        UUID oldArtistId = user.getSupportedArtistId();
-        
-        // Remove old supporter relationship
-        if (oldArtistId != null) {
-            supporterRepository.deleteByListenerUserIdAndArtistUserId(userId, oldArtistId);
+
+        UUID currentId = user.getSupportedArtistId();
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+
+        // ---- First-ever pick: take effect now ----
+        if (currentId == null) {
+            user.setSupportedArtistId(newArtistId);
+            user.setPendingSupportedArtistId(null);
+            user.setPendingSupportedArtistSince(null);
+            userRepository.save(user);
+
+            Supporter supporter = Supporter.builder()
+                    .listener(user)
+                    .artist(newArtist)
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            supporterRepository.save(supporter);
+            scoreUpdateService.onSupporterAdded(newArtistId);
+
+            System.out.println("[Support] action=set userId=" + userId
+                + " status=ok mode=immediate artist=" + newArtistId);
+            result.put("status", "immediate");
+            result.put("effectiveArtistId", newArtistId);
+            return result;
         }
-        
-        // Create new supporter relationship
-        Supporter newSupporter = Supporter.builder()
-                .listener(user)
-                .artist(newArtist)
-                .createdAt(LocalDateTime.now())
-                .build();
-        supporterRepository.save(newSupporter);
-        
-        // Update user's supported artist reference
-        user.setSupportedArtistId(newArtistId);
+
+        // ---- Re-selecting the current artist: cancel any queued change ----
+        if (newArtistId.equals(currentId)) {
+            user.setPendingSupportedArtistId(null);
+            user.setPendingSupportedArtistSince(null);
+            userRepository.save(user);
+            System.out.println("[Support] action=set userId=" + userId
+                + " status=ok mode=cancel_pending artist=" + newArtistId);
+            result.put("status", "cancelled");
+            result.put("effectiveArtistId", currentId);
+            return result;
+        }
+
+        // ---- Change: queue to month-end (overwrite any prior pending) ----
+        user.setPendingSupportedArtistId(newArtistId);
+        user.setPendingSupportedArtistSince(LocalDateTime.now());
         userRepository.save(user);
-        
-        // Award +5 points to the new artist
-        scoreUpdateService.onSupporterAdded(newArtistId);
-        
-        return user;
+
+        LocalDateTime effective = java.time.LocalDate.now(java.time.ZoneId.of("America/New_York"))
+                .plusMonths(1).withDayOfMonth(1).atStartOfDay();
+
+        System.out.println("[Support] action=set userId=" + userId
+            + " status=ok mode=pending from=" + currentId + " to=" + newArtistId);
+        result.put("status", "pending");
+        result.put("effectiveArtistId", currentId);
+        result.put("pendingArtistId", newArtistId);
+        result.put("effectiveDate", effective.toString());
+        return result;
     }
 
+    @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId")
+    public void cancelPendingSupportedArtist(UUID userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        user.setPendingSupportedArtistId(null);
+        user.setPendingSupportedArtistSince(null);
+        userRepository.save(user);
+        System.out.println("[Support] action=cancel_pending userId=" + userId + " status=ok");
+    }
     /**
      * Get total plays across all of an artist's songs
      * Uses the song_plays table to count actual plays
