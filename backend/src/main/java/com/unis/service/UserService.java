@@ -742,5 +742,47 @@ public class UserService {
         return totalLikes != null ? totalLikes : 0;
     }
 
+            /**
+         * Sanitize a social URL: accept null/blank (means "clear it"), accept
+         * http(s)://, reject everything else (javascript:, data:, file:, etc.).
+         * Returns the cleaned value or throws if dangerous.
+ */
+    private String sanitizeSocialUrl(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String trimmed = raw.trim();
+        String lower = trimmed.toLowerCase();
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+            throw new RuntimeException("Social URL must start with http:// or https://");
+        }
+        // Reject obvious scheme smuggling
+        if (lower.contains("javascript:") || lower.contains("data:") || lower.contains("vbscript:")) {
+            throw new RuntimeException("Invalid URL");
+        }
+        return trimmed;
+    }
+
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
+    public void updateSocialLinks(UUID userId, Map<String, String> payload) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (payload.containsKey("instagramUrl")) {
+            user.setInstagramUrl(sanitizeSocialUrl(payload.get("instagramUrl")));
+        }
+        if (payload.containsKey("twitterUrl")) {
+            user.setTwitterUrl(sanitizeSocialUrl(payload.get("twitterUrl")));
+        }
+        if (payload.containsKey("tiktokUrl")) {
+            user.setTiktokUrl(sanitizeSocialUrl(payload.get("tiktokUrl")));
+        }
+        if (payload.containsKey("themePreference")) {
+            // theme is cosmetic, no URL validation
+            user.setThemePreference(payload.get("themePreference"));
+        }
+
+        userRepository.save(user);
+        System.out.println("[SocialLinks] action=update userId=" + userId + " status=ok");
+    }
+
 
 }

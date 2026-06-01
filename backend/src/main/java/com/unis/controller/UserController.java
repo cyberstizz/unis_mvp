@@ -193,31 +193,16 @@ public class UserController {
         UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
         if (!authenticatedUserId.equals(userId)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body("You can only update your own profile");
+                .body(Map.of("error", "You can only update your own profile"));
         }
 
-        User user = userRepository.findById(userId)
-            .orElseThrow(() -> new RuntimeException("User not found"));
-
-        // Update whichever social field is provided
-        if (payload.containsKey("instagramUrl")) {
-            user.setInstagramUrl(payload.get("instagramUrl"));
+        try {
+            userService.updateSocialLinks(userId, payload);
+            return ResponseEntity.ok(Map.of("message", "Social media updated successfully"));
+        } catch (RuntimeException e) {
+            log.warn("[SocialLinks] action=update userId={} status=fail err={}", userId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", e.getMessage()));
         }
-        if (payload.containsKey("twitterUrl")) {
-            user.setTwitterUrl(payload.get("twitterUrl"));
-        }
-        if (payload.containsKey("tiktokUrl")) {
-            user.setTiktokUrl(payload.get("tiktokUrl"));
-        }
-         if (payload.containsKey("themePreference")) {
-        user.setThemePreference(payload.get("themePreference"));
-        }
-
-        userRepository.save(user);
-
-        Map<String, String> response = new HashMap<>();
-        response.put("message", "Social media updated successfully");
-        return ResponseEntity.ok(response);
     }
 
     // PUT /api/v1/users/profile/{id}/password (update password)
