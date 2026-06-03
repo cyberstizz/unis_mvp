@@ -166,6 +166,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/artist/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/jurisdiction/*").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song/*/play").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/media/play/complete").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/video/*/play").permitAll()
                 .requestMatchers(HttpMethod.PUT, "/api/v1/songs/*/download-settings").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/v1/songs/*/purchase").authenticated()

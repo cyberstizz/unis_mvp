@@ -85,18 +85,29 @@ public class MediaController {
     }
 
     // POST /api/v1/media/song/{id}/play
-    // C6 FIX: Use JWT userId instead of query param
     @PostMapping("/song/{songId}/play")
-    public ResponseEntity<Void> playSong(@PathVariable UUID songId,
-                                          @RequestParam(required = false) UUID userId) {
-        // Use JWT if available, fall back to query param for unauthenticated play tracking
+    public ResponseEntity<Map<String, Object>> playSong(
+            @PathVariable UUID songId,
+            @RequestParam(required = false) UUID userId,
+            @RequestParam(required = false) String source) {
         UUID resolvedUserId;
-        try {
-            resolvedUserId = SecurityUtils.getAuthenticatedUserId();
-        } catch (Exception e) {
-            resolvedUserId = userId;
-        }
-        mediaService.playSong(songId, resolvedUserId);
+        try { resolvedUserId = SecurityUtils.getAuthenticatedUserId(); }
+        catch (Exception e) { resolvedUserId = userId; }
+
+        UUID playId = mediaService.playSong(songId, resolvedUserId, source);
+        Map<String, Object> body = new HashMap<>();
+        body.put("playId", playId != null ? playId.toString() : null);
+        body.put("counted", playId != null);
+        return ResponseEntity.ok(body);
+    }
+
+    @PostMapping("/play/complete")
+    public ResponseEntity<Void> completePlay(@RequestBody Map<String, Object> body) {
+        Object playIdObj = body.get("playId");
+        if (playIdObj == null) return ResponseEntity.badRequest().build();
+        double pct = body.get("percentPlayed") != null
+            ? Double.parseDouble(body.get("percentPlayed").toString()) : 0.0;
+        mediaService.completeSongPlay(UUID.fromString(playIdObj.toString()), pct);
         return ResponseEntity.ok().build();
     }
 

@@ -31,4 +31,17 @@ public class SongPlay {
 
     @Column(name = "duration_secs")
     private Integer durationSecs;
+
+    @Column(name = "completed")
+    private Boolean completed;
+
+    @Column(name = "percent_played")
+    private java.math.BigDecimal percentPlayed;
+
+    @Column(name = "source")
+    private String source;
+
+    @Column(name = "listener_jurisdiction_id")
+    private UUID listenerJurisdictionId;   // raw UUID, not @ManyToOne — avoids a join on a write-heavy table
+
 }

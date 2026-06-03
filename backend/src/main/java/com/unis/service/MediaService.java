@@ -354,81 +354,69 @@ public class MediaService {
 
     // Play song - EVICTS song cache and trending cache because playsToday changes
     @CacheEvict(value = {"songs", "trending"}, allEntries = true)
-    public void playSong(UUID songId, UUID userId) {
-        // Guard: userId is required for play tracking
+    public UUID playSong(UUID songId, UUID userId, String source) {
         if (userId == null) {
-            System.out.println(">>> Play rejected: no userId provided for song " + songId);
-            return;
+            System.out.println(">>> Play rejected: no userId for song " + songId);
+            return null;
         }
- 
+
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
- 
-        // === ANTI-ABUSE: 30-minute cooldown per user per song ===
-        // Check if this user played this exact song within the last 30 minutes.
-        // If so, silently skip — no error, no exception, song still plays in the UI.
+
+        // 30-min cooldown (unchanged)
         String cooldownCheckSql = """
-            SELECT COUNT(*) FROM song_plays 
-            WHERE user_id = ? AND song_id = ? 
+            SELECT COUNT(*) FROM song_plays
+            WHERE user_id = ? AND song_id = ?
             AND played_at > NOW() - INTERVAL '30 minutes'
             """;
         Integer recentPlays = jdbcTemplate.queryForObject(cooldownCheckSql, Integer.class, userId, songId);
-        
         if (recentPlays != null && recentPlays > 0) {
-            System.out.println(">>> Play cooldown: user " + userId + " already played song " + songId + " within 30 min — skipping");
-            return; // Silent rejection — no error, no exception
+            return null;  // silent rejection, as before
         }
-        // === END ANTI-ABUSE ===
-        
-        // Update plays_today directly with native query
+
+        // plays_today (unchanged)
         LocalDate today = LocalDate.now();
-        
-        String updateQuery = """
-            UPDATE songs 
-            SET plays_today = CASE 
-                WHEN last_play_reset_date < :today THEN 1
-                ELSE plays_today + 1
-            END,
-            last_play_reset_date = :today
+        Query q = entityManager.createNativeQuery("""
+            UPDATE songs SET plays_today = CASE
+                WHEN last_play_reset_date < :today THEN 1 ELSE plays_today + 1 END,
+                last_play_reset_date = :today
             WHERE song_id = :songId
-            """;
-        
-        Query q = entityManager.createNativeQuery(updateQuery);
+            """);
         q.setParameter("today", today);
         q.setParameter("songId", songId);
         q.executeUpdate();
-        
-        // Get song info for building SongPlay
+
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found"));
-        
         int durationInSeconds = song.getDuration() != null ? song.getDuration() / 1000 : 180;
-        
-        // FIXED: Explicitly set playedAt to ensure it's not null
+
+        // NEW: listener's home jurisdiction, snapshotted at play time (honest "where listeners are based")
+        UUID listenerJurisdictionId =
+            (user.getJurisdiction() != null) ? user.getJurisdiction().getJurisdictionId() : null;
+
         SongPlay play = SongPlay.builder()
             .song(song)
             .user(user)
-            .playedAt(LocalDateTime.now())  
+            .playedAt(LocalDateTime.now())
             .durationSecs(durationInSeconds)
+            .source(source)                              // NEW
+            .listenerJurisdictionId(listenerJurisdictionId)  // NEW
+            .completed(false)                            // NEW — set true on completion
             .build();
-        songPlayRepository.save(play);
- 
-        // Increment artist's total_plays using a single query that gets artist_id from the song
-        String incrementArtistPlays = """
-            UPDATE users 
-            SET total_plays = total_plays + 1 
+        SongPlay saved = songPlayRepository.save(play);
+
+        Query artistQuery = entityManager.createNativeQuery("""
+            UPDATE users SET total_plays = total_plays + 1
             WHERE user_id = (SELECT artist_id FROM songs WHERE song_id = :songId)
-            """;
-        Query artistQuery = entityManager.createNativeQuery(incrementArtistPlays);
+            """);
         artistQuery.setParameter("songId", songId);
-        int rowsUpdated = artistQuery.executeUpdate();
- 
+        artistQuery.executeUpdate();
+
         entityManager.flush();
         entityManager.clear();
- 
-        System.out.println(">>> Play recorded: user=" + userId + " song=" + songId + " rowsUpdated=" + rowsUpdated);
- 
+
         scoreUpdateService.onPlay(userId, songId, "song");
+        return saved.getPlayId();   // NEW — frontend needs this to complete the play
     }
 
     // NOT CACHED - video play
@@ -805,5 +793,15 @@ public class MediaService {
             
             return song;
         }
+    }
+
+    @Transactional
+    public void completeSongPlay(UUID playId, double percentPlayed) {
+        if (playId == null) return;
+        double pct = Math.max(0, Math.min(100, percentPlayed));
+        boolean completed = pct >= 80.0;   // tune this; 80% = "really listened" vs a skip
+        jdbcTemplate.update(
+            "UPDATE song_plays SET percent_played = ?, completed = ? WHERE play_id = ?",
+            java.math.BigDecimal.valueOf(pct), completed, playId);
     }
 }
