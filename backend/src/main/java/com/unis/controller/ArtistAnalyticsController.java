@@ -19,7 +19,7 @@ import java.util.UUID;
  * and it returns truthful zeros pre-launch instead of placeholder values.
  */
 @RestController
-@RequestMapping("/v1/artist-analytics")
+@RequestMapping("/api/v1/artist-analytics")
 public class ArtistAnalyticsController {
 
     private final ArtistFanbaseService artistFanbaseService;
