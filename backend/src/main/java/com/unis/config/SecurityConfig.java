@@ -126,6 +126,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/earnings/my-summary").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/earnings/my-referrals").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/earnings/my-history").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/artist-analytics/**").authenticated()   // ← add this line
 
                 // ===== AUTHENTICATED PROFILE MUTATIONS — C4 =====
                 .requestMatchers(HttpMethod.PUT, "/api/v1/users/profile/*/photo").authenticated()
