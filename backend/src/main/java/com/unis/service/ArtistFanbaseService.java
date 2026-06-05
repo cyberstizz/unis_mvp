@@ -256,4 +256,174 @@ public class ArtistFanbaseService {
         Long v = jdbc.queryForObject(sql, Long.class, args);
         return v == null ? 0L : v;
     }
+
+
+
+    // =======================================================================
+    // ★ per-song funnel — mirrors the artist funnel but scoped to ONE song.
+    // followers/supporters are defined as "followers/supporters who have
+    // played THIS song" (a follow/support carries no song_id, so we join
+    // against song_plays). Period scoping identical to the artist funnel.
+    // No named-supporter grid — just the funnel + repeat ratio.
+    // =======================================================================
+    public Map<String, Object> getSongFunnel(UUID artistId, UUID songId, String period) {
+        // Ownership guard: the song must belong to the requesting artist.
+        Long owns = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM songs WHERE song_id = ? AND artist_id = ?",
+            Long.class, songId, artistId);
+        if (owns == null || owns == 0) {
+            return null; // controller translates to 403/404
+        }
+
+        String p = (period == null || !VALID_PERIODS.contains(period)) ? "all" : period;
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime currentStart = null;
+        LocalDateTime prevStart = null;
+
+        switch (p) {
+            case "today":
+                currentStart = LocalDate.now().atStartOfDay();
+                prevStart = currentStart.minusDays(1);
+                break;
+            case "week":
+                currentStart = now.minusDays(7);
+                prevStart = now.minusDays(14);
+                break;
+            case "month":
+                currentStart = now.minusDays(30);
+                prevStart = now.minusDays(60);
+                break;
+            case "year":
+                currentStart = now.minusDays(365);
+                prevStart = now.minusDays(730);
+                break;
+            case "all":
+            default:
+                break;
+        }
+        boolean scoped = currentStart != null;
+
+        long totalPlays = songPlaysCount(songId, currentStart, now, scoped);
+        long listeners  = songListenersCount(songId, currentStart, now, scoped);
+        long likers     = songLikersCount(songId, currentStart, now, scoped);
+        long voters     = songVotersCount(songId, currentStart, now, scoped);
+        long followers  = songFollowersCount(artistId, songId, currentStart, now, scoped);
+        long supporters = songSupportersCount(artistId, songId, currentStart, now, scoped);
+
+        Long pL = null, pLk = null, pV = null, pF = null, pS = null;
+        if (scoped) {
+            pL  = songListenersCount(songId, prevStart, currentStart, true);
+            pLk = songLikersCount(songId, prevStart, currentStart, true);
+            pV  = songVotersCount(songId, prevStart, currentStart, true);
+            pF  = songFollowersCount(artistId, songId, prevStart, currentStart, true);
+            pS  = songSupportersCount(artistId, songId, prevStart, currentStart, true);
+        }
+
+        List<Map<String, Object>> funnel = new ArrayList<>();
+        funnel.add(stage("listeners", "Listeners", listeners, pL));
+        funnel.add(stage("likers", "Likers", likers, pLk));
+        funnel.add(stage("voters", "Voters", voters, pV));
+        funnel.add(stage("followers", "Followers", followers, pF));
+        funnel.add(stage("supporters", "Supporters", supporters, pS));
+
+        double repeatListenRatio = listeners > 0
+            ? Math.round(((double) totalPlays / listeners) * 100.0) / 100.0
+            : 0.0;
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("period", p);
+        result.put("songId", songId.toString());
+        result.put("funnel", funnel);
+        result.put("totalPlays", totalPlays);
+        result.put("uniqueListeners", listeners);
+        result.put("repeatListenRatio", repeatListenRatio);
+        return result;
+    }
+
+    private long songPlaysCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        if (scoped) {
+            return count(
+                "SELECT COUNT(*) FROM song_plays WHERE song_id = ? " +
+                "AND played_at >= ? AND played_at < ?",
+                songId, start, end);
+        }
+        return count("SELECT COUNT(*) FROM song_plays WHERE song_id = ?", songId);
+    }
+
+    private long songListenersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        if (scoped) {
+            return count(
+                "SELECT COUNT(DISTINCT user_id) FROM song_plays WHERE song_id = ? " +
+                "AND user_id IS NOT NULL AND played_at >= ? AND played_at < ?",
+                songId, start, end);
+        }
+        return count(
+            "SELECT COUNT(DISTINCT user_id) FROM song_plays " +
+            "WHERE song_id = ? AND user_id IS NOT NULL",
+            songId);
+    }
+
+    private long songLikersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        if (scoped) {
+            return count(
+                "SELECT COUNT(DISTINCT user_id) FROM likes WHERE media_id = ? " +
+                "AND user_id IS NOT NULL AND created_at >= ? AND created_at < ?",
+                songId, start, end);
+        }
+        return count(
+            "SELECT COUNT(DISTINCT user_id) FROM likes " +
+            "WHERE media_id = ? AND user_id IS NOT NULL",
+            songId);
+    }
+
+    private long songVotersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        if (scoped) {
+            return count(
+                "SELECT COUNT(DISTINCT user_id) FROM votes WHERE target_id = ? " +
+                "AND created_at >= ? AND created_at < ?",
+                songId, start, end);
+        }
+        return count("SELECT COUNT(DISTINCT user_id) FROM votes WHERE target_id = ?", songId);
+    }
+
+    // ★ "followers who have played this song." The follow must exist; a play of
+    // this song must exist. Follow date is irrelevant by this definition.
+    // When scoped, the PLAY is what's date-filtered (the meaningful event).
+    private long songFollowersCount(UUID artistId, UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        if (scoped) {
+            return count(
+                "SELECT COUNT(DISTINCT f.follower_id) FROM follows f " +
+                "WHERE f.followed_id = ? AND f.follower_id IN (" +
+                "  SELECT sp.user_id FROM song_plays sp " +
+                "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL " +
+                "  AND sp.played_at >= ? AND sp.played_at < ?)",
+                artistId, songId, start, end);
+        }
+        return count(
+            "SELECT COUNT(DISTINCT f.follower_id) FROM follows f " +
+            "WHERE f.followed_id = ? AND f.follower_id IN (" +
+            "  SELECT sp.user_id FROM song_plays sp " +
+            "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL)",
+            artistId, songId);
+    }
+
+    // ★ "supporters who have played this song." Same shape as followers.
+    private long songSupportersCount(UUID artistId, UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        if (scoped) {
+            return count(
+                "SELECT COUNT(DISTINCT sup.listener_id) FROM supporters sup " +
+                "WHERE sup.artist_id = ? AND sup.listener_id IN (" +
+                "  SELECT sp.user_id FROM song_plays sp " +
+                "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL " +
+                "  AND sp.played_at >= ? AND sp.played_at < ?)",
+                artistId, songId, start, end);
+        }
+        return count(
+            "SELECT COUNT(DISTINCT sup.listener_id) FROM supporters sup " +
+            "WHERE sup.artist_id = ? AND sup.listener_id IN (" +
+            "  SELECT sp.user_id FROM song_plays sp " +
+            "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL)",
+            artistId, songId);
+    }
 }

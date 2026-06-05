@@ -38,4 +38,27 @@ public class ArtistAnalyticsController {
 
         return ResponseEntity.ok(artistFanbaseService.getArtistFanbase(artistId, period));
     }
+
+
+    /**
+     * ★ Per-song funnel (listeners → likers → voters → followers → supporters)
+     * scoped to a single song, with optional period. Artist-owns-song enforced.
+     */
+    @GetMapping("/artist/{artistId}/song/{songId}/funnel")
+    public ResponseEntity<Map<String, Object>> getSongFunnel(
+            @PathVariable UUID artistId,
+            @PathVariable UUID songId,
+            @RequestParam(name = "period", required = false, defaultValue = "all") String period) {
+
+        UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+        if (!requesterId.equals(artistId)) {
+            return ResponseEntity.status(403).build();
+        }
+
+        Map<String, Object> result = artistFanbaseService.getSongFunnel(artistId, songId, period);
+        if (result == null) {
+            return ResponseEntity.status(404).build(); // song not found / not owned
+        }
+        return ResponseEntity.ok(result);
+    }
 }
