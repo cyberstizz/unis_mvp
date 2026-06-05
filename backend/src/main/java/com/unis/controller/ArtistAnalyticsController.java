@@ -8,16 +8,6 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * Artist-facing analytics endpoints for the Artist Dashboard.
- *
- * NOTE: Renamed from "AnalyticsController" to "ArtistAnalyticsController" and
- * moved to /api/v1/artist-analytics so it does NOT collide with the existing
- * platform/admin analytics controller (which owns /api/v1/analytics).
- *
- * Everything is computed live from existing tables — no migration required,
- * and it returns truthful zeros pre-launch instead of placeholder values.
- */
 @RestController
 @RequestMapping("/api/v1/artist-analytics")
 public class ArtistAnalyticsController {
@@ -31,15 +21,21 @@ public class ArtistAnalyticsController {
     /**
      * Fanbase funnel + recent named supporters + 30-day supporter growth.
      * Only the artist may view their own fanbase analytics.
+     *
+     * ★ period: optional query param (today|week|month|year|all). Defaults to
+     * "all" for backward compatibility with the original single-snapshot call.
      */
     @GetMapping("/artist/{artistId}/fanbase")
-    public ResponseEntity<Map<String, Object>> getArtistFanbase(@PathVariable UUID artistId) {
+    public ResponseEntity<Map<String, Object>> getArtistFanbase(
+            @PathVariable UUID artistId,
+            @RequestParam(name = "period", required = false, defaultValue = "all") String period) {
+
         UUID requesterId = SecurityUtils.getAuthenticatedUserId();
 
         if (!requesterId.equals(artistId)) {
             return ResponseEntity.status(403).build();
         }
 
-        return ResponseEntity.ok(artistFanbaseService.getArtistFanbase(artistId));
+        return ResponseEntity.ok(artistFanbaseService.getArtistFanbase(artistId, period));
     }
 }
