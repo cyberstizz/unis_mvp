@@ -236,6 +236,93 @@ public class ArtistFanbaseService {
             artistId);
     }
 
+
+    // =======================================================================
+    // ★ advanced: completion quality for one song. completionRate is computed
+    // from the boolean `completed` flag (unambiguous). avgPercent is returned
+    // raw — the frontend normalizes its scale defensively.
+    // =======================================================================
+    private Map<String, Object> songCompletion(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        String base =
+            "SELECT COUNT(*) FILTER (WHERE completed = true) AS completed_plays, " +
+            "       COUNT(*) AS total_plays, " +
+            "       COALESCE(AVG(percent_played), 0) AS avg_percent " +
+            "FROM song_plays WHERE song_id = ?";
+
+        Map<String, Object> row = scoped
+            ? jdbc.queryForMap(base + " AND played_at >= ? AND played_at < ?", songId, start, end)
+            : jdbc.queryForMap(base, songId);
+
+        long completed = ((Number) row.getOrDefault("completed_plays", 0L)).longValue();
+        long total = ((Number) row.getOrDefault("total_plays", 0L)).longValue();
+        double avgPercent = ((Number) row.getOrDefault("avg_percent", 0)).doubleValue();
+        double completionRate = total > 0
+            ? Math.round(((double) completed / total) * 1000.0) / 10.0
+            : 0.0;
+
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("completedPlays", completed);
+        m.put("totalPlays", total);
+        m.put("completionRate", completionRate); // 0–100, one decimal
+        m.put("avgPercent", avgPercent);          // raw; frontend normalizes
+        return m;
+    }
+
+    // ★ advanced: discovery-source breakdown for one song.
+    private List<Map<String, Object>> songSources(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+        String base =
+            "SELECT COALESCE(source, 'unknown') AS source, COUNT(*) AS count " +
+            "FROM song_plays WHERE song_id = ?";
+
+        if (scoped) {
+            return jdbc.queryForList(
+                base + " AND played_at >= ? AND played_at < ? " +
+                "GROUP BY COALESCE(source, 'unknown') ORDER BY count DESC",
+                songId, start, end);
+        }
+        return jdbc.queryForList(
+            base + " GROUP BY COALESCE(source, 'unknown') ORDER BY count DESC",
+            songId);
+    }
+
+    // =======================================================================
+    // ★ sales: per-song sales summary + daily time-series from `purchases`.
+    // amount / platform_fee are integer cents. Artist-owns-song enforced.
+    // =======================================================================
+    public Map<String, Object> getSongSales(UUID artistId, UUID songId) {
+        Long owns = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM songs WHERE song_id = ? AND artist_id = ?",
+            Long.class, songId, artistId);
+        if (owns == null || owns == 0) {
+            return null; // controller → 404
+        }
+
+        Map<String, Object> summary = jdbc.queryForMap(
+            "SELECT COUNT(*) AS copies, " +
+            "       COALESCE(SUM(amount), 0) AS gross_cents, " +
+            "       COALESCE(SUM(amount - platform_fee), 0) AS net_cents " +
+            "FROM purchases " +
+            "WHERE song_id = ? AND artist_id = ? AND status = 'completed'",
+            songId, artistId);
+
+        List<Map<String, Object>> series = jdbc.queryForList(
+            "SELECT created_at::date AS day, COUNT(*) AS copies, " +
+            "       COALESCE(SUM(amount), 0) AS gross_cents, " +
+            "       COALESCE(SUM(amount - platform_fee), 0) AS net_cents " +
+            "FROM purchases " +
+            "WHERE song_id = ? AND artist_id = ? AND status = 'completed' " +
+            "GROUP BY created_at::date ORDER BY day ASC",
+            songId, artistId);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("songId", songId.toString());
+        result.put("copies", ((Number) summary.getOrDefault("copies", 0L)).longValue());
+        result.put("grossCents", ((Number) summary.getOrDefault("gross_cents", 0L)).longValue());
+        result.put("netCents", ((Number) summary.getOrDefault("net_cents", 0L)).longValue());
+        result.put("series", series);
+        return result;
+    }
+
     // ★ stage now carries an optional previous-period value + a signed delta.
     private Map<String, Object> stage(String key, String label, long value, Long prevValue) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -331,6 +418,11 @@ public class ArtistFanbaseService {
             ? Math.round(((double) totalPlays / listeners) * 100.0) / 100.0
             : 0.0;
 
+
+        // ★ advanced: completion quality + discovery source (period-scoped)
+        Map<String, Object> completion = songCompletion(songId, currentStart, now, scoped);
+        List<Map<String, Object>> sources = songSources(songId, currentStart, now, scoped);
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("period", p);
         result.put("songId", songId.toString());
@@ -338,6 +430,8 @@ public class ArtistFanbaseService {
         result.put("totalPlays", totalPlays);
         result.put("uniqueListeners", listeners);
         result.put("repeatListenRatio", repeatListenRatio);
+        result.put("completion", completion);   // ★ advanced
+        result.put("sources", sources);          // ★ advanced
         return result;
     }
 

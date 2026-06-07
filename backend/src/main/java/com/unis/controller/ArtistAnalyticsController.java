@@ -61,4 +61,27 @@ public class ArtistAnalyticsController {
         }
         return ResponseEntity.ok(result);
     }
+
+
+
+    /**
+     * ★ Per-song sales summary + daily time-series. Artist-owns-song enforced.
+     */
+    @GetMapping("/artist/{artistId}/song/{songId}/sales")
+    public ResponseEntity<Map<String, Object>> getSongSales(
+            @PathVariable UUID artistId,
+            @PathVariable UUID songId) {
+
+        UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+        if (!requesterId.equals(artistId)) {
+            return ResponseEntity.status(403).build();
+        }
+
+        Map<String, Object> result = artistFanbaseService.getSongSales(artistId, songId);
+        if (result == null) {
+            return ResponseEntity.status(404).build();
+        }
+        return ResponseEntity.ok(result);
+    }
+    
 }
