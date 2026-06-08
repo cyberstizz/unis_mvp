@@ -127,7 +127,7 @@ public class ArtistFanbaseService {
      * @param ageBucket      null|all|13-17|18-24|25-34|35-44|45+|unknown (★ item 5d)
      * @param jurisdictionId optional home-jurisdiction filter (★ item 5e)
      */
-    public Map<String, Object> getArtistFanbase(
+public Map<String, Object> getArtistFanbase(
             UUID artistId, String period, String gender, String ageBucket, UUID jurisdictionId) {
 
         String p = (period == null || !VALID_PERIODS.contains(period)) ? "all" : period;
@@ -181,7 +181,6 @@ public class ArtistFanbaseService {
         }
 
         List<Map<String, Object>> funnel = new ArrayList<>();
-        // ★ item 5c: Plays is now a real backend stage with its own delta.
         funnel.add(stage("plays", "Plays", totalPlays, prevPlays));
         funnel.add(stage("listeners", "Listeners", listeners, prevListeners));
         funnel.add(stage("likers", "Likers", likers, prevLikers));
@@ -193,23 +192,10 @@ public class ArtistFanbaseService {
             ? Math.round(((double) totalPlays / listeners) * 100.0) / 100.0
             : 0.0;
 
-        List<Map<String, Object>> recentSupporters = jdbc.queryForList(
-            "SELECT sup.listener_id AS \"userId\", u.username, u.photo_url AS \"photoUrl\", " +
-            "       sup.created_at AS \"since\" " +
-            "FROM supporters sup " +
-            "JOIN users u ON u.user_id = sup.listener_id " +
-            "WHERE sup.artist_id = ? AND u.deleted_at IS NULL " +
-            "ORDER BY sup.created_at DESC " +
-            "LIMIT 12",
-            artistId);
-
-        List<Map<String, Object>> supporterGrowth = jdbc.queryForList(
-            "SELECT created_at::date AS day, COUNT(*) AS count " +
-            "FROM supporters " +
-            "WHERE artist_id = ? AND created_at >= NOW() - INTERVAL '30 days' " +
-            "GROUP BY created_at::date " +
-            "ORDER BY day ASC",
-            artistId);
+        // ★ item 5: advanced metrics promoted to artist level (period + cohort
+        // scoped, same definitions as the per-song modal but across all songs).
+        Map<String, Object> completion = artistCompletion(artistId, currentStart, now, scoped, f);
+        List<Map<String, Object>> sources = artistSources(artistId, currentStart, now, scoped, f);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("period", p);
@@ -217,12 +203,11 @@ public class ArtistFanbaseService {
         result.put("totalPlays", totalPlays);
         result.put("uniqueListeners", listeners);
         result.put("repeatListenRatio", repeatListenRatio);
-        result.put("recentSupporters", recentSupporters);
-        result.put("supporterGrowth", supporterGrowth);
-        // ★ item 5f: #1 supporter (actual supporter, ranked by plays of your songs)
-        result.put("topSupporter", topSupporter(artistId));
+        result.put("completion", completion);    // ★ advanced
+        result.put("sources", sources);           // ★ advanced
         // ★ item 5e: home jurisdictions of this artist's listeners → dropdown
         result.put("availableJurisdictions", availableJurisdictions(artistId));
+        // ★ supporters split to /supporters — no longer returned here.
         return result;
     }
 
@@ -355,6 +340,94 @@ public class ArtistFanbaseService {
             "WHERE s.artist_id = ? AND u.jurisdiction_id IS NOT NULL " +
             "ORDER BY j.name ASC",
             artistId);
+    }
+
+    // ★ item 5: supporters split into their own all-time payload (not
+    // period/cohort scoped — supporters are a fixed community, not a window).
+    public Map<String, Object> getArtistSupporters(UUID artistId) {
+        long supportersCount = count(
+            "SELECT COUNT(*) FROM supporters WHERE artist_id = ?", artistId);
+
+        Map<String, Object> top = topSupporter(artistId);
+
+        List<Map<String, Object>> recentSupporters = jdbc.queryForList(
+            "SELECT sup.listener_id AS \"userId\", u.username, u.photo_url AS \"photoUrl\", " +
+            "       sup.created_at AS \"since\" " +
+            "FROM supporters sup " +
+            "JOIN users u ON u.user_id = sup.listener_id " +
+            "WHERE sup.artist_id = ? AND u.deleted_at IS NULL " +
+            "ORDER BY sup.created_at DESC " +
+            "LIMIT 12",
+            artistId);
+
+        List<Map<String, Object>> supporterGrowth = jdbc.queryForList(
+            "SELECT created_at::date AS day, COUNT(*) AS count " +
+            "FROM supporters " +
+            "WHERE artist_id = ? AND created_at >= NOW() - INTERVAL '30 days' " +
+            "GROUP BY created_at::date " +
+            "ORDER BY day ASC",
+            artistId);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("supportersCount", supportersCount);
+        result.put("topSupporter", top);
+        result.put("recentSupporters", recentSupporters);
+        result.put("supporterGrowth", supporterGrowth);
+        return result;
+    }
+
+    // ★ item 5: artist-level completion quality (period + cohort scoped),
+    // aggregated across all of the artist's songs.
+    private Map<String, Object> artistCompletion(
+            UUID artistId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(*) FILTER (WHERE sp.completed = true) AS completed_plays, " +
+            "       COUNT(*) AS total_plays, " +
+            "       COALESCE(AVG(sp.percent_played), 0) AS avg_percent " +
+            "FROM song_plays sp JOIN songs s ON s.song_id = sp.song_id " +
+            "WHERE s.artist_id = ?");
+        params.add(artistId);
+        if (scoped) {
+            sql.append(" AND sp.played_at >= ? AND sp.played_at < ?");
+            params.add(start);
+            params.add(end);
+        }
+        sql.append(cohort(f, "sp.user_id", params));
+
+        Map<String, Object> row = jdbc.queryForMap(sql.toString(), params.toArray());
+        long completed = ((Number) row.getOrDefault("completed_plays", 0L)).longValue();
+        long total = ((Number) row.getOrDefault("total_plays", 0L)).longValue();
+        double avgPercent = ((Number) row.getOrDefault("avg_percent", 0)).doubleValue();
+        double completionRate = total > 0
+            ? Math.round(((double) completed / total) * 1000.0) / 10.0
+            : 0.0;
+
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("completedPlays", completed);
+        m.put("totalPlays", total);
+        m.put("completionRate", completionRate);
+        m.put("avgPercent", avgPercent);
+        return m;
+    }
+
+    // ★ item 5: artist-level discovery-source breakdown (period + cohort scoped).
+    private List<Map<String, Object>> artistSources(
+            UUID artistId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
+            "SELECT COALESCE(sp.source, 'unknown') AS source, COUNT(*) AS count " +
+            "FROM song_plays sp JOIN songs s ON s.song_id = sp.song_id " +
+            "WHERE s.artist_id = ?");
+        params.add(artistId);
+        if (scoped) {
+            sql.append(" AND sp.played_at >= ? AND sp.played_at < ?");
+            params.add(start);
+            params.add(end);
+        }
+        sql.append(cohort(f, "sp.user_id", params));
+        sql.append(" GROUP BY COALESCE(sp.source, 'unknown') ORDER BY count DESC");
+        return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
 

@@ -44,6 +44,22 @@ public class ArtistAnalyticsController {
             artistFanbaseService.getArtistFanbase(artistId, period, gender, age, jurisdictionId));
     }
 
+
+    /**
+     * ★ item 5: supporters split out of the funnel — all-time named grid,
+     * #1 supporter, and 30-day growth. Artist-only.
+     */
+    @GetMapping("/artist/{artistId}/supporters")
+    public ResponseEntity<Map<String, Object>> getArtistSupporters(
+            @PathVariable UUID artistId) {
+
+        UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+        if (!requesterId.equals(artistId)) {
+            return ResponseEntity.status(403).build();
+        }
+        return ResponseEntity.ok(artistFanbaseService.getArtistSupporters(artistId));
+    }
+
     /**
      * ★ Per-song funnel (listeners → likers → voters → followers → supporters)
      * scoped to a single song, with optional period. Artist-owns-song enforced.
