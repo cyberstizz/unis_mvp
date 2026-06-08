@@ -18,17 +18,21 @@ public class ArtistAnalyticsController {
         this.artistFanbaseService = artistFanbaseService;
     }
 
-    /**
+/**
      * Fanbase funnel + recent named supporters + 30-day supporter growth.
      * Only the artist may view their own fanbase analytics.
      *
-     * ★ period: optional query param (today|week|month|year|all). Defaults to
-     * "all" for backward compatibility with the original single-snapshot call.
+     * ★ period: optional (today|week|month|year|all), defaults "all".
+     * ★ item 5: optional drill-down filters — gender, age bucket, and home
+     * jurisdiction. All null/absent → original unfiltered behavior.
      */
     @GetMapping("/artist/{artistId}/fanbase")
     public ResponseEntity<Map<String, Object>> getArtistFanbase(
             @PathVariable UUID artistId,
-            @RequestParam(name = "period", required = false, defaultValue = "all") String period) {
+            @RequestParam(name = "period", required = false, defaultValue = "all") String period,
+            @RequestParam(name = "gender", required = false) String gender,
+            @RequestParam(name = "age", required = false) String age,
+            @RequestParam(name = "jurisdictionId", required = false) UUID jurisdictionId) {
 
         UUID requesterId = SecurityUtils.getAuthenticatedUserId();
 
@@ -36,9 +40,9 @@ public class ArtistAnalyticsController {
             return ResponseEntity.status(403).build();
         }
 
-        return ResponseEntity.ok(artistFanbaseService.getArtistFanbase(artistId, period));
+        return ResponseEntity.ok(
+            artistFanbaseService.getArtistFanbase(artistId, period, gender, age, jurisdictionId));
     }
-
 
     /**
      * ★ Per-song funnel (listeners → likers → voters → followers → supporters)

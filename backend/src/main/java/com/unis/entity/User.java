@@ -80,6 +80,12 @@ public class User {
     @Column(name = "tiktok_url")
     private String tiktokUrl;
 
+    @Column(name = "youtube_url")
+    private String youtubeUrl;
+
+    @Column(name = "gender")
+    private String gender;
+
     @Column(name = "referral_code", unique = true, nullable = false, length = 50)
     private String referralCode;
 
