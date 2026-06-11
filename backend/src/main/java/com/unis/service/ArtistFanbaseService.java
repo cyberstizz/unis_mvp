@@ -35,7 +35,7 @@ public class ArtistFanbaseService {
     }
 
     private static final List<String> VALID_PERIODS =
-        List.of("today", "week", "month", "year", "all");
+        List.of("today", "week", "month", "quarter", "year", "all");
 
     // ★ item 5: composable drill-down filters on the listener/actor user.
     public static class Filters {
@@ -565,6 +565,10 @@ public Map<String, Object> getArtistFanbase(
                 currentStart = now.minusDays(30);
                 prevStart = now.minusDays(60);
                 break;
+            case "quarter":
+                currentStart = now.minusDays(90);
+                prevStart = now.minusDays(180);
+                break;
             case "year":
                 currentStart = now.minusDays(365);
                 prevStart = now.minusDays(730);
@@ -697,5 +701,206 @@ public Map<String, Object> getArtistFanbase(
             "  SELECT sp.user_id FROM song_plays sp " +
             "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL)",
             artistId, songId);
+    }
+
+
+    // =======================================================================
+    // ★ item 6: demographics — top jurisdictions + territory drill-down.
+    // Geography basis: plays/listeners use song_plays.listener_jurisdiction_id
+    // (where the play happened); likes/followers/supporters carry no location
+    // on the event, so they use the member's HOME jurisdiction.
+    // =======================================================================
+
+    private static final List<String> VALID_METRICS =
+        List.of("plays", "listeners", "likes", "followers", "supporters");
+
+    private LocalDateTime[] windowFor(String p, LocalDateTime now) {
+        switch (p) {
+            case "today":   return new LocalDateTime[]{ LocalDate.now().atStartOfDay(), null };
+            case "week":    return new LocalDateTime[]{ now.minusDays(7), null };
+            case "month":   return new LocalDateTime[]{ now.minusDays(30), null };
+            case "quarter": return new LocalDateTime[]{ now.minusDays(90), null };
+            case "year":    return new LocalDateTime[]{ now.minusDays(365), null };
+            default:        return new LocalDateTime[]{ null, null };
+        }
+    }
+
+    public Map<String, Object> getTopJurisdictions(UUID artistId, String period, String metric) {
+        String p = (period == null || !VALID_PERIODS.contains(period)) ? "all" : period;
+        String m = (metric == null || !VALID_METRICS.contains(metric)) ? "plays" : metric;
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime start = windowFor(p, now)[0];
+        boolean scoped = start != null;
+
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder();
+
+        switch (m) {
+            case "listeners":
+                sql.append(
+                    "SELECT j.jurisdiction_id AS id, j.name, COUNT(DISTINCT sp.user_id) AS count " +
+                    "FROM song_plays sp " +
+                    "JOIN songs s ON s.song_id = sp.song_id " +
+                    "JOIN jurisdictions j ON j.jurisdiction_id = sp.listener_jurisdiction_id " +
+                    "WHERE s.artist_id = ? AND sp.user_id IS NOT NULL");
+                params.add(artistId);
+                if (scoped) {
+                    sql.append(" AND sp.played_at >= ? AND sp.played_at < ?");
+                    params.add(start); params.add(now);
+                }
+                break;
+            case "likes":
+                sql.append(
+                    "SELECT j.jurisdiction_id AS id, j.name, COUNT(*) AS count " +
+                    "FROM likes l " +
+                    "JOIN songs s ON s.song_id = l.media_id " +
+                    "JOIN users u ON u.user_id = l.user_id " +
+                    "JOIN jurisdictions j ON j.jurisdiction_id = u.jurisdiction_id " +
+                    "WHERE s.artist_id = ?");
+                params.add(artistId);
+                if (scoped) {
+                    sql.append(" AND l.created_at >= ? AND l.created_at < ?");
+                    params.add(start); params.add(now);
+                }
+                break;
+            case "followers":
+                sql.append(
+                    "SELECT j.jurisdiction_id AS id, j.name, COUNT(*) AS count " +
+                    "FROM follows f " +
+                    "JOIN users u ON u.user_id = f.follower_id " +
+                    "JOIN jurisdictions j ON j.jurisdiction_id = u.jurisdiction_id " +
+                    "WHERE f.followed_id = ?");
+                params.add(artistId);
+                if (scoped) {
+                    sql.append(" AND f.created_at IS NOT NULL AND f.created_at >= ? AND f.created_at < ?");
+                    params.add(start); params.add(now);
+                }
+                break;
+            case "supporters":
+                sql.append(
+                    "SELECT j.jurisdiction_id AS id, j.name, COUNT(*) AS count " +
+                    "FROM supporters sup " +
+                    "JOIN users u ON u.user_id = sup.listener_id " +
+                    "JOIN jurisdictions j ON j.jurisdiction_id = u.jurisdiction_id " +
+                    "WHERE sup.artist_id = ?");
+                params.add(artistId);
+                if (scoped) {
+                    sql.append(" AND sup.created_at IS NOT NULL AND sup.created_at >= ? AND sup.created_at < ?");
+                    params.add(start); params.add(now);
+                }
+                break;
+            case "plays":
+            default:
+                sql.append(
+                    "SELECT j.jurisdiction_id AS id, j.name, COUNT(*) AS count " +
+                    "FROM song_plays sp " +
+                    "JOIN songs s ON s.song_id = sp.song_id " +
+                    "JOIN jurisdictions j ON j.jurisdiction_id = sp.listener_jurisdiction_id " +
+                    "WHERE s.artist_id = ?");
+                params.add(artistId);
+                if (scoped) {
+                    sql.append(" AND sp.played_at >= ? AND sp.played_at < ?");
+                    params.add(start); params.add(now);
+                }
+                break;
+        }
+
+        sql.append(" GROUP BY j.jurisdiction_id, j.name ORDER BY count DESC LIMIT 12");
+        List<Map<String, Object>> slices = jdbc.queryForList(sql.toString(), params.toArray());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("period", p);
+        result.put("metric", m);
+        result.put("slices", slices);
+        return result;
+    }
+
+    public Map<String, Object> getTerritory(UUID artistId, UUID jurisdictionId, String period) {
+        String p = (period == null || !VALID_PERIODS.contains(period)) ? "all" : period;
+
+        Map<String, Object> jur;
+        if (jurisdictionId == null) {
+            List<Map<String, Object>> roots = jdbc.queryForList(
+                "SELECT jurisdiction_id AS id, name, depth FROM jurisdictions " +
+                "WHERE parent_jurisdiction_id IS NULL ORDER BY created_at ASC LIMIT 1");
+            if (roots.isEmpty()) return null;
+            jur = roots.get(0);
+        } else {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT jurisdiction_id AS id, name, depth FROM jurisdictions WHERE jurisdiction_id = ?",
+                jurisdictionId);
+            if (rows.isEmpty()) return null;
+            jur = rows.get(0);
+        }
+        UUID jurId = (UUID) jur.get("id");
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime start = windowFor(p, now)[0];
+        boolean scoped = start != null;
+
+        String subtree =
+            "WITH RECURSIVE subtree AS (" +
+            "SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = ? " +
+            "UNION ALL " +
+            "SELECT j.jurisdiction_id FROM jurisdictions j " +
+            "JOIN subtree st ON j.parent_jurisdiction_id = st.jurisdiction_id) ";
+
+        long plays = territoryCount(subtree +
+            "SELECT COUNT(*) FROM song_plays sp JOIN songs s ON s.song_id = sp.song_id " +
+            "WHERE s.artist_id = ? AND sp.listener_jurisdiction_id IN (SELECT jurisdiction_id FROM subtree)",
+            " AND sp.played_at >= ? AND sp.played_at < ?", jurId, artistId, scoped, start, now);
+
+        long listeners = territoryCount(subtree +
+            "SELECT COUNT(DISTINCT sp.user_id) FROM song_plays sp JOIN songs s ON s.song_id = sp.song_id " +
+            "WHERE s.artist_id = ? AND sp.user_id IS NOT NULL " +
+            "AND sp.listener_jurisdiction_id IN (SELECT jurisdiction_id FROM subtree)",
+            " AND sp.played_at >= ? AND sp.played_at < ?", jurId, artistId, scoped, start, now);
+
+        long likes = territoryCount(subtree +
+            "SELECT COUNT(*) FROM likes l JOIN songs s ON s.song_id = l.media_id " +
+            "JOIN users u ON u.user_id = l.user_id " +
+            "WHERE s.artist_id = ? AND u.jurisdiction_id IN (SELECT jurisdiction_id FROM subtree)",
+            " AND l.created_at >= ? AND l.created_at < ?", jurId, artistId, scoped, start, now);
+
+        long followers = territoryCount(subtree +
+            "SELECT COUNT(*) FROM follows f JOIN users u ON u.user_id = f.follower_id " +
+            "WHERE f.followed_id = ? AND u.jurisdiction_id IN (SELECT jurisdiction_id FROM subtree)" +
+            (scoped ? " AND f.created_at IS NOT NULL" : ""),
+            " AND f.created_at >= ? AND f.created_at < ?", jurId, artistId, scoped, start, now);
+
+        long supporters = territoryCount(subtree +
+            "SELECT COUNT(*) FROM supporters sup JOIN users u ON u.user_id = sup.listener_id " +
+            "WHERE sup.artist_id = ? AND u.jurisdiction_id IN (SELECT jurisdiction_id FROM subtree)" +
+            (scoped ? " AND sup.created_at IS NOT NULL" : ""),
+            " AND sup.created_at >= ? AND sup.created_at < ?", jurId, artistId, scoped, start, now);
+
+        List<Map<String, Object>> children = jdbc.queryForList(
+            "SELECT j.jurisdiction_id AS id, j.name, " +
+            "EXISTS(SELECT 1 FROM jurisdictions c WHERE c.parent_jurisdiction_id = j.jurisdiction_id) AS \"hasChildren\" " +
+            "FROM jurisdictions j WHERE j.parent_jurisdiction_id = ? ORDER BY j.name ASC",
+            jurId);
+
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("plays", plays);
+        stats.put("listeners", listeners);
+        stats.put("likes", likes);
+        stats.put("followers", followers);
+        stats.put("supporters", supporters);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("period", p);
+        result.put("jurisdiction", jur);
+        result.put("stats", stats);
+        result.put("children", children);
+        return result;
+    }
+
+    private long territoryCount(String baseSql, String windowClause, UUID jurId, UUID artistOrTargetId,
+                                boolean scoped, LocalDateTime start, LocalDateTime end) {
+        if (scoped) {
+            return count(baseSql + windowClause, jurId, artistOrTargetId, start, end);
+        }
+        return count(baseSql, jurId, artistOrTargetId);
     }
 }

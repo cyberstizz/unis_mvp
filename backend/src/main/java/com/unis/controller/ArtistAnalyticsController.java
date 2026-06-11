@@ -103,5 +103,43 @@ public class ArtistAnalyticsController {
         }
         return ResponseEntity.ok(result);
     }
+
+    /**
+     * ★ item 6: pie data — top jurisdictions by metric. plays/listeners are
+     * play-location; likes/followers/supporters are home jurisdiction.
+     */
+    @GetMapping("/artist/{artistId}/demographics/top-jurisdictions")
+    public ResponseEntity<Map<String, Object>> getTopJurisdictions(
+            @PathVariable UUID artistId,
+            @RequestParam(name = "period", required = false, defaultValue = "all") String period,
+            @RequestParam(name = "metric", required = false, defaultValue = "plays") String metric) {
+
+        UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+        if (!requesterId.equals(artistId)) {
+            return ResponseEntity.status(403).build();
+        }
+        return ResponseEntity.ok(artistFanbaseService.getTopJurisdictions(artistId, period, metric));
+    }
+
+    /**
+     * ★ item 6: territory drill-down — subtree-rolled stats for one
+     * jurisdiction + its children. No jurisdictionId = root.
+     */
+    @GetMapping("/artist/{artistId}/demographics/territory")
+    public ResponseEntity<Map<String, Object>> getTerritory(
+            @PathVariable UUID artistId,
+            @RequestParam(name = "jurisdictionId", required = false) UUID jurisdictionId,
+            @RequestParam(name = "period", required = false, defaultValue = "all") String period) {
+
+        UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+        if (!requesterId.equals(artistId)) {
+            return ResponseEntity.status(403).build();
+        }
+        Map<String, Object> result = artistFanbaseService.getTerritory(artistId, jurisdictionId, period);
+        if (result == null) {
+            return ResponseEntity.status(404).build();
+        }
+        return ResponseEntity.ok(result);
+    }
     
 }
