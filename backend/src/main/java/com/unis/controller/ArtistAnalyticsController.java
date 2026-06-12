@@ -1,6 +1,7 @@
 package com.unis.controller;
 
 import com.unis.service.ArtistFanbaseService;
+import com.unis.service.TerritoryRankService;   // ★ territory
 import com.unis.util.SecurityUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -13,9 +14,13 @@ import java.util.UUID;
 public class ArtistAnalyticsController {
 
     private final ArtistFanbaseService artistFanbaseService;
+    private final TerritoryRankService territoryRankService;   // ★ territory
 
-    public ArtistAnalyticsController(ArtistFanbaseService artistFanbaseService) {
+    // ★ territory: TerritoryRankService injected alongside the fanbase service
+    public ArtistAnalyticsController(ArtistFanbaseService artistFanbaseService,
+                                     TerritoryRankService territoryRankService) {
         this.artistFanbaseService = artistFanbaseService;
+        this.territoryRankService = territoryRankService;
     }
 
 /**
@@ -141,5 +146,23 @@ public class ArtistAnalyticsController {
         }
         return ResponseEntity.ok(result);
     }
-    
+
+    /**
+     * ★ territory: precomputed Territory Rank for the artist — overall +
+     * category rank in every jurisdiction in their home chain (neighborhood →
+     * national), across all six period windows, in one indexed read. Returns
+     * status "calculating" until the nightly job (or admin manual trigger)
+     * has populated jurisdiction_ranks. Artist-only.
+     */
+    @GetMapping("/artist/{artistId}/territory-rank")
+    public ResponseEntity<Map<String, Object>> getTerritoryRank(
+            @PathVariable UUID artistId) {
+
+        UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+        if (!requesterId.equals(artistId)) {
+            return ResponseEntity.status(403).build();
+        }
+        return ResponseEntity.ok(territoryRankService.getTerritoryRank(artistId));
+    }
+
 }
