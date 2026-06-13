@@ -432,19 +432,24 @@ public Map<String, Object> getArtistFanbase(
 
 
     // =======================================================================
-    // ★ advanced: completion quality for one song. (UNCHANGED)
+    // ★ advanced: completion quality for one song (now period + cohort scoped).
     // =======================================================================
-    private Map<String, Object> songCompletion(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
-        String base =
+    private Map<String, Object> songCompletion(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
             "SELECT COUNT(*) FILTER (WHERE completed = true) AS completed_plays, " +
             "       COUNT(*) AS total_plays, " +
             "       COALESCE(AVG(percent_played), 0) AS avg_percent " +
-            "FROM song_plays WHERE song_id = ?";
+            "FROM song_plays WHERE song_id = ?");
+        params.add(songId);
+        if (scoped) {
+            sql.append(" AND played_at >= ? AND played_at < ?");
+            params.add(start);
+            params.add(end);
+        }
+        sql.append(cohort(f, "user_id", params));
 
-        Map<String, Object> row = scoped
-            ? jdbc.queryForMap(base + " AND played_at >= ? AND played_at < ?", songId, start, end)
-            : jdbc.queryForMap(base, songId);
-
+        Map<String, Object> row = jdbc.queryForMap(sql.toString(), params.toArray());
         long completed = ((Number) row.getOrDefault("completed_plays", 0L)).longValue();
         long total = ((Number) row.getOrDefault("total_plays", 0L)).longValue();
         double avgPercent = ((Number) row.getOrDefault("avg_percent", 0)).doubleValue();
@@ -460,21 +465,21 @@ public Map<String, Object> getArtistFanbase(
         return m;
     }
 
-    // ★ advanced: discovery-source breakdown for one song. (UNCHANGED)
-    private List<Map<String, Object>> songSources(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
-        String base =
+    // ★ advanced: discovery-source breakdown for one song (now period + cohort scoped).
+    private List<Map<String, Object>> songSources(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
             "SELECT COALESCE(source, 'unknown') AS source, COUNT(*) AS count " +
-            "FROM song_plays WHERE song_id = ?";
-
+            "FROM song_plays WHERE song_id = ?");
+        params.add(songId);
         if (scoped) {
-            return jdbc.queryForList(
-                base + " AND played_at >= ? AND played_at < ? " +
-                "GROUP BY COALESCE(source, 'unknown') ORDER BY count DESC",
-                songId, start, end);
+            sql.append(" AND played_at >= ? AND played_at < ?");
+            params.add(start);
+            params.add(end);
         }
-        return jdbc.queryForList(
-            base + " GROUP BY COALESCE(source, 'unknown') ORDER BY count DESC",
-            songId);
+        sql.append(cohort(f, "user_id", params));
+        sql.append(" GROUP BY COALESCE(source, 'unknown') ORDER BY count DESC");
+        return jdbc.queryForList(sql.toString(), params.toArray());
     }
 
     // =======================================================================
@@ -536,9 +541,18 @@ public Map<String, Object> getArtistFanbase(
 
 
     // =======================================================================
-    // ★ per-song funnel — scoped to ONE song. (UNCHANGED)
+    // ★ per-song funnel — now a twin of getArtistFanbase, scoped to ONE song.
+    // Adds the Plays stage at the top and the same gender/age/location cohort
+    // filtering. The 3-arg overload below keeps existing callers/tests working.
     // =======================================================================
     public Map<String, Object> getSongFunnel(UUID artistId, UUID songId, String period) {
+        return getSongFunnel(artistId, songId, period, null, null, null);
+    }
+
+    public Map<String, Object> getSongFunnel(
+            UUID artistId, UUID songId, String period,
+            String gender, String ageBucket, UUID jurisdictionId) {
+
         Long owns = jdbc.queryForObject(
             "SELECT COUNT(*) FROM songs WHERE song_id = ? AND artist_id = ?",
             Long.class, songId, artistId);
@@ -547,6 +561,7 @@ public Map<String, Object> getArtistFanbase(
         }
 
         String p = (period == null || !VALID_PERIODS.contains(period)) ? "all" : period;
+        Filters f = parseFilters(gender, ageBucket, jurisdictionId);
 
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime currentStart = null;
@@ -579,23 +594,25 @@ public Map<String, Object> getArtistFanbase(
         }
         boolean scoped = currentStart != null;
 
-        long totalPlays = songPlaysCount(songId, currentStart, now, scoped);
-        long listeners  = songListenersCount(songId, currentStart, now, scoped);
-        long likers     = songLikersCount(songId, currentStart, now, scoped);
-        long voters     = songVotersCount(songId, currentStart, now, scoped);
-        long followers  = songFollowersCount(artistId, songId, currentStart, now, scoped);
-        long supporters = songSupportersCount(artistId, songId, currentStart, now, scoped);
+        long totalPlays = songPlaysCount(songId, currentStart, now, scoped, f);
+        long listeners  = songListenersCount(songId, currentStart, now, scoped, f);
+        long likers     = songLikersCount(songId, currentStart, now, scoped, f);
+        long voters     = songVotersCount(songId, currentStart, now, scoped, f);
+        long followers  = songFollowersCount(artistId, songId, currentStart, now, scoped, f);
+        long supporters = songSupportersCount(artistId, songId, currentStart, now, scoped, f);
 
-        Long pL = null, pLk = null, pV = null, pF = null, pS = null;
+        Long pP = null, pL = null, pLk = null, pV = null, pF = null, pS = null;
         if (scoped) {
-            pL  = songListenersCount(songId, prevStart, currentStart, true);
-            pLk = songLikersCount(songId, prevStart, currentStart, true);
-            pV  = songVotersCount(songId, prevStart, currentStart, true);
-            pF  = songFollowersCount(artistId, songId, prevStart, currentStart, true);
-            pS  = songSupportersCount(artistId, songId, prevStart, currentStart, true);
+            pP  = songPlaysCount(songId, prevStart, currentStart, true, f);
+            pL  = songListenersCount(songId, prevStart, currentStart, true, f);
+            pLk = songLikersCount(songId, prevStart, currentStart, true, f);
+            pV  = songVotersCount(songId, prevStart, currentStart, true, f);
+            pF  = songFollowersCount(artistId, songId, prevStart, currentStart, true, f);
+            pS  = songSupportersCount(artistId, songId, prevStart, currentStart, true, f);
         }
 
         List<Map<String, Object>> funnel = new ArrayList<>();
+        funnel.add(stage("plays", "Plays", totalPlays, pP));
         funnel.add(stage("listeners", "Listeners", listeners, pL));
         funnel.add(stage("likers", "Likers", likers, pLk));
         funnel.add(stage("voters", "Voters", voters, pV));
@@ -606,8 +623,8 @@ public Map<String, Object> getArtistFanbase(
             ? Math.round(((double) totalPlays / listeners) * 100.0) / 100.0
             : 0.0;
 
-        Map<String, Object> completion = songCompletion(songId, currentStart, now, scoped);
-        List<Map<String, Object>> sources = songSources(songId, currentStart, now, scoped);
+        Map<String, Object> completion = songCompletion(songId, currentStart, now, scoped, f);
+        List<Map<String, Object>> sources = songSources(songId, currentStart, now, scoped, f);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("period", p);
@@ -618,89 +635,111 @@ public Map<String, Object> getArtistFanbase(
         result.put("repeatListenRatio", repeatListenRatio);
         result.put("completion", completion);
         result.put("sources", sources);
+        result.put("availableJurisdictions", songAvailableJurisdictions(songId));
         return result;
     }
 
-    private long songPlaysCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
-        if (scoped) {
-            return count(
-                "SELECT COUNT(*) FROM song_plays WHERE song_id = ? " +
-                "AND played_at >= ? AND played_at < ?",
-                songId, start, end);
-        }
-        return count("SELECT COUNT(*) FROM song_plays WHERE song_id = ?", songId);
-    }
-
-    private long songListenersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
-        if (scoped) {
-            return count(
-                "SELECT COUNT(DISTINCT user_id) FROM song_plays WHERE song_id = ? " +
-                "AND user_id IS NOT NULL AND played_at >= ? AND played_at < ?",
-                songId, start, end);
-        }
-        return count(
-            "SELECT COUNT(DISTINCT user_id) FROM song_plays " +
-            "WHERE song_id = ? AND user_id IS NOT NULL",
+    // ★ home jurisdictions among this song's listeners → location dropdown.
+    private List<Map<String, Object>> songAvailableJurisdictions(UUID songId) {
+        return jdbc.queryForList(
+            "SELECT DISTINCT u.jurisdiction_id AS id, j.name " +
+            "FROM song_plays sp " +
+            "JOIN users u ON u.user_id = sp.user_id " +
+            "JOIN jurisdictions j ON j.jurisdiction_id = u.jurisdiction_id " +
+            "WHERE sp.song_id = ? AND u.jurisdiction_id IS NOT NULL " +
+            "ORDER BY j.name ASC",
             songId);
     }
 
-    private long songLikersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+    private long songPlaysCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM song_plays WHERE song_id = ?");
+        params.add(songId);
         if (scoped) {
-            return count(
-                "SELECT COUNT(DISTINCT user_id) FROM likes WHERE media_id = ? " +
-                "AND user_id IS NOT NULL AND created_at >= ? AND created_at < ?",
-                songId, start, end);
+            sql.append(" AND played_at >= ? AND played_at < ?");
+            params.add(start);
+            params.add(end);
         }
-        return count(
-            "SELECT COUNT(DISTINCT user_id) FROM likes " +
-            "WHERE media_id = ? AND user_id IS NOT NULL",
-            songId);
+        sql.append(cohort(f, "user_id", params));
+        return count(sql.toString(), params.toArray());
     }
 
-    private long songVotersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+    private long songListenersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(DISTINCT user_id) FROM song_plays WHERE song_id = ? AND user_id IS NOT NULL");
+        params.add(songId);
         if (scoped) {
-            return count(
-                "SELECT COUNT(DISTINCT user_id) FROM votes WHERE target_id = ? " +
-                "AND created_at >= ? AND created_at < ?",
-                songId, start, end);
+            sql.append(" AND played_at >= ? AND played_at < ?");
+            params.add(start);
+            params.add(end);
         }
-        return count("SELECT COUNT(DISTINCT user_id) FROM votes WHERE target_id = ?", songId);
+        sql.append(cohort(f, "user_id", params));
+        return count(sql.toString(), params.toArray());
     }
 
-    private long songFollowersCount(UUID artistId, UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+    private long songLikersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(DISTINCT user_id) FROM likes WHERE media_id = ? AND user_id IS NOT NULL");
+        params.add(songId);
         if (scoped) {
-            return count(
-                "SELECT COUNT(DISTINCT f.follower_id) FROM follows f " +
-                "WHERE f.followed_id = ? AND f.follower_id IN (" +
-                "  SELECT sp.user_id FROM song_plays sp " +
-                "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL " +
-                "  AND sp.played_at >= ? AND sp.played_at < ?)",
-                artistId, songId, start, end);
+            sql.append(" AND created_at >= ? AND created_at < ?");
+            params.add(start);
+            params.add(end);
         }
-        return count(
-            "SELECT COUNT(DISTINCT f.follower_id) FROM follows f " +
-            "WHERE f.followed_id = ? AND f.follower_id IN (" +
-            "  SELECT sp.user_id FROM song_plays sp " +
-            "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL)",
-            artistId, songId);
+        sql.append(cohort(f, "user_id", params));
+        return count(sql.toString(), params.toArray());
     }
 
-    private long songSupportersCount(UUID artistId, UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped) {
+    private long songVotersCount(UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(DISTINCT user_id) FROM votes WHERE target_id = ?");
+        params.add(songId);
         if (scoped) {
-            return count(
-                "SELECT COUNT(DISTINCT sup.listener_id) FROM supporters sup " +
-                "WHERE sup.artist_id = ? AND sup.listener_id IN (" +
-                "  SELECT sp.user_id FROM song_plays sp " +
-                "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL " +
-                "  AND sp.played_at >= ? AND sp.played_at < ?)",
-                artistId, songId, start, end);
+            sql.append(" AND created_at >= ? AND created_at < ?");
+            params.add(start);
+            params.add(end);
         }
-        return count(
+        sql.append(cohort(f, "user_id", params));
+        return count(sql.toString(), params.toArray());
+    }
+
+    private long songFollowersCount(UUID artistId, UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(DISTINCT fo.follower_id) FROM follows fo " +
+            "WHERE fo.followed_id = ? AND fo.follower_id IN (" +
+            "  SELECT sp.user_id FROM song_plays sp WHERE sp.song_id = ? AND sp.user_id IS NOT NULL");
+        params.add(artistId);
+        params.add(songId);
+        if (scoped) {
+            sql.append(" AND sp.played_at >= ? AND sp.played_at < ?");
+            params.add(start);
+            params.add(end);
+        }
+        sql.append(")");
+        sql.append(cohort(f, "fo.follower_id", params));
+        return count(sql.toString(), params.toArray());
+    }
+
+    private long songSupportersCount(UUID artistId, UUID songId, LocalDateTime start, LocalDateTime end, boolean scoped, Filters f) {
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder(
             "SELECT COUNT(DISTINCT sup.listener_id) FROM supporters sup " +
             "WHERE sup.artist_id = ? AND sup.listener_id IN (" +
-            "  SELECT sp.user_id FROM song_plays sp " +
-            "  WHERE sp.song_id = ? AND sp.user_id IS NOT NULL)",
-            artistId, songId);
+            "  SELECT sp.user_id FROM song_plays sp WHERE sp.song_id = ? AND sp.user_id IS NOT NULL");
+        params.add(artistId);
+        params.add(songId);
+        if (scoped) {
+            sql.append(" AND sp.played_at >= ? AND sp.played_at < ?");
+            params.add(start);
+            params.add(end);
+        }
+        sql.append(")");
+        sql.append(cohort(f, "sup.listener_id", params));
+        return count(sql.toString(), params.toArray());
     }
 
 

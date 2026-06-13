@@ -73,14 +73,18 @@ public class ArtistAnalyticsController {
     public ResponseEntity<Map<String, Object>> getSongFunnel(
             @PathVariable UUID artistId,
             @PathVariable UUID songId,
-            @RequestParam(name = "period", required = false, defaultValue = "all") String period) {
+            @RequestParam(name = "period", required = false, defaultValue = "all") String period,
+            @RequestParam(name = "gender", required = false) String gender,            // ★ filters
+            @RequestParam(name = "age", required = false) String age,                  // ★
+            @RequestParam(name = "jurisdictionId", required = false) UUID jurisdictionId) {  // ★
 
         UUID requesterId = SecurityUtils.getAuthenticatedUserId();
         if (!requesterId.equals(artistId)) {
             return ResponseEntity.status(403).build();
         }
 
-        Map<String, Object> result = artistFanbaseService.getSongFunnel(artistId, songId, period);
+        Map<String, Object> result =
+            artistFanbaseService.getSongFunnel(artistId, songId, period, gender, age, jurisdictionId); // ★
         if (result == null) {
             return ResponseEntity.status(404).build(); // song not found / not owned
         }
