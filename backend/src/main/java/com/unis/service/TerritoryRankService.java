@@ -390,20 +390,24 @@ public class TerritoryRankService {
         WHERE u.user_id = ?
         """;
 
-    // ★ piece 3: ordered home -> root chain (lvl 0 = home/neighborhood)
+    // ★ ordered home -> root chain (lvl 0 = home/neighborhood).
+    // Walks the FULL chain, then returns only ACTIVE (voting_enabled) jurisdictions,
+    // so the dashboard shows just the launched levels (e.g. Uptown Harlem + Harlem).
+    // Higher levels appear automatically once their voting_enabled flag is set true.
     private static final String CHAIN_SQL = """
         WITH RECURSIVE chain AS (
-            SELECT j.jurisdiction_id, j.name, j.parent_jurisdiction_id, 0 AS lvl
+            SELECT j.jurisdiction_id, j.name, j.parent_jurisdiction_id, j.voting_enabled, 0 AS lvl
             FROM users u
             JOIN jurisdictions j ON j.jurisdiction_id = u.jurisdiction_id
             WHERE u.user_id = ?
             UNION ALL
-            SELECT p.jurisdiction_id, p.name, p.parent_jurisdiction_id, c.lvl + 1
+            SELECT p.jurisdiction_id, p.name, p.parent_jurisdiction_id, p.voting_enabled, c.lvl + 1
             FROM chain c
             JOIN jurisdictions p ON p.jurisdiction_id = c.parent_jurisdiction_id
         )
         SELECT jurisdiction_id, name, lvl
         FROM chain
+        WHERE voting_enabled = true
         ORDER BY lvl ASC
         """;
 
