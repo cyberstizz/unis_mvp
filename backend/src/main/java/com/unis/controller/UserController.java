@@ -63,6 +63,11 @@ public class UserController {
     @Autowired
     private FollowRepository followRepository;
 
+    @Autowired private EmailVerificationService emailVerificationService;
+
+    @Autowired private SignupUploadService signupUploadService;
+
+
     private static final Logger log = LoggerFactory.getLogger(UserController.class);
 
     /**
