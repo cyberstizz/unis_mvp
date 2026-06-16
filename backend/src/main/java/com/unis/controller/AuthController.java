@@ -7,6 +7,7 @@ import com.unis.entity.PreRegistration;
 import com.unis.repository.PreRegistrationRepository;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import com.unis.entity.User;
+import com.unis.service.EmailVerificationService;
 import com.unis.service.PasswordResetService;
 import com.unis.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
