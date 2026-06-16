@@ -13,7 +13,7 @@ public class UserDto {
     private String oldPassword;  // For password update
     private String role;  // "listener" or "artist"
     private UUID jurisdictionId;
-    private UUID supportedArtistId;  // Required for listeners
+    private UUID supportedArtistId;  
     private String photoUrl;  // For photo update
     private String bio;  // For bio update
     private String newPassword;  // For password update
@@ -22,4 +22,5 @@ public class UserDto {
     private String referralCode;
     private LocalDate dateOfBirth;
     private String themePreference;
+    private String gender;   
 }
