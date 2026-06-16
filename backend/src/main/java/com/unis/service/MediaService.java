@@ -109,9 +109,6 @@ public class MediaService {
                 throw new IllegalArgumentException("Audio file is required");
             }
 
-            // C6 FIX: Get artistId from JWT instead of req.getArtistId()
-            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
-
             // Resolve artist using authenticated user
             User artist = userRepository.findById(authenticatedUserId)
                     .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + authenticatedUserId));

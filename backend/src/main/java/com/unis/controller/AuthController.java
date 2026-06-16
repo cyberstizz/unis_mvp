@@ -45,6 +45,9 @@ public class AuthController {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired 
+    private EmailVerificationService emailVerificationService;  
+
    @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest loginRequest) {
         try {
@@ -54,6 +57,14 @@ public class AuthController {
 
             UserDetails userDetails = (UserDetails) authentication.getPrincipal();
             User user = userService.findByEmail(userDetails.getUsername());
+            // ★ Hard gate — must confirm email before first login
+            if (!Boolean.TRUE.equals(user.getEmailVerified())) {
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("unverified", true);
+                body.put("email", user.getEmail());
+                body.put("message", "Please verify your email to activate your account. Check your inbox for the link.");
+                return ResponseEntity.status(403).body(body);
+            }
             String token = jwtUtil.generateToken(user.getEmail(), user.getUserId().toString(), user.getRole().toString());
 
             return ResponseEntity.ok(new AuthResponse(token));
@@ -168,5 +179,39 @@ public class AuthController {
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+
+    @PostMapping("/verify-email")
+    public ResponseEntity<?> verifyEmail(@RequestBody Map<String, String> request) {
+        return doVerify(request.get("token"));
+    }
+
+    @GetMapping("/verify-email")
+    public ResponseEntity<?> verifyEmailGet(@RequestParam("token") String token) {
+        return doVerify(token);
+    }
+
+    private ResponseEntity<?> doVerify(String token) {
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Token is required"));
+        }
+        try {
+            emailVerificationService.verify(token);
+            return ResponseEntity.ok(Map.of("message", "Email verified. You can now log in."));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // Always 200 — never reveals whether the email exists
+    @PostMapping("/resend-verification")
+    public ResponseEntity<?> resendVerification(@RequestBody Map<String, String> request) {
+        String email = request.get("email");
+        if (email == null || email.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Email is required"));
+        }
+        emailVerificationService.resend(email);
+        return ResponseEntity.ok(Map.of("message", "If an unverified account exists for this email, a new link has been sent."));
     }
 }

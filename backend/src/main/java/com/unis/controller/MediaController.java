@@ -2,6 +2,7 @@ package com.unis.controller;
 
 import com.unis.entity.Song;
 import com.unis.entity.Video;
+import com.unis.service.SignupUploadService;
 import com.unis.util.SecurityUtils;
 import com.unis.service.MediaService;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,21 @@ import java.util.stream.Collectors;
 public class MediaController {
     @Autowired
     private MediaService mediaService;
+
+    @Autowired 
+    private SignupUploadService signupUploadService; 
+
+    // POST /api/v1/media/signup-song — debut upload during signup (token-authorized, no login)
+    @PostMapping(value = "/signup-song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Song> addSignupSong(
+            @RequestParam("signupToken") String signupToken,
+            @RequestPart("song") String songJson,
+            @RequestPart("file") MultipartFile file,
+            @RequestPart(value = "artwork", required = false) MultipartFile artwork) {
+        UUID artistId = signupUploadService.consume(signupToken);   // validates + single-use
+        Song saved = mediaService.addSongForArtist(artistId, songJson, file, artwork);
+        return ResponseEntity.ok(saved);
+    }
 
     // POST /api/v1/media/song — C1 + C6: now requires auth (SecurityConfig), artistId from JWT
     @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
