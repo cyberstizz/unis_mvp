@@ -83,6 +83,9 @@ public class User {
     @Column(name = "youtube_url")
     private String youtubeUrl;
 
+    @Column(name = "contact_email")
+    private String contactEmail;
+
     @Column(name = "gender")
     private String gender;
 

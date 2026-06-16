@@ -115,6 +115,8 @@ public class UserService {
             .instagramUrl(user.getInstagramUrl())
             .twitterUrl(user.getTwitterUrl())
             .tiktokUrl(user.getTiktokUrl())
+            .youtubeUrl(user.getYoutubeUrl())
+            .contactEmail(user.getContactEmail())
             .createdAt(user.getCreatedAt())
             .jurisdiction(user.getJurisdiction() == null ? null :
                 ProfileSummaryDto.JurisdictionInfo.builder()
@@ -776,13 +778,31 @@ public class UserService {
         if (payload.containsKey("tiktokUrl")) {
             user.setTiktokUrl(sanitizeSocialUrl(payload.get("tiktokUrl")));
         }
+        if (payload.containsKey("youtubeUrl")) {
+            user.setYoutubeUrl(sanitizeSocialUrl(payload.get("youtubeUrl")));
+        }
+        if (payload.containsKey("contactEmail")) {
+            user.setContactEmail(sanitizeContactEmail(payload.get("contactEmail")));
+        }
         if (payload.containsKey("themePreference")) {
             // theme is cosmetic, no URL validation
             user.setThemePreference(payload.get("themePreference"));
         }
 
+        
+
         userRepository.save(user);
         System.out.println("[SocialLinks] action=update userId=" + userId + " status=ok");
+    }
+
+
+    private String sanitizeContactEmail(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String trimmed = raw.trim();
+        if (!trimmed.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
+            throw new RuntimeException("Enter a valid email address");
+        }
+        return trimmed;
     }
 
 

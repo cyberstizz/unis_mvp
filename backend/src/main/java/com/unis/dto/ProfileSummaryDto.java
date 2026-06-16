@@ -54,11 +54,13 @@ public class ProfileSummaryDto {
         private String level;
         private String themePreference;
         private String role;
-        private UUID supportedArtistId; // nullable
+        private UUID supportedArtistId;
         private JurisdictionInfo jurisdiction;
         private String instagramUrl;
         private String twitterUrl;
         private String tiktokUrl;
+        private String youtubeUrl;
+        private String contactEmail;
         private LocalDateTime createdAt;
     }
 
