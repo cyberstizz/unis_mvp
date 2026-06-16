@@ -14,6 +14,6 @@ import java.util.UUID;
 public class RegisterResponse {
     private UUID userId;
     private String role;
-    private String signupToken;          // null for listeners; used to upload the debut song
+    private String signupToken;          
     private boolean emailVerificationSent;
 }
