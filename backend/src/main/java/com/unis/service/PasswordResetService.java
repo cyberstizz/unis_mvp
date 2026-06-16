@@ -30,7 +30,7 @@ public class PasswordResetService {
     @Autowired
     private EmailService emailService;
 
-    @Value("${app.frontend.url:https://unisprototypetwo.netlify.app}")
+    @Value("${app.frontend.url:https://unismusic.com}")
     private String frontendBaseUrl;
 
     /**
