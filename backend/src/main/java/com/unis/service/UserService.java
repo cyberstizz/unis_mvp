@@ -304,8 +304,9 @@ public class UserService {
         newUser.setCreatedAt(LocalDateTime.now());
         newUser.setScore(0);
         newUser.setLevel("silver");
-        newUser.setThemePreference("blue");
- 
+        if (newUser.getThemePreference() == null || newUser.getThemePreference().isBlank()) {  // ★
+            newUser.setThemePreference("blue");   // default only — honor the user's pick
+        } 
         // Generate a referral code for this user
         String uniqueReferralCode = ReferralCodeGenerator.generateUnique(
             newUser.getUsername(),
