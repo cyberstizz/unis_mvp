@@ -114,6 +114,10 @@ public class User {
     @Column(name = "stripe_onboarding_complete")
     private Boolean stripeOnboardingComplete = false;
 
+    @Builder.Default
+    @Column(name = "email_verified", nullable = false)
+    private Boolean emailVerified = false;   
+
     @Column(name = "theme_preference", length = 20)
     private String themePreference = "blue";
 
