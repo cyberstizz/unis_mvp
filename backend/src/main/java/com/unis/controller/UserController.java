@@ -3,6 +3,9 @@ package com.unis.controller;
 import com.unis.dto.UserDto;
 import com.unis.dto.ProfileSummaryDto;
 import com.unis.util.SecurityUtils;
+import com.unis.dto.RegisterResponse;
+import com.unis.service.EmailVerificationService;
+import com.unis.service.SignupUploadService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +30,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import jakarta.servlet.http.HttpServletRequest;
+
 
 
 
@@ -117,9 +121,9 @@ public class UserController {
 
 
 
-    // POST /api/v1/users/register (page 6 signup)
+    // POST /api/v1/users/register
     @PostMapping("/register")
-    public ResponseEntity<User> register(@RequestBody UserDto dto) {
+    public ResponseEntity<RegisterResponse> register(@RequestBody UserDto dto) {   // ★ return type changed
         User user = User.builder()
             .username(dto.getUsername())
             .email(dto.getEmail())
@@ -127,32 +131,40 @@ public class UserController {
             .role(User.Role.valueOf(dto.getRole()))
             .bio(dto.getBio())
             .photoUrl(dto.getPhotoUrl())
+            .gender(dto.getGender())                    // ★ persist gender
+            .themePreference(dto.getThemePreference())  // ★ honor chosen theme
             .build();
 
-            user.setDateOfBirth(dto.getDateOfBirth());
+        user.setDateOfBirth(dto.getDateOfBirth());
 
-
-        // Fetch jurisdiction entity and set
         Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
             .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
         user.setJurisdiction(jurisdiction);
 
-        // Set genre for artists
         if (dto.getGenreId() != null) {
             Genre genre = genreRepository.findById(dto.getGenreId())
                 .orElseThrow(() -> new RuntimeException("Genre not found"));
             user.setGenre(genre);
         }
 
-        // Pass referral code to register method
-        User registered = userService.register(
-            user,
-            dto.getSupportedArtistId(),
-            dto.getReferralCode()
-        );
+        User registered = userService.register(user, dto.getSupportedArtistId(), dto.getReferralCode());
 
-        return ResponseEntity.ok(registered);
+        // ★ account exists but is unverified — email them the confirmation link
+        emailVerificationService.sendVerification(registered);
+
+        // ★ artists get a one-shot token to upload their debut song without logging in
+        String signupToken = "artist".equalsIgnoreCase(dto.getRole())
+            ? signupUploadService.issue(registered)
+            : null;
+
+        return ResponseEntity.ok(RegisterResponse.builder()
+            .userId(registered.getUserId())
+            .role(registered.getRole().toString())
+            .signupToken(signupToken)
+            .emailVerificationSent(true)
+            .build());
     }
+
 
     // GET /api/v1/users/profile/{id} (page 6 dashboard)
     @GetMapping("/profile/{userId}")

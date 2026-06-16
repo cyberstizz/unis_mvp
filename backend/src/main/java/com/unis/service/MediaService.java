@@ -88,10 +88,16 @@ public class MediaService {
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-// Add song - EVICTS cache because new content affects trending/artist lists
+    // Add song - EVICTS cache because new content affects trending/artist lists
     // C1 + C6 FIX: artistId now comes from JWT, not from client JSON
     @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
+    // ★ Authenticated path (dashboard uploads) — artist comes from the JWT
     public Song addSong(String songJson, MultipartFile file, MultipartFile artwork) {
+        return addSongForArtist(SecurityUtils.getAuthenticatedUserId(), songJson, file, artwork);
+    }
+
+    // ★ Shared core — artistId passed in, so signup (no JWT yet) can reuse every line below
+    public Song addSongForArtist(UUID authenticatedUserId, String songJson, MultipartFile file, MultipartFile artwork) {
         try {
             SongUploadRequest req = objectMapper.readValue(songJson, SongUploadRequest.class);
             
