@@ -279,6 +279,11 @@ public class UserService {
 
 // Register new user - NOT CACHED (write operation)
     public User register(User newUser, UUID supportedArtistId, String referralCode) {
+         // Reject an email that already belongs to another account (active or not)
+         if (newUser.getEmail() != null
+                 && userRepository.findByEmail(newUser.getEmail().toLowerCase().trim()).isPresent()) {
+             throw new RuntimeException("An account with this email already exists.");
+         }
         // === NEW: Date of birth validation ===
         if (newUser.getDateOfBirth() != null) {
             LocalDate today = LocalDate.now();
@@ -301,6 +306,8 @@ public class UserService {
         }
         // === END NEW ===
  
+        newUser.setEmail(newUser.getEmail().toLowerCase().trim());   // normalize before saving
+
         // Hash password
         newUser.setPasswordHash(passwordEncoder.encode(newUser.getPasswordHash()));
         newUser.setCreatedAt(LocalDateTime.now());
@@ -471,7 +478,7 @@ public class UserService {
 
     // NOT CACHED - Used for authentication, needs fresh data
     public User findByEmail(String email) {
-        return userRepository.findByEmail(email)
+        return userRepository.findActiveByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
     }
 
