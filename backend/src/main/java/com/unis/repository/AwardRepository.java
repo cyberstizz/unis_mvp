@@ -205,4 +205,16 @@ public interface AwardRepository extends JpaRepository<Award, UUID> {
 
     @Query("SELECT COUNT(a) FROM Award a WHERE a.awardDate = :date")
     int countByAwardDate(@Param("date") LocalDate date);
+
+    @Query(value = """
+    SELECT a.* FROM awards a
+    JOIN songs s ON a.target_id = s.song_id
+    WHERE a.target_type = 'song'
+      AND s.artist_id = :artistId
+    ORDER BY a.award_date DESC
+    """, nativeQuery = true)
+    List<Award> findSongAwardsByArtistId(
+        @Param("artistId") UUID artistId,
+        Pageable pageable
+    );
 }

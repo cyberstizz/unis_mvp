@@ -1183,6 +1183,13 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         List<Award> awards = awardRepository.findByTargetIdOrderByAwardDateDesc(artistId, PageRequest.of(offset / limit, limit));
         return populateAwardEntities(awards);
     }
+    
+    public List<Award> getArtistSongAwards(UUID artistId, int limit, int offset) {
+        List<Award> awards = awardRepository.findSongAwardsByArtistId(
+            artistId, PageRequest.of(offset / limit, limit)
+        );
+        return populateAwardEntities(awards);  // already handles 'song' type — sets award.song
+    }
 
     // =========================================================================
     // INNER CLASSES
