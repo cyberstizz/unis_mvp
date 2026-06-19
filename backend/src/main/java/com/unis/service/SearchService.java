@@ -73,11 +73,12 @@ public class SearchService {
      */
     public SearchDto.SearchResponse search(String query, String type, UUID jurisdictionId,
                                             int limit, int offset) {
-        if (query == null || query.trim().isEmpty()) {
+        String normalizedQuery = (query == null ? "" : query.trim());                
+        if (normalizedQuery.isEmpty() && jurisdictionId == null) {                   
             return SearchDto.SearchResponse.builder()
                     .results(Collections.emptyList())
-                    .query(query)
-                    .type(type)
+                    .query(normalizedQuery)                                          
+                    .type(type != null ? type : "all")                             
                     .count(0)
                     .offset(offset)
                     .limit(limit)
@@ -85,7 +86,7 @@ public class SearchService {
         }
 
         MapSqlParameterSource params = new MapSqlParameterSource()
-                .addValue("query", query.trim())
+                .addValue("query", normalizedQuery)                                   // ★ was query.trim()
                 .addValue("filterType", type != null ? type : "all")
                 .addValue("jurisdictionId", jurisdictionId)
                 .addValue("limit", limit)

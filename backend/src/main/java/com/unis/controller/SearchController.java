@@ -44,7 +44,7 @@ public class SearchController {
      */
     @GetMapping
     public ResponseEntity<SearchDto.SearchResponse> search(
-            @RequestParam("q") String query,
+            @RequestParam(value = "q", required = false, defaultValue = "") String query,
             @RequestParam(value = "type", defaultValue = "all") String type,
             @RequestParam(value = "jurisdictionId", required = false) UUID jurisdictionId,
             @RequestParam(value = "limit", defaultValue = "20") int limit,
