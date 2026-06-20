@@ -519,6 +519,22 @@ public Map<String, Object> getArtistFanbase(
         return result;
     }
 
+    public Map<String, Object> getArtistSalesTotal(UUID artistId) { // ★ artist-level sales aggregate (all songs)
+    Map<String, Object> summary = jdbc.queryForMap(
+        "SELECT COUNT(*) AS copies, " +
+        "       COALESCE(SUM(amount), 0) AS gross_cents, " +
+        "       COALESCE(SUM(amount - platform_fee), 0) AS net_cents " +
+        "FROM purchases " +
+        "WHERE artist_id = ? AND status = 'completed'",
+        artistId);
+
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("copies", ((Number) summary.getOrDefault("copies", 0L)).longValue());
+    result.put("grossCents", ((Number) summary.getOrDefault("gross_cents", 0L)).longValue());
+    result.put("netCents", ((Number) summary.getOrDefault("net_cents", 0L)).longValue());
+    return result;
+}
+
     private Map<String, Object> stage(String key, String label, long value, Long prevValue) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("key", key);

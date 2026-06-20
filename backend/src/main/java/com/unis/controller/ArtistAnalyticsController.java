@@ -113,6 +113,16 @@ public class ArtistAnalyticsController {
         return ResponseEntity.ok(result);
     }
 
+    @GetMapping("/artist/{artistId}/sales-total") // ★ artist-level sales total for RevenueSection
+    public ResponseEntity<Map<String, Object>> getArtistSalesTotal(@PathVariable UUID artistId) {
+        UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+        if (!requesterId.equals(artistId)) {
+            return ResponseEntity.status(403).build();
+        }
+        Map<String, Object> result = artistFanbaseService.getArtistSalesTotal(artistId);
+        return ResponseEntity.ok(result);
+    }
+
     /**
      * ★ item 6: pie data — top jurisdictions by metric. plays/listeners are
      * play-location; likes/followers/supporters are home jurisdiction.
