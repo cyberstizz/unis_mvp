@@ -83,6 +83,8 @@ public class EarningsService {
         // Look up supported artist
         UUID supportedArtistId = viewer.getSupportedArtistId();
 
+
+
         // Build the ad view record
         AdView adView = new AdView();
         adView.setUser(viewer);
@@ -91,22 +93,30 @@ public class EarningsService {
 
         // Set supported artist (15%)
         if (supportedArtistId != null) {
-            userRepository.findById(supportedArtistId).ifPresent(adView::setSupportedArtist);
+            userRepository.findById(supportedArtistId)
+                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))   
+                .ifPresent(adView::setSupportedArtist);
         }
 
         // Set Level 1 referrer (10%)
         if (level1Id != null) {
-            userRepository.findById(level1Id).ifPresent(adView::setReferredArtist);
+            userRepository.findById(level1Id)
+                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))  
+                .ifPresent(adView::setReferredArtist);        
         }
 
         // Set Level 2 referrer (5%)
         if (level2Id != null) {
-            userRepository.findById(level2Id).ifPresent(adView::setReferrerLevel2);
+            userRepository.findById(level2Id)
+                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))   
+                .ifPresent(adView::setReferrerLevel2);          
         }
 
         // Set Level 3 referrer (2%)
         if (level3Id != null) {
-            userRepository.findById(level3Id).ifPresent(adView::setReferrerLevel3);
+            userRepository.findById(level3Id)
+                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))   
+                .ifPresent(adView::setReferrerLevel3);         
         }
 
         return adViewRepository.save(adView);

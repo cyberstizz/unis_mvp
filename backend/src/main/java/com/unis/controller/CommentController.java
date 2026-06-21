@@ -3,6 +3,7 @@ package com.unis.controller;
 import com.unis.dto.CommentDTO;
 import com.unis.util.SecurityUtils;
 import com.unis.service.CommentService;
+import com.unis.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -20,6 +21,7 @@ import java.util.UUID;
 public class CommentController {
 
     private final CommentService commentService;
+    private final UserRepository userRepository;
 
     /**
      * POST /api/v1/comments
@@ -32,6 +34,14 @@ public class CommentController {
             // C6 FIX: Override whatever userId is in the request with the authenticated user
             UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
             request.setUserId(authenticatedUserId);
+
+            boolean phoneVerified = userRepository.findById(authenticatedUserId)
+                .map(u -> Boolean.TRUE.equals(u.getPhoneVerified()))
+                .orElse(false);
+        if (!phoneVerified) {
+            return ResponseEntity.status(403).body(Map.of(
+                "code", "PHONE_UNVERIFIED", "message", "Verify your phone number to comment."));
+}
 
             CommentDTO.Response response = commentService.createComment(request);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);

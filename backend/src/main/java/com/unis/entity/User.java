@@ -121,6 +121,14 @@ public class User {
     @Column(name = "email_verified", nullable = false)
     private Boolean emailVerified = false;   
 
+    @Column(name = "phone_number")
+    @com.fasterxml.jackson.annotation.JsonIgnore   
+    private String phoneNumber;
+
+    @Column(name = "phone_verified", nullable = false)
+    @Builder.Default
+    private Boolean phoneVerified = false;         
+
     @Column(name = "theme_preference", length = 20)
     private String themePreference = "blue";
 

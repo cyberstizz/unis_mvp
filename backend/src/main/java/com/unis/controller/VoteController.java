@@ -70,6 +70,14 @@ public class VoteController {
             User user = userRepository.findById(authenticatedUserId)
                 .orElseThrow(() -> new RuntimeException("User not found: " + authenticatedUserId));
 
+            // first through an error if their phone number is not verified
+            boolean phoneVerified = userRepository.findById(authenticatedUserId)
+                     .map(u -> Boolean.TRUE.equals(u.getPhoneVerified()))
+                     .orElse(false);
+            if (!phoneVerified) {
+                return ResponseEntity.status(403).body(Map.of(
+                 "code", "PHONE_UNVERIFIED", "message", "Verify your phone number to vote."));
+}
             // Fetch Genre, Jurisdiction, Interval (required for voting)
             if (req.getGenreId() == null) {
                 return ResponseEntity.badRequest().body("Genre is required for voting");
