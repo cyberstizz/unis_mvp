@@ -20,6 +20,11 @@ stripe:
   secret:
     key: ${STRIPE_SECRET_KEY:sk_test_51KD0MTBGolAm0Ydrtrvngbqd9xQvnEGtbmxjlBzgo5QGkFxOViGAw1Pzi1VLJ4hcSTbwrGpt60ZCuxavtVJQbLhg00KNL8nuDB}
 
+twilio:
+  account-sid: ${TWILIO_ACCOUNT_SID:}
+  auth-token: ${TWILIO_AUTH_TOKEN:}
+  verify-service-sid: ${TWILIO_VERIFY_SERVICE_SID:}
+
 spring:
   application:
     name: unis
