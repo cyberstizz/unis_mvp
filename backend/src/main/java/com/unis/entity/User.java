@@ -132,6 +132,9 @@ public class User {
     @Column(name = "theme_preference", length = 20)
     private String themePreference = "blue";
 
+    @Column(name = "allow_messages_from_anyone")
+    private Boolean allowMessagesFromAnyone = true;
+
     // -----------------------------------------------------------------------
     // Preference flags (backing columns for AccountSettings toggles).
     // @Builder.Default is required: with @Builder, an un-set field is null,
