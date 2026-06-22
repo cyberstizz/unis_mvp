@@ -813,4 +813,12 @@ public class UserService {
     }
 
 
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
+    public void markPhoneVerified(UUID userId) {
+        User u = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        u.setPhoneVerified(true);
+        userRepository.save(u);
+    }
+
 }

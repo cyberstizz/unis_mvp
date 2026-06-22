@@ -6,6 +6,7 @@ import com.unis.service.TwilioVerifyService;
 import com.unis.util.SecurityUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.unis.service.UserService;
 
 import java.util.Map;
 import java.util.UUID;
@@ -27,10 +28,14 @@ public class PhoneVerificationController {
 
     private final TwilioVerifyService twilio;
     private final UserRepository userRepository;
+    private final UserService userService;
 
-    public PhoneVerificationController(TwilioVerifyService twilio, UserRepository userRepository) {
+
+    public PhoneVerificationController(TwilioVerifyService twilio, UserRepository userRepository, UserService userService) {
         this.twilio = twilio;
         this.userRepository = userRepository;
+        this.userService = userService;
+
     }
 
     @PostMapping("/start")
@@ -82,9 +87,8 @@ public class PhoneVerificationController {
             if (!approved) {
                 return ResponseEntity.status(400).body(Map.of("error", "That code didn't match. Try again."));
             }
-            user.setPhoneVerified(true);
-            userRepository.save(user);
-            return ResponseEntity.ok(Map.of("verified", true));
+        userService.markPhoneVerified(userId);
+        return ResponseEntity.ok(Map.of("verified", true));
         } catch (Exception e) {
             return ResponseEntity.status(400).body(Map.of("error", "That code is invalid or has expired."));
         }
