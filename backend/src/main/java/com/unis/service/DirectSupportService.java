@@ -1,10 +1,5 @@
 package com.unis.service;
 
-public class DirectSupportService {
-
-}
-package com.unis.service;
-
 import com.stripe.Stripe;
 import com.stripe.model.PaymentIntent;
 import com.stripe.param.PaymentIntentCreateParams;
