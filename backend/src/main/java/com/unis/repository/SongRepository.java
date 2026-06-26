@@ -7,7 +7,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -64,4 +66,7 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Query("UPDATE Song s SET s.playsToday = 0, s.lastPlayResetDate = :today " +
            "WHERE s.lastPlayResetDate < :today OR s.lastPlayResetDate IS NULL")
     int resetPlaysToday(@Param("today") LocalDate today);
+
+    @Query("SELECT COUNT(s) FROM Song s WHERE s.artist.userId = :artistId AND s.createdAt >= :start")
+    long countByArtistSince(@Param("artistId") UUID artistId, @Param("start") LocalDateTime start);
 }

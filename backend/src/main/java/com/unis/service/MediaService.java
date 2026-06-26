@@ -23,6 +23,7 @@ import com.unis.repository.UserRepository;
 import com.unis.repository.GenreRepository;
 import com.unis.repository.JurisdictionRepository;
 
+
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
@@ -34,6 +35,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -112,6 +115,17 @@ public class MediaService {
             // Resolve artist using authenticated user
             User artist = userRepository.findById(authenticatedUserId)
                     .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + authenticatedUserId));
+
+            // One upload per day per artist — enforced server-side.
+            // Clean companion versions are exempt (explicit + clean = one upload).
+            if (!Boolean.TRUE.equals(req.getIsCleanVersion())) {
+                long uploadsToday = songRepository.countByArtistSince(
+                        authenticatedUserId, LocalDate.now().atStartOfDay());
+                if (uploadsToday >= 1) {
+                    throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                            "You can upload one song per day. Try again tomorrow.");
+                }
+            }
 
             // Resolve genre (optional)
             Genre genre = null;

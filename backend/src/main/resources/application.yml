@@ -1,3 +1,7 @@
+server:
+  error:
+    include-message: always
+
 cloudflare:
   r2:
     access-key: ${R2_ACCESS_KEY}

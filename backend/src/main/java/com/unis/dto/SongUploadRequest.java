@@ -20,4 +20,5 @@ public class SongUploadRequest {
     private Boolean explicit = false;
     private String lyrics;
     private String isrc;
+    private Boolean isCleanVersion = false;
 }
