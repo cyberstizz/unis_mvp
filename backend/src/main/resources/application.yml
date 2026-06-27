@@ -1,4 +1,5 @@
 server:
+  port: 8080
   error:
     include-message: always
 
@@ -12,7 +13,7 @@ cloudflare:
 
 file:
   upload-dir: uploads
-  storage-mode: local   
+  storage-mode: local
 
 resend:
   api:
@@ -83,9 +84,6 @@ spring:
   jwt:
     secret: unis-super-secret-key-change-this-in-production-should-be-at-least-256-bits-long
     expiration: 86400000
-
-server:
-  port: 8080
 
 logging:
   level:
