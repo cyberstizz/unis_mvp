@@ -22,27 +22,26 @@ spring:
     secret: ${JWT_SECRET}
     expiration: 86400000
 
-  file:
-    storage-mode: r2
+file:
+  storage-mode: r2
 
-  resend:
+resend:
   api:
     key: ${RESEND_API_KEY}
   from:
     email: noreply@charleslambjr.com
 
+unis:
+  auto-populate-awards: true
+  app-base-url: ${UNIS_APP_BASE_URL:http://localhost:5173}
+  api-base-url: ${UNIS_API_BASE_URL:http://localhost:8080}
+  digest:
+    enabled: ${UNIS_DIGEST_ENABLED:true}
+    cron: "0 0 13 * * SUN"
+    daily-limit: 90
 
-  unis:
-    auto-populate-awards: true
-    app-base-url: ${UNIS_APP_BASE_URL:http://localhost:5173}
-    api-base-url: ${UNIS_API_BASE_URL:http://localhost:8080}
-    digest:
-      enabled: ${UNIS_DIGEST_ENABLED:true}
-      cron: "0 0 13 * * SUN"
-      daily-limit: 90
-
-  logging:
-    level:
-      com.unis: DEBUG
-      org.springframework.security: DEBUG
-      org.springframework.web: DEBUG
+logging:
+  level:
+    com.unis: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.web: DEBUG

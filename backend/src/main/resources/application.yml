@@ -16,13 +16,13 @@ file:
 
 resend:
   api:
-    key: re_czhVPEit_NuiGJ7jhokGywdQpWAH9ebRT
+    key: ${RESEND_API_KEY}
   from:
     email: noreply@charleslambjr.com
 
 stripe:
   secret:
-    key: ${STRIPE_SECRET_KEY:sk_test_51KD0MTBGolAm0Ydrtrvngbqd9xQvnEGtbmxjlBzgo5QGkFxOViGAw1Pzi1VLJ4hcSTbwrGpt60ZCuxavtVJQbLhg00KNL8nuDB}
+    key: ${STRIPE_SECRET_KEY}
 
 twilio:
   account-sid: ${TWILIO_ACCOUNT_SID:}
