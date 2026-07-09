@@ -129,10 +129,12 @@ public class User {
     @Builder.Default
     private Boolean phoneVerified = false;         
 
+    @Builder.Default
     @Column(name = "theme_preference", length = 20)
     private String themePreference = "blue";
 
-    @Column(name = "allow_messages_from_anyone")
+    @Builder.Default
+    @Column(name = "allow_messages_from_anyone", nullable = false)
     private Boolean allowMessagesFromAnyone = true;
 
     // -----------------------------------------------------------------------
