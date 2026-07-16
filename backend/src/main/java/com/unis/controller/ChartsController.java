@@ -15,10 +15,10 @@ import java.util.UUID;
  *
  * GET /api/v1/charts?jurisdictionId={uuid}&limit=10
  *
- * Returns this calendar month's top-voted songs for the jurisdiction
- * (including child jurisdictions), each with vote count and rank
- * movement versus the previous calendar month, plus the total number
- * of votes cast in the jurisdiction this month.
+ * Returns the most played songs of the last 7 days for the jurisdiction
+ * (including child jurisdictions), each with play count and rank
+ * movement versus the previous 7-day window, plus the total number
+ * of plays in the jurisdiction this week.
  */
 @RestController
 @RequestMapping("/api/v1/charts")
@@ -31,10 +31,10 @@ public class ChartsController {
     }
 
     @GetMapping
-    public ResponseEntity<ChartsDto> getMonthlyChart(
+    public ResponseEntity<ChartsDto> getWeeklyChart(
             @RequestParam UUID jurisdictionId,
             @RequestParam(defaultValue = "10") int limit) {
 
-        return ResponseEntity.ok(chartsService.getMonthlyChart(jurisdictionId, Math.min(limit, 50)));
+        return ResponseEntity.ok(chartsService.getWeeklyChart(jurisdictionId, Math.min(limit, 50)));
     }
 }

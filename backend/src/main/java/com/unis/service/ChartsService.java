@@ -6,8 +6,7 @@ import com.unis.repository.ChartsRepository;
 import com.unis.repository.SongRepository;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDate;
-import java.time.YearMonth;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -17,11 +16,14 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Builds the monthly "top voted" chart for the Feed Charts lens.
+ * Builds the "Most Played This Week" chart for the Feed Charts lens.
  *
- * Current month = 1st of the month through today.
- * Previous month = the full previous calendar month (used only to
- * compute rank movement arrows).
+ * Current window  = the last 7 days (rolling, up to now).
+ * Previous window = the 7 days before that (used only to compute
+ *                   rank movement arrows).
+ *
+ * Play-based rather than vote-based so the chart shows real content
+ * from day one, even with a small user base.
  */
 @Service
 public class ChartsService {
@@ -34,31 +36,27 @@ public class ChartsService {
         this.songRepository = songRepository;
     }
 
-    public ChartsDto getMonthlyChart(UUID jurisdictionId, int limit) {
-        LocalDate today = LocalDate.now();
-        YearMonth thisMonth = YearMonth.from(today);
-        YearMonth lastMonth = thisMonth.minusMonths(1);
+    public ChartsDto getWeeklyChart(UUID jurisdictionId, int limit) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime weekAgo = now.minusDays(7);
+        LocalDateTime twoWeeksAgo = now.minusDays(14);
 
-        LocalDate currentStart = thisMonth.atDay(1);
-        LocalDate prevStart = lastMonth.atDay(1);
-        LocalDate prevEnd = lastMonth.atEndOfMonth();
-
-        // ── Current month ranking ──
+        // ── Current window ranking (last 7 days) ──
         List<Object[]> currentRows =
-                chartsRepository.findSongVoteCountsForRange(jurisdictionId, currentStart, today);
+                chartsRepository.findSongPlayCountsForRange(jurisdictionId, weekAgo, now);
 
-        // ── Previous month ranking (songId -> rank) for movement ──
+        // ── Previous window ranking (songId -> rank) for movement ──
         List<Object[]> prevRows =
-                chartsRepository.findSongVoteCountsForRange(jurisdictionId, prevStart, prevEnd);
+                chartsRepository.findSongPlayCountsForRange(jurisdictionId, twoWeeksAgo, weekAgo);
 
         Map<UUID, Integer> prevRanks = new HashMap<>();
         for (int i = 0; i < prevRows.size(); i++) {
             prevRanks.put(toUuid(prevRows.get(i)[0]), i + 1);
         }
 
-        // ── Total votes this month (all target types) ──
-        Long totalVotes =
-                chartsRepository.countVotesForRange(jurisdictionId, currentStart, today);
+        // ── Total plays this week ──
+        Long totalPlays =
+                chartsRepository.countPlaysForRange(jurisdictionId, weekAgo, now);
 
         // ── Hydrate songs in one query ──
         List<UUID> songIds = currentRows.stream()
@@ -76,7 +74,7 @@ public class ChartsService {
             if (entries.size() >= limit) break;
 
             UUID songId = toUuid(row[0]);
-            long votes = ((Number) row[1]).longValue();
+            long plays = ((Number) row[1]).longValue();
 
             Song song = songsById.get(songId);
             // Skip songs that were deleted or otherwise missing
@@ -90,7 +88,7 @@ public class ChartsService {
             entries.add(ChartsDto.ChartEntry.builder()
                     .rank(rank)
                     .movement(movement)
-                    .votes(votes)
+                    .plays(plays)
                     .songId(songId)
                     .title(song.getTitle())
                     .artworkUrl(song.getArtworkUrl())
@@ -103,8 +101,7 @@ public class ChartsService {
         }
 
         return ChartsDto.builder()
-                .month(thisMonth.toString())
-                .totalVotesThisMonth(totalVotes != null ? totalVotes : 0L)
+                .totalPlaysThisWeek(totalPlays != null ? totalPlays : 0L)
                 .entries(entries)
                 .build();
     }

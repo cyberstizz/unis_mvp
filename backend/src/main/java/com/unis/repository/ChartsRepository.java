@@ -1,30 +1,31 @@
 package com.unis.repository;
 
-import com.unis.entity.Vote;
+import com.unis.entity.SongPlay;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * Dedicated read-model repository for the Feed "Charts" lens.
  *
- * Lives alongside VoteRepository (same Vote entity) so no existing
- * repository files need to change. Uses the same recursive
- * jurisdiction_tree pattern as VoteRepository so that querying an
- * aggregate jurisdiction (e.g. Harlem) includes votes cast in its
- * children (Uptown / Downtown Harlem).
+ * Ranks songs by play count within a time window. Jurisdiction scoping
+ * goes through the song's jurisdiction using the same recursive
+ * jurisdiction_tree pattern as VoteRepository, so querying an aggregate
+ * jurisdiction (e.g. Harlem) includes plays of songs in its children
+ * (Uptown / Downtown Harlem).
  */
 @Repository
-public interface ChartsRepository extends JpaRepository<Vote, UUID> {
+public interface ChartsRepository extends JpaRepository<SongPlay, UUID> {
 
     /**
-     * Vote counts per song for a jurisdiction subtree within a date range,
-     * highest first. Returns rows of [target_id (UUID), voteCount (Long)].
+     * Play counts per song for a jurisdiction subtree within a time range,
+     * highest first. Deleted songs are excluded at the query level.
+     * Returns rows of [song_id (UUID), playCount (Long)].
      */
     @Query(value =
         "WITH RECURSIVE jurisdiction_tree AS ( " +
@@ -33,22 +34,23 @@ public interface ChartsRepository extends JpaRepository<Vote, UUID> {
         "  SELECT j.jurisdiction_id FROM jurisdictions j " +
         "  JOIN jurisdiction_tree jt ON j.parent_jurisdiction_id = jt.jurisdiction_id " +
         ") " +
-        "SELECT v.target_id, COUNT(*) AS vote_count " +
-        "FROM votes v " +
-        "JOIN jurisdiction_tree jt ON v.jurisdiction_id = jt.jurisdiction_id " +
-        "WHERE v.target_type = 'song' " +
-        "AND v.vote_date BETWEEN :startDate AND :endDate " +
-        "GROUP BY v.target_id " +
-        "ORDER BY vote_count DESC, v.target_id",
+        "SELECT sp.song_id, COUNT(*) AS play_count " +
+        "FROM song_plays sp " +
+        "JOIN songs s ON s.song_id = sp.song_id " +
+        "JOIN jurisdiction_tree jt ON s.jurisdiction_id = jt.jurisdiction_id " +
+        "WHERE sp.played_at >= :startTime AND sp.played_at < :endTime " +
+        "AND s.deleted_at IS NULL " +
+        "GROUP BY sp.song_id " +
+        "ORDER BY play_count DESC, sp.song_id",
         nativeQuery = true)
-    List<Object[]> findSongVoteCountsForRange(
+    List<Object[]> findSongPlayCountsForRange(
             @Param("jurisdictionId") UUID jurisdictionId,
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate);
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime);
 
     /**
-     * Total votes (songs + artists) cast in a jurisdiction subtree
-     * within a date range — powers "412 votes cast this month".
+     * Total plays in a jurisdiction subtree within a time range —
+     * powers "1,204 plays this week".
      */
     @Query(value =
         "WITH RECURSIVE jurisdiction_tree AS ( " +
@@ -57,12 +59,14 @@ public interface ChartsRepository extends JpaRepository<Vote, UUID> {
         "  SELECT j.jurisdiction_id FROM jurisdictions j " +
         "  JOIN jurisdiction_tree jt ON j.parent_jurisdiction_id = jt.jurisdiction_id " +
         ") " +
-        "SELECT COUNT(*) FROM votes v " +
-        "JOIN jurisdiction_tree jt ON v.jurisdiction_id = jt.jurisdiction_id " +
-        "WHERE v.vote_date BETWEEN :startDate AND :endDate",
+        "SELECT COUNT(*) FROM song_plays sp " +
+        "JOIN songs s ON s.song_id = sp.song_id " +
+        "JOIN jurisdiction_tree jt ON s.jurisdiction_id = jt.jurisdiction_id " +
+        "WHERE sp.played_at >= :startTime AND sp.played_at < :endTime " +
+        "AND s.deleted_at IS NULL",
         nativeQuery = true)
-    Long countVotesForRange(
+    Long countPlaysForRange(
             @Param("jurisdictionId") UUID jurisdictionId,
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate);
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime);
 }

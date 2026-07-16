@@ -11,8 +11,9 @@ import java.util.UUID;
 /**
  * Response shape for GET /api/v1/charts
  *
- * Monthly "top voted" chart for a jurisdiction, with rank movement
- * relative to the previous calendar month.
+ * "Most played this week" chart for a jurisdiction, with rank movement
+ * relative to the previous 7-day window. Play-based rather than
+ * vote-based so the chart has real data even with a small user base.
  */
 @Data
 @NoArgsConstructor
@@ -20,11 +21,8 @@ import java.util.UUID;
 @Builder
 public class ChartsDto {
 
-    /** e.g. "2026-07" */
-    private String month;
-
-    /** Total votes cast in this jurisdiction (including child jurisdictions) this month */
-    private long totalVotesThisMonth;
+    /** Total plays in this jurisdiction (including child jurisdictions) over the last 7 days */
+    private long totalPlaysThisWeek;
 
     private List<ChartEntry> entries;
 
@@ -37,13 +35,13 @@ public class ChartsDto {
         private int rank;
 
         /**
-         * Positions moved since last month.
+         * Positions moved since the previous 7-day window.
          * Positive = moved up, negative = moved down, 0 = held.
-         * null = wasn't on last month's chart (render as NEW).
+         * null = wasn't on last week's chart (render as NEW).
          */
         private Integer movement;
 
-        private long votes;
+        private long plays;
 
         private UUID songId;
         private String title;
