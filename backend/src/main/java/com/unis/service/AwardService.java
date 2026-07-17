@@ -5,9 +5,9 @@ import com.unis.entity.Song;
 import com.unis.entity.User;
 import com.unis.entity.Genre;
 import com.unis.entity.CronExecution;
-import com.unis.service.CronMonitorService;
 import com.unis.entity.Jurisdiction;
 import com.unis.entity.VotingInterval;
+import com.unis.service.CronMonitorService;
 import com.unis.repository.AwardRepository;
 import com.unis.repository.VoteRepository;
 import com.unis.repository.VotingIntervalRepository;
@@ -17,6 +17,10 @@ import com.unis.repository.SongRepository;
 import com.unis.repository.UserRepository;
 import com.unis.dto.LeaderboardEntryDto;
 import com.unis.dto.PeriodLeaderboardDto;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
@@ -89,6 +93,9 @@ public class AwardService {
     public AwardService(CronMonitorService cronMonitorService) {
         this.cronMonitorService = cronMonitorService;
     }
+
+
+    private static final Logger log = LoggerFactory.getLogger(AwardService.class);
 
     // =========================================================================
     // AWARD POINT VALUES - Points added to winner's score
