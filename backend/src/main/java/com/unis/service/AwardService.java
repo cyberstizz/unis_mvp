@@ -147,50 +147,36 @@ public class AwardService {
     }
 
     @Transactional(readOnly = true)
-    public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, 
-                                      UUID jurisdictionId, UUID genreId, UUID intervalId) {
-        System.out.println("=== getPastAwards CALLED ===");
-        System.out.println("Type: " + type + ", Start: " + startDate + ", End: " + endDate);
-        System.out.println("Jurisdiction: " + jurisdictionId + ", Genre: " + genreId + ", Interval: " + intervalId);
-        
-        if (intervalId == null) {
-            Optional<VotingInterval> intervalOpt = determineIntervalFromDateRange(startDate, endDate);
-            intervalId = intervalOpt.map(VotingInterval::getIntervalId).orElse(null);
-        }
-        
-        if (intervalId == null) {
-            System.out.println("Could not determine interval for date range");
-            return new ArrayList<>();
-        }
+    public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate,
+                                    UUID jurisdictionId, UUID genreId, UUID intervalId) {
+        log.info("getPastAwards: type={}, range={}..{}, jurisdiction={}, genre={}, interval={}",
+                type, startDate, endDate, jurisdictionId, genreId, intervalId);
 
-        List<Award> awards = awardRepository.findByFilters(type, jurisdictionId, genreId, intervalId, startDate, endDate);
-        
-        System.out.println("Initial query found " + awards.size() + " awards");
-        
-        if (awards.isEmpty() && autoPopulateAwards) {
-            System.out.println("=== NO AWARDS FOUND - TRIGGERING COMPUTATION ===");
-            
-            UUID finalIntervalId = intervalId;
-            self.computeAndSaveAwardsInNewTransaction(endDate, finalIntervalId, jurisdictionId, genreId);
-            
-            awards = awardRepository.findByFilters(type, jurisdictionId, genreId, finalIntervalId, startDate, endDate);
-            
-            System.out.println("=== AFTER COMPUTATION: Found " + awards.size() + " awards ===");
-        }
-        
-        if (awards.isEmpty()) {
-            System.out.println("Still no awards after computation - creating fallback display (NOT saved)");
-            awards = createFallbackAwards(type, jurisdictionId, intervalId, endDate);
-            if (genreId != null) {
-                UUID finalGenreId = genreId;
-                awards = awards.stream()
-                    .filter(a -> a.getGenre() != null && a.getGenre().getGenreId().equals(finalGenreId))
-                    .collect(Collectors.toList());
-            }
-        }
-        
-        return populateAwardEntities(awards);
+    if (intervalId == null) {
+        intervalId = determineIntervalFromDateRange(startDate, endDate)
+                .map(VotingInterval::getIntervalId).orElse(null);
     }
+    if (intervalId == null) {
+        log.warn("getPastAwards: could not resolve interval for range {}..{}", startDate, endDate);
+        return new ArrayList<>();
+    }
+
+    // PURE READ. Award rows are produced exclusively by the scheduled crons.
+    // Computing/fabricating on read stamped award_date by page-view time and
+    // scattered off-cadence rows across jurisdictions (the uptown 07-16 anomaly).
+    // If the slot is empty, it's empty — the client renders an honest empty state.
+    List<Award> awards = awardRepository.findByFilters(
+            type, jurisdictionId, genreId, intervalId, startDate, endDate);
+
+    if (awards.isEmpty()) {
+        log.info("getPastAwards: no {} award for jurisdiction={} genre={} interval={} in {}..{} "
+               + "(no eligible candidate for this category, or cron has not run this slot)",
+                 type, jurisdictionId, genreId, intervalId, startDate, endDate);
+        return new ArrayList<>();
+    }
+    return populateAwardEntities(awards);
+}
+
 
     public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate, 
                                       UUID jurisdictionId, UUID genreId) {
