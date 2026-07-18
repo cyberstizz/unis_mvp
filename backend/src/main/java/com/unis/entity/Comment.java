@@ -27,10 +27,16 @@ public class Comment {
     @Column(name = "comment_id")
     private UUID commentId;
 
+    // Exactly one of song / video is set (enforced by DB CHECK constraint).
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "song_id", nullable = false)
+    @JoinColumn(name = "song_id")
     @JsonBackReference("song-comments")
     private Song song;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "video_id")
+    @JsonBackReference("video-comments")
+    private Video video;
 
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "user_id", nullable = false)
@@ -74,6 +80,12 @@ public class Comment {
     @JsonProperty("songId")
     public UUID getSongId() {
         return song != null ? song.getSongId() : null;
+    }
+
+    // Helper method to get video ID without loading the full video
+    @JsonProperty("videoId")
+    public UUID getVideoId() {
+        return video != null ? video.getVideoId() : null;
     }
 
     // Helper method to get parent comment ID

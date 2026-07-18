@@ -18,7 +18,8 @@ public class CommentDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class CreateRequest {
-        private UUID songId;
+        private UUID songId;   // set for song comments
+        private UUID videoId;  // set for video comments (exactly one of songId/videoId)
         private UUID userId;
         private UUID parentCommentId; // null for top-level comments
         private String content;
@@ -40,6 +41,7 @@ public class CommentDTO {
     public static class Response {
         private UUID commentId;
         private UUID songId;
+        private UUID videoId;
         private UUID parentCommentId;
         private String content;
         private LocalDateTime createdAt;
@@ -61,6 +63,7 @@ public class CommentDTO {
             ResponseBuilder builder = Response.builder()
                     .commentId(comment.getCommentId())
                     .songId(comment.getSongId())
+                    .videoId(comment.getVideoId())
                     .parentCommentId(comment.getParentCommentId())
                     .content(comment.getContent())
                     .createdAt(comment.getCreatedAt())

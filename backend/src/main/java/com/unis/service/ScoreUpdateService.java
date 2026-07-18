@@ -41,6 +41,9 @@ public class ScoreUpdateService {
     @Autowired
     private ReferralRepository referralRepository;
 
+    @Autowired
+    private com.unis.repository.VideoRepository videoRepository;
+
     // ============================================================================
     // EVENT-DRIVEN SCORING (Real-Time Updates)
     // ============================================================================
@@ -55,6 +58,14 @@ public class ScoreUpdateService {
             if (song != null && song.getArtist() != null) {
                 updateUserScoreIncrement(song.getArtist().getUserId(), 1);
             }
+        } else if ("video".equals(type)) {
+            // Parity with computeVideoScores(): video plays are weighted x1
+            videoRepository.incrementScore(mediaId, 1);
+            videoRepository.findById(mediaId).ifPresent(video -> {
+                if (video.getArtist() != null) {
+                    updateUserScoreIncrement(video.getArtist().getUserId(), 1);
+                }
+            });
         }
     }
 
@@ -81,6 +92,21 @@ public class ScoreUpdateService {
         if (song != null && song.getArtist() != null) {
             updateUserScoreIncrement(song.getArtist().getUserId(), 1);
         }
+    }
+
+    /**
+     * Video like scoring — same weights as songs (User +1, Video +2, Artist +1).
+     * Matches computeVideoScores(), which weights video likes x2.
+     */
+    @Transactional
+    public void onLikeVideo(UUID userId, UUID videoId) {
+        updateUserScoreIncrement(userId, 1);
+        videoRepository.incrementScore(videoId, 2);
+        videoRepository.findById(videoId).ifPresent(video -> {
+            if (video.getArtist() != null) {
+                updateUserScoreIncrement(video.getArtist().getUserId(), 1);
+            }
+        });
     }
 
     @Transactional

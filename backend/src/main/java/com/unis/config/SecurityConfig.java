@@ -123,6 +123,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PATCH, "/api/v1/media/song/**").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song/*/like").authenticated()
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/media/song/*/like").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/media/video/*/like").authenticated()
+                .requestMatchers(HttpMethod.DELETE, "/api/v1/media/video/*/like").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/v1/vote/submit").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/v1/comments").authenticated()
                 .requestMatchers(HttpMethod.PATCH, "/api/v1/comments/**").authenticated()

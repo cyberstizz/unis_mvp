@@ -4,9 +4,11 @@ import com.unis.dto.CommentDTO;
 import com.unis.entity.Comment;
 import com.unis.entity.Song;
 import com.unis.entity.User;
+import com.unis.entity.Video;
 import com.unis.repository.CommentRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.UserRepository;
+import com.unis.repository.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -28,6 +30,7 @@ public class CommentService {
     private final CommentRepository commentRepository;
     private final SongRepository songRepository;
     private final UserRepository userRepository;
+    private final VideoRepository videoRepository;
 
     // Maximum comment length
     private static final int MAX_COMMENT_LENGTH = 2000;
@@ -51,9 +54,25 @@ public class CommentService {
             throw new IllegalArgumentException("Comment exceeds maximum length of " + MAX_COMMENT_LENGTH + " characters");
         }
  
-        // Get song
-        Song song = songRepository.findById(request.getSongId())
-                .orElseThrow(() -> new IllegalArgumentException("Song not found"));
+        // Exactly one of songId / videoId must be provided
+        boolean isVideoComment = request.getVideoId() != null;
+        if (isVideoComment && request.getSongId() != null) {
+            throw new IllegalArgumentException("Provide either songId or videoId, not both");
+        }
+        if (!isVideoComment && request.getSongId() == null) {
+            throw new IllegalArgumentException("Either songId or videoId is required");
+        }
+
+        // Get target media
+        Song song = null;
+        Video video = null;
+        if (isVideoComment) {
+            video = videoRepository.findById(request.getVideoId())
+                    .orElseThrow(() -> new IllegalArgumentException("Video not found"));
+        } else {
+            song = songRepository.findById(request.getSongId())
+                    .orElseThrow(() -> new IllegalArgumentException("Song not found"));
+        }
  
         // Get user
         User user = userRepository.findById(request.getUserId())
@@ -70,14 +89,22 @@ public class CommentService {
                 throw new IllegalArgumentException("Cannot reply to a reply. Please reply to the original comment.");
             }
  
-            // Verify parent is on the same song
-            if (!parentComment.getSong().getSongId().equals(song.getSongId())) {
-                throw new IllegalArgumentException("Parent comment belongs to a different song");
+            // Verify parent is on the same media
+            if (isVideoComment) {
+                if (parentComment.getVideoId() == null || !parentComment.getVideoId().equals(video.getVideoId())) {
+                    throw new IllegalArgumentException("Parent comment belongs to a different video");
+                }
+            } else {
+                if (parentComment.getSongId() == null || !parentComment.getSongId().equals(song.getSongId())) {
+                    throw new IllegalArgumentException("Parent comment belongs to a different song");
+                }
             }
         }
  
-        // === RATE LIMIT: 3 comments per user per song ===
-        long userCommentCount = commentRepository.countByUserIdAndSongId(user.getUserId(), song.getSongId());
+        // === RATE LIMIT: 3 comments per user per song/video ===
+        long userCommentCount = isVideoComment
+                ? commentRepository.countByUserIdAndVideoId(user.getUserId(), video.getVideoId())
+                : commentRepository.countByUserIdAndSongId(user.getUserId(), song.getSongId());
  
         if (userCommentCount >= MAX_COMMENTS_PER_USER_PER_SONG) {
             // Over limit — only allowed action is replying under your OWN top-level comment.
@@ -92,7 +119,8 @@ public class CommentService {
  
             if (!isReplyingToOwnComment) {
                 throw new IllegalArgumentException(
-                    "You've reached the comment limit for this song. You can still reply when someone responds to your comments."
+                    "You've reached the comment limit for this " + (isVideoComment ? "video" : "song")
+                        + ". You can still reply when someone responds to your comments."
                 );
             }
         }
@@ -100,7 +128,11 @@ public class CommentService {
  
         // Create comment
         Comment comment = new Comment();
-        comment.setSong(song);
+        if (isVideoComment) {
+            comment.setVideo(video);
+        } else {
+            comment.setSong(song);
+        }
         comment.setUser(user);
         comment.setContent(request.getContent().trim());
  
@@ -109,7 +141,10 @@ public class CommentService {
         }
  
         Comment saved = commentRepository.save(comment);
-        log.info("Created comment {} on song {} by user {}", saved.getCommentId(), song.getSongId(), user.getUserId());
+        log.info("Created comment {} on {} {} by user {}", saved.getCommentId(),
+                isVideoComment ? "video" : "song",
+                isVideoComment ? video.getVideoId() : song.getSongId(),
+                user.getUserId());
         
         return CommentDTO.Response.fromEntity(saved, false);
     }
@@ -196,12 +231,18 @@ public class CommentService {
         Comment comment = commentRepository.findActiveById(commentId)
                 .orElseThrow(() -> new IllegalArgumentException("Comment not found"));
 
-        // Allow deletion by comment owner OR song artist
+        // Allow deletion by comment owner OR the artist who owns the media.
+        // Null-safe: song comments have a null video and vice versa.
         boolean isOwner = comment.getUser().getUserId().equals(userId);
-        boolean isSongArtist = comment.getSong().getArtist().getUserId().equals(userId);
-        
-        if (!isOwner && !isSongArtist) {
-            throw new SecurityException("You can only delete your own comments or comments on your songs");
+        boolean isMediaArtist = false;
+        if (comment.getSong() != null && comment.getSong().getArtist() != null) {
+            isMediaArtist = comment.getSong().getArtist().getUserId().equals(userId);
+        } else if (comment.getVideo() != null && comment.getVideo().getArtist() != null) {
+            isMediaArtist = comment.getVideo().getArtist().getUserId().equals(userId);
+        }
+
+        if (!isOwner && !isMediaArtist) {
+            throw new SecurityException("You can only delete your own comments or comments on your media");
         }
 
         commentRepository.softDelete(commentId, LocalDateTime.now());
@@ -238,5 +279,67 @@ public class CommentService {
             count >= MAX_COMMENTS_PER_USER_PER_SONG
         );
     }
-    
+
+    // ========================================================================
+    // VIDEO COMMENT METHODS — mirror the song methods above
+    // ========================================================================
+
+    /**
+     * Get all comments for a video with their replies
+     */
+    @Transactional(readOnly = true)
+    public List<CommentDTO.Response> getCommentsByVideoId(UUID videoId) {
+        List<Comment> comments = commentRepository.findTopLevelCommentsByVideoId(videoId);
+        return comments.stream()
+                .map(c -> CommentDTO.Response.fromEntity(c, true))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Get paginated comments for a video
+     */
+    @Transactional(readOnly = true)
+    public CommentDTO.PagedResponse getCommentsByVideoIdPaginated(UUID videoId, int page, int size) {
+        PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<Comment> commentPage = commentRepository.findTopLevelCommentsByVideoIdPaginated(videoId, pageRequest);
+
+        List<CommentDTO.Response> comments = commentPage.getContent().stream()
+                .map(c -> CommentDTO.Response.fromEntity(c, true))
+                .collect(Collectors.toList());
+
+        return CommentDTO.PagedResponse.builder()
+                .comments(comments)
+                .page(page)
+                .size(size)
+                .totalElements(commentPage.getTotalElements())
+                .totalPages(commentPage.getTotalPages())
+                .hasNext(commentPage.hasNext())
+                .hasPrevious(commentPage.hasPrevious())
+                .build();
+    }
+
+    /**
+     * Get comment count for a video
+     */
+    @Transactional(readOnly = true)
+    public CommentDTO.CountResponse getVideoCommentCount(UUID videoId) {
+        long total = commentRepository.countByVideoId(videoId);
+        long topLevel = commentRepository.countTopLevelByVideoId(videoId);
+        return new CommentDTO.CountResponse(total, topLevel);
+    }
+
+    /**
+     * Per-user comment count for a video (same 3-comment limit as songs)
+     */
+    @Transactional(readOnly = true)
+    public CommentDTO.UserCommentCountResponse getUserCommentCountForVideo(UUID userId, UUID videoId) {
+        long count = commentRepository.countByUserIdAndVideoId(userId, videoId);
+        return new CommentDTO.UserCommentCountResponse(
+            count,
+            MAX_COMMENTS_PER_USER_PER_SONG,
+            Math.max(0, MAX_COMMENTS_PER_USER_PER_SONG - count),
+            count >= MAX_COMMENTS_PER_USER_PER_SONG
+        );
+    }
+
 }

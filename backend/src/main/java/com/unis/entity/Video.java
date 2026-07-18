@@ -58,4 +58,14 @@ public class Video {
     @Column
     private Integer duration;
 
+    // ── Transient stats (decorated by MediaService, mirrors Song) ──
+    @Transient
+    private Long playCount;
+
+    @Transient
+    private Long playsToday;
+
+    @Transient
+    private Integer likes;
+
 }

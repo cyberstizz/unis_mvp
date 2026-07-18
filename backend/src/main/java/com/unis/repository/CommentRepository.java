@@ -53,8 +53,10 @@ public interface CommentRepository extends JpaRepository<Comment, UUID> {
     @Query("SELECT CASE WHEN COUNT(c) > 0 THEN true ELSE false END FROM Comment c WHERE c.commentId = :commentId AND c.user.userId = :userId AND c.deletedAt IS NULL")
     boolean isCommentOwner(@Param("commentId") UUID commentId, @Param("userId") UUID userId);
 
-    // Get recent comments across all songs (for admin moderation)
-    @Query(value = "SELECT c FROM Comment c JOIN FETCH c.user JOIN FETCH c.song WHERE c.deletedAt IS NULL ORDER BY c.createdAt DESC",
+    // Get recent comments across all media (for admin moderation).
+    // LEFT JOIN FETCH: video comments have a null song (and vice versa), so an
+    // inner JOIN FETCH would silently drop them from the moderation queue.
+    @Query(value = "SELECT c FROM Comment c JOIN FETCH c.user LEFT JOIN FETCH c.song LEFT JOIN FETCH c.video WHERE c.deletedAt IS NULL ORDER BY c.createdAt DESC",
            countQuery = "SELECT COUNT(c) FROM Comment c WHERE c.deletedAt IS NULL")
     Page<Comment> findRecentComments(Pageable pageable);
 
@@ -64,5 +66,29 @@ public interface CommentRepository extends JpaRepository<Comment, UUID> {
     // Count all comments (top-level + replies) by a user on a specific song
     @Query("SELECT COUNT(c) FROM Comment c WHERE c.user.userId = :userId AND c.song.songId = :songId AND c.deletedAt IS NULL")
     long countByUserIdAndSongId(@Param("userId") UUID userId, @Param("songId") UUID songId);
-    
+
+    // ========================================================================
+    // VIDEO COMMENT QUERIES — mirror the song queries above
+    // ========================================================================
+
+    // Get all top-level comments for a video (not replies), ordered by newest first
+    @Query("SELECT c FROM Comment c JOIN FETCH c.user u LEFT JOIN FETCH u.jurisdiction WHERE c.video.videoId = :videoId AND c.parentComment IS NULL AND c.deletedAt IS NULL ORDER BY c.createdAt DESC")
+    List<Comment> findTopLevelCommentsByVideoId(@Param("videoId") UUID videoId);
+
+    // Get paginated top-level comments for a video
+    @Query("SELECT c FROM Comment c JOIN FETCH c.user u LEFT JOIN FETCH u.jurisdiction WHERE c.video.videoId = :videoId AND c.parentComment IS NULL AND c.deletedAt IS NULL")
+    Page<Comment> findTopLevelCommentsByVideoIdPaginated(@Param("videoId") UUID videoId, Pageable pageable);
+
+    // Get comment count for a video (including replies)
+    @Query("SELECT COUNT(c) FROM Comment c WHERE c.video.videoId = :videoId AND c.deletedAt IS NULL")
+    long countByVideoId(@Param("videoId") UUID videoId);
+
+    // Get top-level comment count for a video
+    @Query("SELECT COUNT(c) FROM Comment c WHERE c.video.videoId = :videoId AND c.parentComment IS NULL AND c.deletedAt IS NULL")
+    long countTopLevelByVideoId(@Param("videoId") UUID videoId);
+
+    // Count all comments (top-level + replies) by a user on a specific video
+    @Query("SELECT COUNT(c) FROM Comment c WHERE c.user.userId = :userId AND c.video.videoId = :videoId AND c.deletedAt IS NULL")
+    long countByUserIdAndVideoId(@Param("userId") UUID userId, @Param("videoId") UUID videoId);
+
 }

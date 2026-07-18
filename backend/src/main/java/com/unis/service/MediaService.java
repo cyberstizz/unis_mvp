@@ -629,9 +629,39 @@ public class MediaService {
     }
 
     // NOT CACHED - video method
+    // Decorated with stats + eager artist init, mirroring getSongById.
     public Video getVideoById(UUID videoId) {
-        return videoRepository.findById(videoId)
+        Video video = videoRepository.findById(videoId)
             .orElseThrow(() -> new RuntimeException("Video not found: " + videoId));
+
+        try {
+            // Lifetime plays
+            Long playCount = videoPlayRepository.countTotalPlaysByVideoId(videoId);
+            video.setPlayCount(playCount != null ? playCount : 0L);
+
+            // Plays today (query already existed on VideoRepository)
+            Long playsToday = videoRepository.countPlaysToday(videoId);
+            video.setPlaysToday(playsToday != null ? playsToday : 0L);
+
+            // Likes count
+            video.setLikes(getVideoLikeCount(videoId));
+
+            // Ensure Artist is initialized to prevent LazyInitializationException
+            if (video.getArtist() != null) {
+                video.getArtist().getUsername(); // Trigger load
+            }
+            if (video.getJurisdiction() != null) {
+                video.getJurisdiction().getName(); // Trigger load
+            }
+            if (video.getGenre() != null) {
+                video.getGenre().getName(); // Trigger load
+            }
+        } catch (Exception e) {
+            System.err.println("Error decorating video with stats: " + e.getMessage());
+            // We still return the video even if stats fail, so the page doesn't go blank
+        }
+
+        return video;
     }
 
     // CACHED: New releases (5 min TTL)
@@ -746,6 +776,56 @@ public class MediaService {
         return count != null ? count : 0;
     }
     
+    // ---------- VIDEO LIKES (media_type = 'video') ----------
+    // The likes table is already polymorphic (media_type/media_id) and
+    // computeVideoScores() already weights video likes x2 — these methods
+    // simply expose the missing API surface for videos.
+
+    @Transactional
+    @CacheEvict(value = {"videos", "artists"}, allEntries = true)
+    public boolean likeVideo(UUID videoId, UUID userId) {
+        String checkSql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'video'";
+        Integer count = jdbcTemplate.queryForObject(checkSql, Integer.class, userId, videoId);
+
+        if (count != null && count > 0) {
+            return false; // Already liked
+        }
+
+        String insertSql = "INSERT INTO likes (like_id, user_id, media_id, media_type, created_at) VALUES (?, ?, ?, 'video', NOW())";
+        jdbcTemplate.update(insertSql, UUID.randomUUID(), userId, videoId);
+
+        // Award points: Video +2, Artist +1, User +1 (same weights as songs)
+        scoreUpdateService.onLikeVideo(userId, videoId);
+
+        System.out.println("✓ Like created: User " + userId + " liked Video " + videoId + " (points awarded)");
+        return true;
+    }
+
+    @Transactional
+    @CacheEvict(value = {"videos", "artists"}, allEntries = true)
+    public boolean unlikeVideo(UUID videoId, UUID userId) {
+        String deleteSql = "DELETE FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'video'";
+        int rowsAffected = jdbcTemplate.update(deleteSql, userId, videoId);
+
+        // Points are retained on unlike, same policy as songs
+        if (rowsAffected > 0) {
+            System.out.println("✓ Like removed: User " + userId + " unliked Video " + videoId + " (points retained)");
+        }
+        return rowsAffected > 0;
+    }
+
+    public boolean isVideoLiked(UUID videoId, UUID userId) {
+        String sql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'video'";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class, userId, videoId);
+        return count != null && count > 0;
+    }
+
+    public int getVideoLikeCount(UUID videoId) {
+        String sql = "SELECT COUNT(*) FROM likes WHERE media_id = ? AND media_type = 'video'";
+        Integer count = jdbcTemplate.queryForObject(sql, Integer.class, videoId);
+        return count != null ? count : 0;
+    }
+
     // ========== END LIKES SERVICE METHODS ==========
 
     // ========== ROW MAPPER FOR SONGS WITH STATS (NEW) ==========
