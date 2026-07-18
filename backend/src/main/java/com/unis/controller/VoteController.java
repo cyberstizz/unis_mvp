@@ -60,6 +60,15 @@ public class VoteController {
     private SongRepository songRepository;
 
     // POST /api/v1/vote/submit
+    // ★ ironclad: every failure path returns structured JSON {code, message}
+    //   with the correct status — the frontend surfaces `message` verbatim, so
+    //   a vote can never fail without a clear explanation.
+    private static final java.time.ZoneId UNIS_ZONE = java.time.ZoneId.of("America/New_York");
+
+    private ResponseEntity<Map<String, Object>> voteError(HttpStatus status, String code, String message) {
+        return ResponseEntity.status(status).body(Map.of("code", code, "message", message));
+    }
+
     @PostMapping("/submit")
     public ResponseEntity<?> submitVote(@RequestBody VoteRequest req) {
         try {
@@ -67,47 +76,68 @@ public class VoteController {
             UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
 
             // Fetch full User object from authenticated userId (not req.getUserId())
-            User user = userRepository.findById(authenticatedUserId)
-                .orElseThrow(() -> new RuntimeException("User not found: " + authenticatedUserId));
-
-            // first through an error if their phone number is not verified
-            boolean phoneVerified = userRepository.findById(authenticatedUserId)
-                     .map(u -> Boolean.TRUE.equals(u.getPhoneVerified()))
-                     .orElse(false);
-            if (!phoneVerified) {
-                return ResponseEntity.status(403).body(Map.of(
-                 "code", "PHONE_UNVERIFIED", "message", "Verify your phone number to vote."));
-}
-            // Fetch Genre, Jurisdiction, Interval (required for voting)
-            if (req.getGenreId() == null) {
-                return ResponseEntity.badRequest().body("Genre is required for voting");
+            User user = userRepository.findById(authenticatedUserId).orElse(null);
+            if (user == null) { // ★ ironclad: 401-adjacent state, not a 500
+                return voteError(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND",
+                    "We could not identify your account. Please log out and back in.");
             }
-            Genre genre = genreRepository.findById(req.getGenreId())
-                .orElseThrow(() -> new RuntimeException("Genre not found: " + req.getGenreId()));
+
+            if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
+                return voteError(HttpStatus.FORBIDDEN, "PHONE_UNVERIFIED",
+                    "Verify your phone number to vote.");
+            }
+
+            // ★ ironclad: missing/unknown IDs are 400s with named messages —
+            //   previously unknown UUIDs threw RuntimeException → 500 → the
+            //   frontend showed "Connection Failed" with no explanation.
+            if (req.getGenreId() == null) {
+                return voteError(HttpStatus.BAD_REQUEST, "GENRE_MISSING",
+                    "This vote is missing its genre. Please close the wizard and try again.");
+            }
+            Genre genre = genreRepository.findById(req.getGenreId()).orElse(null);
+            if (genre == null) {
+                return voteError(HttpStatus.BAD_REQUEST, "GENRE_NOT_FOUND",
+                    "That genre no longer exists on Unis. Please refresh and try again.");
+            }
 
             if (req.getJurisdictionId() == null) {
-                return ResponseEntity.badRequest().body("Jurisdiction is required for voting");
+                return voteError(HttpStatus.BAD_REQUEST, "JURISDICTION_MISSING",
+                    "This vote is missing its jurisdiction. Please close the wizard and try again.");
             }
-            Jurisdiction jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId())
-                .orElseThrow(() -> new RuntimeException("Jurisdiction not found: " + req.getJurisdictionId()));
+            Jurisdiction jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId()).orElse(null);
+            if (jurisdiction == null) {
+                return voteError(HttpStatus.BAD_REQUEST, "JURISDICTION_NOT_FOUND",
+                    "That jurisdiction no longer exists on Unis. Please refresh and try again.");
+            }
 
             if (req.getIntervalId() == null) {
-                return ResponseEntity.badRequest().body("Interval is required for voting");
+                return voteError(HttpStatus.BAD_REQUEST, "INTERVAL_MISSING",
+                    "This vote is missing its interval. Please close the wizard and try again.");
             }
-            VotingInterval interval = votingIntervalRepository.findById(req.getIntervalId())
-                .orElseThrow(() -> new RuntimeException("Interval not found: " + req.getIntervalId()));
+            VotingInterval interval = votingIntervalRepository.findById(req.getIntervalId()).orElse(null);
+            if (interval == null) {
+                return voteError(HttpStatus.BAD_REQUEST, "INTERVAL_NOT_FOUND",
+                    "That voting interval no longer exists on Unis. Please refresh and try again.");
+            }
 
             if (jurisdiction.getVotingEnabled() == null || !jurisdiction.getVotingEnabled()) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("Voting is not enabled for this jurisdiction: " + jurisdiction.getName());
+                return voteError(HttpStatus.FORBIDDEN, "VOTING_DISABLED",
+                    "Voting is not enabled in " + jurisdiction.getName() + " yet.");
             }
 
             // C6 FIX: Use authenticatedUserId instead of req.getUserId() for eligibility check
             if (!voteService.canUserVoteInJurisdiction(authenticatedUserId, req.getJurisdictionId())) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("You are not eligible to vote in " + jurisdiction.getName() + 
-                          ". You can only vote in your home jurisdiction and its parent jurisdictions.");
+                return voteError(HttpStatus.FORBIDDEN, "NOT_ELIGIBLE",
+                    "You are not eligible to vote in " + jurisdiction.getName()
+                        + ". You can only vote in your home jurisdiction and its parent jurisdictions.");
             }
+
+            // ★ ironclad: the SERVER stamps the vote date in the platform
+            //   timezone. The client previously sent a UTC-derived date, which
+            //   rolled to "tomorrow" after ~8pm New York time — causing phantom
+            //   duplicate rejections — and let a malicious client fabricate any
+            //   date to bypass the one-vote-per-day rule entirely.
+            java.time.LocalDate voteDate = java.time.LocalDate.now(UNIS_ZONE);
 
             // Build Vote entity
             Vote vote = Vote.builder()
@@ -117,7 +147,7 @@ public class VoteController {
                 .genre(genre)
                 .jurisdiction(jurisdiction)
                 .interval(interval)
-                .voteDate(req.getVoteDate())
+                .voteDate(voteDate)
                 .build();
 
             Vote saved = voteService.submitVote(vote);
@@ -125,20 +155,28 @@ public class VoteController {
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Vote cast successfully");
             response.put("voteId", saved.getVoteId());
-            
+
             return ResponseEntity.ok(response);
 
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            // Service-level validation (missing fields, eligibility re-check)
+            if (e.getMessage() != null && e.getMessage().contains("not eligible")) { // ★ ironclad
+                return voteError(HttpStatus.FORBIDDEN, "NOT_ELIGIBLE", e.getMessage());
+            }
+            return voteError(HttpStatus.BAD_REQUEST, "VOTE_INVALID", e.getMessage());
         } catch (RuntimeException e) {
             if (e.getMessage() != null && e.getMessage().contains("already cast")) {
-                return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
+                return voteError(HttpStatus.CONFLICT, "ALREADY_VOTED", e.getMessage());
             }
             if (e.getMessage() != null && e.getMessage().contains("not eligible")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
+                return voteError(HttpStatus.FORBIDDEN, "NOT_ELIGIBLE", e.getMessage());
             }
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body("Failed to submit vote: " + e.getMessage());
+            // ★ ironclad: log the full stack server-side; give the user a real
+            //   sentence instead of a bare 500.
+            org.slf4j.LoggerFactory.getLogger(VoteController.class)
+                .error("Vote submission failed unexpectedly for request {}", req, e);
+            return voteError(HttpStatus.INTERNAL_SERVER_ERROR, "VOTE_FAILED",
+                "Something went wrong saving your vote — it was NOT counted. Please try again in a moment.");
         }
     }
 
