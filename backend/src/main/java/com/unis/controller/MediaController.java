@@ -214,6 +214,78 @@ public class MediaController {
         }
     }
 
+    // ---------- VIDEO LIKES — same shapes as the song endpoints ----------
+
+    // POST /api/v1/media/video/{videoId}/like — userId from JWT
+    @PostMapping("/video/{videoId}/like")
+    public ResponseEntity<Map<String, Object>> likeVideo(
+            @PathVariable UUID videoId,
+            @RequestParam(required = false) UUID userId) {
+        try {
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+            boolean liked = mediaService.likeVideo(videoId, authenticatedUserId);
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", liked);
+            response.put("message", liked ? "Video liked" : "Already liked");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Failed to like video {}: {}", videoId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("success", false, "message", "Failed to like video"));
+        }
+    }
+
+    // DELETE /api/v1/media/video/{videoId}/like — userId from JWT
+    @DeleteMapping("/video/{videoId}/like")
+    public ResponseEntity<Map<String, Object>> unlikeVideo(
+            @PathVariable UUID videoId,
+            @RequestParam(required = false) UUID userId) {
+        try {
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+            boolean unliked = mediaService.unlikeVideo(videoId, authenticatedUserId);
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", unliked);
+            response.put("message", unliked ? "Video unliked" : "Like not found");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Failed to unlike video {}: {}", videoId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("success", false, "message", "Failed to unlike video"));
+        }
+    }
+
+    // GET /api/v1/media/video/{videoId}/is-liked — userId from JWT, guest-safe
+    @GetMapping("/video/{videoId}/is-liked")
+    public ResponseEntity<Map<String, Boolean>> isVideoLiked(
+            @PathVariable UUID videoId,
+            @RequestParam(required = false) UUID userId) {
+        try {
+            UUID resolvedUserId;
+            try {
+                resolvedUserId = SecurityUtils.getAuthenticatedUserId();
+            } catch (Exception e) {
+                resolvedUserId = userId;
+            }
+            boolean liked = mediaService.isVideoLiked(videoId, resolvedUserId);
+            return ResponseEntity.ok(Map.of("isLiked", liked));
+        } catch (Exception e) {
+            log.error("Failed to check video like status {}: {}", videoId, e.getMessage());
+            return ResponseEntity.ok(Map.of("isLiked", false));
+        }
+    }
+
+    // GET /api/v1/media/video/{videoId}/likes/count
+    @GetMapping("/video/{videoId}/likes/count")
+    public ResponseEntity<Map<String, Integer>> getVideoLikeCount(@PathVariable UUID videoId) {
+        try {
+            int count = mediaService.getVideoLikeCount(videoId);
+            return ResponseEntity.ok(Map.of("count", count));
+        } catch (Exception e) {
+            log.error("Failed to get video like count {}: {}", videoId, e.getMessage());
+            return ResponseEntity.ok(Map.of("count", 0));
+        }
+    }
+
     // ========== END LIKES ENDPOINTS ==========
 
     @GetMapping("/songs/jurisdiction/{jurisdictionId}")
@@ -242,6 +314,13 @@ public class MediaController {
     public ResponseEntity<List<Video>> getVideosByArtist(@PathVariable UUID artistId) {
         List<Video> videos = mediaService.getVideosByArtist(artistId);
         return ResponseEntity.ok(videos);
+    }
+
+    // GET /api/v1/media/video/{id} — single video with decorated stats
+    @GetMapping("/video/{videoId}")
+    public ResponseEntity<Video> getVideo(@PathVariable UUID videoId) {
+        Video video = mediaService.getVideoById(videoId);
+        return ResponseEntity.ok(video);
     }
 
     @GetMapping("/song/{songId}")

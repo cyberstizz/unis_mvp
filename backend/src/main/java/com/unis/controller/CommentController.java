@@ -120,6 +120,49 @@ public class CommentController {
         }
     }
 
+    // ========================================================================
+    // VIDEO COMMENT ENDPOINTS — mirror the song endpoints above
+    // ========================================================================
+
+    @GetMapping("/video/{videoId}")
+    public ResponseEntity<?> getCommentsByVideo(@PathVariable UUID videoId) {
+        try {
+            List<CommentDTO.Response> comments = commentService.getCommentsByVideoId(videoId);
+            return ResponseEntity.ok(comments);
+        } catch (Exception e) {
+            log.error("Error fetching comments for video {}", videoId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to fetch comments"));
+        }
+    }
+
+    @GetMapping("/video/{videoId}/paginated")
+    public ResponseEntity<?> getCommentsByVideoPaginated(
+            @PathVariable UUID videoId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        try {
+            CommentDTO.PagedResponse response = commentService.getCommentsByVideoIdPaginated(videoId, page, size);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error fetching paginated comments for video {}", videoId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to fetch comments"));
+        }
+    }
+
+    @GetMapping("/video/{videoId}/count")
+    public ResponseEntity<?> getVideoCommentCount(@PathVariable UUID videoId) {
+        try {
+            CommentDTO.CountResponse count = commentService.getVideoCommentCount(videoId);
+            return ResponseEntity.ok(count);
+        } catch (Exception e) {
+            log.error("Error fetching comment count for video {}", videoId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to fetch comment count"));
+        }
+    }
+
     /**
      * PATCH /api/v1/comments/{commentId}
      * Update a comment (only by owner)
@@ -176,6 +219,18 @@ public class CommentController {
         try {
             UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
             CommentDTO.UserCommentCountResponse count = commentService.getUserCommentCountForSong(authenticatedUserId, songId);
+            return ResponseEntity.ok(count);
+        } catch (Exception e) {
+            // If not authenticated, return 0 (guest users can't comment anyway)
+            return ResponseEntity.ok(Map.of("count", 0, "limit", 3, "remaining", 3, "limitReached", false));
+        }
+    }
+
+    @GetMapping("/video/{videoId}/user-count")
+    public ResponseEntity<?> getUserVideoCommentCount(@PathVariable UUID videoId) {
+        try {
+            UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
+            CommentDTO.UserCommentCountResponse count = commentService.getUserCommentCountForVideo(authenticatedUserId, videoId);
             return ResponseEntity.ok(count);
         } catch (Exception e) {
             // If not authenticated, return 0 (guest users can't comment anyway)
