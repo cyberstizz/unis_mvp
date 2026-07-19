@@ -295,8 +295,13 @@ public class MediaService {
             video.setCreatedAt(LocalDateTime.now());
 
             return videoRepository.save(video);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // Surface WHICH field failed — the previous generic message made
+            // this class of bug invisible in the Railway logs.
+            throw new IllegalArgumentException(
+                "Invalid video metadata JSON: " + e.getOriginalMessage(), e);
         } catch (IOException e) {
-            throw new RuntimeException("JSON parse or file upload failed", e);
+            throw new RuntimeException("Video file upload failed: " + e.getMessage(), e);
         }
     }
 
