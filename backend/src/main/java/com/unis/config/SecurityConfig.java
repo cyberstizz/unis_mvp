@@ -172,6 +172,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/jurisdiction/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/artist/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/jurisdiction/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/recent").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/video/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/video/*/likes/count").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/video/*/is-liked").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song/*/play").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/play/complete").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/video/*/play").permitAll()
@@ -210,6 +214,7 @@ public class SecurityConfig {
                 // ===== CATCH-ALL: everything else under /api/v1 requires auth =====
                 .requestMatchers("/api/v1/**").authenticated()
                 .requestMatchers("/uploads/**").permitAll()
+                .requestMatchers("/api/uploads/**").permitAll()
                 .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/error/**").permitAll()
                 .requestMatchers("/ws/**").permitAll()

@@ -310,6 +310,13 @@ public class MediaController {
         return ResponseEntity.ok(songs);
     }
 
+    // GET /api/v1/media/videos/recent?limit=12 — newest videos, any jurisdiction
+    @GetMapping("/videos/recent")
+    public ResponseEntity<List<Video>> getRecentVideos(
+            @RequestParam(defaultValue = "12") int limit) {
+        return ResponseEntity.ok(mediaService.getRecentVideos(limit));
+    }
+
     @GetMapping("/videos/artist/{artistId}")
     public ResponseEntity<List<Video>> getVideosByArtist(@PathVariable UUID artistId) {
         List<Video> videos = mediaService.getVideosByArtist(artistId);

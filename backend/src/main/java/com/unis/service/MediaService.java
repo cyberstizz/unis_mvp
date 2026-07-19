@@ -537,7 +537,9 @@ public class MediaService {
         
         @SuppressWarnings("unchecked")
         List<Video> results = q.getResultList();
-        return results.isEmpty() ? getFallbackVideos(limit) : results;
+        List<Video> out = results.isEmpty() ? getFallbackVideos(limit) : results;
+        out.forEach(this::decorateVideoStats);
+        return out;
     }
 
     // NOT CACHED - private helper method
@@ -559,6 +561,29 @@ public class MediaService {
         });
         
         return songs;
+    }
+
+    /**
+     * Newest videos regardless of jurisdiction — used by Discover when the
+     * scope is "Everywhere". Decorated with play counts so cards can show them.
+     */
+    public List<Video> getRecentVideos(int limit) {
+        List<Video> videos = videoRepository.findAll(
+                org.springframework.data.domain.PageRequest.of(
+                        0, limit, Sort.by(Sort.Direction.DESC, "createdAt")))
+                .getContent();
+        videos.forEach(this::decorateVideoStats);
+        return videos;
+    }
+
+    /** Attach transient play/like counts without failing the whole response. */
+    private void decorateVideoStats(Video video) {
+        try {
+            Long playCount = videoPlayRepository.countTotalPlaysByVideoId(video.getVideoId());
+            video.setPlayCount(playCount != null ? playCount : 0L);
+        } catch (Exception e) {
+            video.setPlayCount(0L);
+        }
     }
 
     // NOT CACHED - private fallback method
