@@ -116,6 +116,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/reset-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/verify-email").permitAll()        // ★
                 .requestMatchers(HttpMethod.GET,  "/api/auth/verify-email").permitAll()        // ★
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/awards").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/standing").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/resend-verification").permitAll() // ★
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/signup-song").permitAll()     // ★
 
@@ -190,12 +192,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/artist/top").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/supporters/count").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/followers/count").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/awards").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/standing").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-plays").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-votes").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-likes").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/photos").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/awards").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/standing").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/songs/my-purchases").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/v1/songs/my-sales").authenticated()
 
