@@ -190,6 +190,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/artist/top").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/supporters/count").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/followers/count").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/awards").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/*/standing").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-plays").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-votes").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/total-likes").permitAll()
