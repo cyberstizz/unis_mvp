@@ -1071,6 +1071,23 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         }
     }
 
+        /**
+     * An award period is only meaningful once it has fully elapsed.
+     *
+     * This matters more than it looks. getPeriodLeaderboard and getPastAwards both
+     * auto-populate a missing Award on read. If a client asks for a period that is
+     * still running, that read PERSISTS an Award row stamped with a future
+     * awardDate, computed from partial data — and existsAwardForCategory then
+     * blocks the nightly cron from ever recomputing it. A single request for
+     * "2026 Artist of the Year" in July permanently freezes the wrong winner.
+     *
+     * A period ending today is NOT closed: plays, votes and likes are still landing
+     * until midnight.
+     */
+    private boolean isPeriodClosed(LocalDate endDate) {
+        return endDate != null && endDate.isBefore(LocalDate.now());
+    }
+
     private Optional<VotingInterval> determineIntervalFromDateRange(LocalDate startDate, LocalDate endDate) {
         long daysBetween = java.time.temporal.ChronoUnit.DAYS.between(startDate, endDate);
         
