@@ -159,6 +159,11 @@ public class AwardService {
         log.info("getPastAwards: type={}, range={}..{}, jurisdiction={}, genre={}, interval={}",
                 type, startDate, endDate, jurisdictionId, genreId, intervalId);
 
+    if (!isPeriodClosed(endDate)) {
+            log.warn("getPastAwards: refused OPEN period ending {} — no award computed or persisted", endDate);
+            return java.util.Collections.emptyList();
+        }
+
     if (intervalId == null) {
         intervalId = determineIntervalFromDateRange(startDate, endDate)
                 .map(VotingInterval::getIntervalId).orElse(null);
@@ -200,16 +205,26 @@ public class AwardService {
 public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDate, LocalDate endDate,
                                                   UUID jurisdictionId, UUID genreId, UUID intervalId,
                                                   int limit) {
-    System.out.println("=== getPeriodLeaderboard CALLED ===");
-    System.out.println("Type: " + type + ", Start: " + startDate + ", End: " + endDate);
-    System.out.println("Jur: " + jurisdictionId + ", Genre: " + genreId + ", Interval: " + intervalId);
+    log.info("getPeriodLeaderboard: type={}, range={}..{}, jurisdiction={}, genre={}, interval={}",
+                type, startDate, endDate, jurisdictionId, genreId, intervalId);
+
+        // Refuse open periods outright. Never compute, never persist, never rank.
+        if (!isPeriodClosed(endDate)) {
+            log.warn("getPeriodLeaderboard: refused OPEN period ending {} (closes after today) — "
+                + "no award computed or persisted", endDate);
+            return PeriodLeaderboardDto.builder()
+                    .winner(null)
+                    .leaderboard(java.util.Collections.emptyList())
+                    .totalVotes(0)
+                    .build();
+        }
 
     // 1. Fetch the saved winner Award (auto-populate if missing — same pattern as getPastAwards)
     List<Award> awards = awardRepository.findByFilters(
         type, jurisdictionId, genreId, intervalId, startDate, endDate);
 
     if (awards.isEmpty() && autoPopulateAwards) {
-        System.out.println("No winner award found — triggering computation");
+        log.info("No winner award found — triggering computation");
         self.computeAndSaveAwardsInNewTransaction(endDate, intervalId, jurisdictionId, genreId);
         awards = awardRepository.findByFilters(
             type, jurisdictionId, genreId, intervalId, startDate, endDate);
@@ -261,6 +276,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     String title = "";
     String artist = "";
     String artwork = null;
+    String fileUrl = null;
+    UUID artistId = null;
 
     if ("song".equals(type)) {
         Song song = songRepository.findById(c.targetId).orElse(null);
@@ -268,6 +285,9 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
             title = song.getTitle();
             artist = song.getArtist() != null ? song.getArtist().getUsername() : "Unknown Artist";
             artwork = song.getArtworkUrl();
+            fileUrl = song.getFileUrl();
+            artistId = song.getArtist() != null ? song.getArtist().getUserId() : null;
+
         }
     } else {
         User user = userRepository.findById(c.targetId).orElse(null);
@@ -285,6 +305,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         .title(title)
         .artist(artist)
         .artwork(artwork)
+        .fileUrl(fileUrl)
+        .artistId(artistId)
         .votes((long) c.rawVoteCount)
         .weightedPoints(c.weightedPoints)
         .playsCount(c.playsCount)
