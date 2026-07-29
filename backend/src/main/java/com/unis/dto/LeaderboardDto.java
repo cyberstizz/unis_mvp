@@ -6,37 +6,56 @@ import lombok.Data;
 import java.util.UUID;
 
 /**
- * One row of the Milestones tally.
+ * One row of the live leaderboard.
  *
- * fileUrl and artistId were added so a leaderboard row can route through
- * PlayerContext.requestPlay() and the PlayChoiceModal like every other play
- * surface in the app. Without fileUrl the Milestones page could rank songs but
- * never play them, which failed the "playChoiceModal on every play button"
- * standard and meant a play from this page earned the artist no points.
+ * This is a ROW type, not a wrapper — VoteController returns
+ * ResponseEntity<List<LeaderboardDto>> and the frontend maps over a bare
+ * array. Do not add an "entries" field here.
  *
- * Both fields are null for artist-type rows.
+ * Field names are load-bearing. leaderboardsPage.jsx reads targetId, rank,
+ * name, votes, artwork, artist and fileUrl straight off each item, so renaming
+ * any of them silently breaks the Milestones page. Note it is `name`, not
+ * `title` — LeaderboardEntryDto uses `title`, and the two are not
+ * interchangeable.
+ *
+ * Populated in VoteService.getLeaderboard() in two branches:
+ *   artist rows -> rank, targetId, name, votes, artwork
+ *   song rows   -> the same, plus artist and fileUrl
  */
 @Data
 @Builder
-public class LeaderboardEntryDto {
+public class LeaderboardDto {
+
     private int rank;
+
+    /** user_id for artist rows, song_id for song rows. */
     private UUID targetId;
-    private String targetType;
-    private String title;
-    private String artist;
-    private String artwork;
 
-    /** Audio source for song rows. Null for artist rows. */
-    private String fileUrl;
-
-    /** Owning artist for song rows, so the row can deep-link. Null for artist rows. */
-    private UUID artistId;
+    /** Username for artist rows, song title for song rows. */
+    private String name;
 
     private long votes;
-    private int weightedPoints;
-    private int playsCount;
-    private int likesCount;
-    private boolean isWinner;
-    private String determinationMethod;
-    private Integer tiedCandidatesCount;
+
+    private String artwork;
+
+    /** Performing artist. Null for artist rows. */
+    private String artist;
+
+    /**
+     * Audio source for song rows, so a leaderboard row can route through
+     * PlayerContext.requestPlay() and the PlayChoiceModal like every other
+     * play surface. Null for artist rows.
+     */
+    private String fileUrl;
+
+    /**
+     * Owning artist for song rows, so a row can deep-link to the artist page.
+     *
+     * NOT POPULATED YET. VoteService's song query selects six columns
+     * (song_id, title, score, artwork_url, artist, file_url) and none of them
+     * is artist_id, so this always serializes as null today. To wire it: add
+     * `s.artist_id` to that SELECT and `.artistId((UUID) row[6])` to the
+     * builder alongside .fileUrl(...).
+     */
+    private UUID artistId;
 }
