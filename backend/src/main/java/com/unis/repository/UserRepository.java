@@ -42,7 +42,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             ") " +
             "SELECT u.* FROM users u JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id " +
             "WHERE u.role = 'artist' " +
-            "ORDER BY u.score DESC LIMIT :limit", nativeQuery = true)
+            "ORDER BY ( " +
+            "  COALESCE((SELECT COUNT(sp.play_id) FROM song_plays sp " +
+            "            JOIN songs s ON sp.song_id = s.song_id " +
+            "            WHERE s.artist_id = u.user_id), 0) " +
+            "  + COALESCE((SELECT COUNT(v.vote_id) * 2 FROM votes v " +
+            "              WHERE v.target_type = 'artist' AND v.target_id = u.user_id), 0) " +
+            ") DESC, u.username ASC " +
+            "LIMIT :limit", nativeQuery = true)
     List<User> findTopArtistsByJurisdictionWithHierarchy(@Param("jurisdictionId") UUID jurisdictionId, @Param("limit") int limit);
 
     @Query(value = "SELECT u.user_id, " +

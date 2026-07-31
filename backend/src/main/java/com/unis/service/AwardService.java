@@ -159,11 +159,6 @@ public class AwardService {
         log.info("getPastAwards: type={}, range={}..{}, jurisdiction={}, genre={}, interval={}",
                 type, startDate, endDate, jurisdictionId, genreId, intervalId);
 
-    if (!isPeriodClosed(endDate)) {
-            log.warn("getPastAwards: refused OPEN period ending {} — no award computed or persisted", endDate);
-            return java.util.Collections.emptyList();
-        }
-
     if (intervalId == null) {
         intervalId = determineIntervalFromDateRange(startDate, endDate)
                 .map(VotingInterval::getIntervalId).orElse(null);
@@ -207,17 +202,6 @@ public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDat
                                                   int limit) {
     log.info("getPeriodLeaderboard: type={}, range={}..{}, jurisdiction={}, genre={}, interval={}",
                 type, startDate, endDate, jurisdictionId, genreId, intervalId);
-
-        // Refuse open periods outright. Never compute, never persist, never rank.
-        if (!isPeriodClosed(endDate)) {
-            log.warn("getPeriodLeaderboard: refused OPEN period ending {} (closes after today) — "
-                + "no award computed or persisted", endDate);
-            return PeriodLeaderboardDto.builder()
-                    .winner(null)
-                    .leaderboard(java.util.Collections.emptyList())
-                    .totalVotes(0)
-                    .build();
-        }
 
     // 1. Fetch the saved winner Award (auto-populate if missing — same pattern as getPastAwards)
     List<Award> awards = awardRepository.findByFilters(
@@ -1106,6 +1090,17 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
      * A period ending today is NOT closed: plays, votes and likes are still landing
      * until midnight.
      */
+    /**
+     * Currently unused. Both read paths that called this have been reopened:
+     * getPastAwards is @Transactional(readOnly = true) and getPeriodLeaderboard
+     * only calls awardRepository.findByFilters, so neither can persist an Award
+     * for an open period — the fabricate-on-read behaviour this guarded was
+     * already removed when those methods were made pure reads.
+     *
+     * Kept deliberately. If a write path is ever reintroduced on a read
+     * endpoint, this is the guard it needs.
+     */
+    @SuppressWarnings("unused")
     private boolean isPeriodClosed(LocalDate endDate) {
         return endDate != null && endDate.isBefore(LocalDate.now());
     }
