@@ -120,6 +120,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/*/standing").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/resend-verification").permitAll() // ★
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/signup-song").permitAll()     // ★
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/recent").permitAll()
 
                 // ===== AUTHENTICATED MUTATIONS — C1 + C6 =====
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song").authenticated()
