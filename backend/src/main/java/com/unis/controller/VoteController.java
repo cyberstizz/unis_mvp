@@ -249,7 +249,6 @@ public class VoteController {
         @RequestParam UUID intervalId,
         @RequestParam(defaultValue = "50") int limit,
         @RequestParam(required = false) boolean playsOnly) {
-        System.out.println("Leaderboards hit: jur=" + jurisdictionId + ", genre=" + genreId + ", type=" + targetType + ", interval=" + intervalId + ", limit=" + limit + ", playsOnly=" + playsOnly);
         List<LeaderboardDto> leaderboard = voteService.getLeaderboard(targetType, genreId, jurisdictionId, intervalId, limit);
         return ResponseEntity.ok(leaderboard);
     }

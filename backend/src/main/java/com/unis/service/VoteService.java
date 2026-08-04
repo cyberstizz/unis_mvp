@@ -446,7 +446,7 @@ public class VoteService {
         
         switch (interval.getName()) {
             case "Daily":
-                return today.minusDays(1);  // Loosened for testing (include yesterday); revert to 'return today;' for prod
+                return today;  // PROD: reverted from today.minusDays(1) (was loosened for testing)
             case "Weekly":
                 return today.with(DayOfWeek.MONDAY);
             case "Monthly":
@@ -481,22 +481,52 @@ public class VoteService {
     public List<LeaderboardDto> getLeaderboard(String targetType, UUID genreId, UUID jurisdictionId, UUID intervalId, int limit) {
         LocalDate startDate = getIntervalStartDate(intervalId);
         LocalDate endDate = LocalDate.now();
+        // Exclusive upper bound for song_plays.played_at (a timestamp column).
+        // The old queries wrapped it in DATE(sp.played_at), which defeats any
+        // index on played_at; a half-open range from startDate inclusive to
+        // endDate+1 exclusive is sargable and covers the same days.
+        LocalDate endExclusive = endDate.plusDays(1);
         List<UUID> jurisdictionIds = getJurisdictionHierarchy(jurisdictionId);
 
+        // SCORING NOTE: score = votes-in-interval + plays-in-window. The old
+        // implementation computed this with two LEFT JOINs on the same row set
+        // (votes AND song_plays), which cross-multiplies: an artist with
+        // 3 votes and 5 plays produced 15 joined rows, so COUNT(vote_id) = 15
+        // and COUNT(play_id) = 15 — score 30 instead of 8, skewing the whole
+        // ranking toward anyone with both. Votes and plays are now
+        // pre-aggregated in their own CTEs and joined one-row-per-target,
+        // which both fixes the inflation and removes the fanout cost.
         if ("artist".equalsIgnoreCase(targetType)) {
             String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
                 SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
                 UNION ALL
                 SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            ),
+            vote_counts AS (
+                SELECT v.target_id, COUNT(*) AS vote_count
+                FROM votes v
+                WHERE v.target_type = 'artist' AND v.genre_id = :genreId
+                  AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId
+                  AND v.vote_date BETWEEN :startDate AND :endDate
+                GROUP BY v.target_id
+            ),
+            play_counts AS (
+                SELECT s.artist_id, COUNT(*) AS play_count
+                FROM song_plays sp
+                JOIN songs s ON s.song_id = sp.song_id
+                WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                GROUP BY s.artist_id
             )
-            SELECT u.user_id, u.username, COALESCE(COUNT(v.vote_id), 0) + COALESCE(COUNT(sp.play_id), 0) as score, u.photo_url
-            FROM users u LEFT JOIN votes v ON v.target_id = u.user_id AND v.target_type = 'artist' AND v.genre_id = :genreId AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId AND v.vote_date BETWEEN :startDate AND :endDate
-            LEFT JOIN song_plays sp ON sp.song_id IN (SELECT s.song_id FROM songs s WHERE s.artist_id = u.user_id) AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+            SELECT u.user_id, u.username,
+                   COALESCE(vc.vote_count, 0) + COALESCE(pc.play_count, 0) AS score,
+                   u.photo_url
+            FROM users u
             JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
+            LEFT JOIN vote_counts vc ON vc.target_id = u.user_id
+            LEFT JOIN play_counts pc ON pc.artist_id = u.user_id
             WHERE u.role = 'artist' AND u.genre_id = :genreId
-            GROUP BY u.user_id, u.username, u.photo_url
-            ORDER BY score DESC, COUNT(v.vote_id) DESC
+            ORDER BY score DESC, COALESCE(vc.vote_count, 0) DESC
             LIMIT :limit
             """;
             Query q = entityManager.createNativeQuery(query);
@@ -506,22 +536,36 @@ public class VoteService {
             q.setParameter("intervalId", intervalId);
             q.setParameter("startDate", startDate);
             q.setParameter("endDate", endDate);
+            q.setParameter("endExclusive", endExclusive);
             q.setParameter("limit", limit);
             List<Object[]> results = q.getResultList();
 
-            // Fallback if <5: Top by plays only
-            if (results.size() < 5) {
+            // Fallback if <5: Top by plays only. Excludes rows already
+            // returned by the main query — the old version re-selected the
+            // same artists, so anyone appearing in both showed up twice.
+            if (results.size() < 5 && !results.isEmpty()) {
+                List<UUID> excludeIds = new ArrayList<>();
+                for (Object[] row : results) excludeIds.add((UUID) row[0]);
+
                 String fallbackQuery = """
                 WITH RECURSIVE jurisdiction_hierarchy AS (
                     SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
                     UNION ALL
                     SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+                ),
+                play_counts AS (
+                    SELECT s.artist_id, COUNT(*) AS play_count
+                    FROM song_plays sp
+                    JOIN songs s ON s.song_id = sp.song_id
+                    WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                    GROUP BY s.artist_id
                 )
-                SELECT u.user_id, u.username, COALESCE(COUNT(sp.play_id), 0) as score, u.photo_url
-                FROM users u LEFT JOIN song_plays sp ON sp.song_id IN (SELECT s.song_id FROM songs s WHERE s.artist_id = u.user_id) AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                SELECT u.user_id, u.username, COALESCE(pc.play_count, 0) AS score, u.photo_url
+                FROM users u
                 JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
+                LEFT JOIN play_counts pc ON pc.artist_id = u.user_id
                 WHERE u.role = 'artist' AND u.genre_id = :genreId
-                GROUP BY u.user_id, u.username, u.photo_url
+                  AND u.user_id NOT IN (:excludeIds)
                 ORDER BY score DESC
                 LIMIT :fallbackLimit
                 """;
@@ -529,21 +573,21 @@ public class VoteService {
                 fq.setParameter("jurisdictionId", jurisdictionId);
                 fq.setParameter("genreId", genreId);
                 fq.setParameter("startDate", startDate);
-                fq.setParameter("endDate", endDate);
+                fq.setParameter("endExclusive", endExclusive);
+                fq.setParameter("excludeIds", excludeIds);
                 fq.setParameter("fallbackLimit", 5 - results.size());
                 List<Object[]> fallback = fq.getResultList();
                 results.addAll(fallback);
             }
 
-            // FIXED: Add targetId (user_id from row[0])
             List<LeaderboardDto> leaderboard = new ArrayList<>();
             for (int i = 0; i < results.size(); i++) {
                 Object[] row = results.get(i);
                 leaderboard.add(LeaderboardDto.builder()
                     .rank(i + 1)
-                    .targetId((UUID) row[0])  // ADD THIS - user_id
+                    .targetId((UUID) row[0])  // user_id
                     .name(row[1].toString())
-                    .votes((Long) row[2])
+                    .votes(((Number) row[2]).longValue())
                     .artwork(row[3] != null ? row[3].toString() : null)
                     .build());
             }
@@ -554,14 +598,31 @@ public class VoteService {
                 SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
                 UNION ALL
                 SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            ),
+            vote_counts AS (
+                SELECT v.target_id, COUNT(*) AS vote_count
+                FROM votes v
+                WHERE v.target_type = 'song' AND v.genre_id = :genreId
+                  AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId
+                  AND v.vote_date BETWEEN :startDate AND :endDate
+                GROUP BY v.target_id
+            ),
+            play_counts AS (
+                SELECT sp.song_id, COUNT(*) AS play_count
+                FROM song_plays sp
+                WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                GROUP BY sp.song_id
             )
-            SELECT s.song_id, s.title, COALESCE(COUNT(v.vote_id), 0) + COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist, s.file_url
-            FROM songs s LEFT JOIN votes v ON v.target_id = s.song_id AND v.target_type = 'song' AND v.genre_id = :genreId AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId AND v.vote_date BETWEEN :startDate AND :endDate
-            LEFT JOIN song_plays sp ON sp.song_id = s.song_id AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-            INNER JOIN users a ON s.artist_id = a.user_id JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
+            SELECT s.song_id, s.title,
+                   COALESCE(vc.vote_count, 0) + COALESCE(pc.play_count, 0) AS score,
+                   s.artwork_url, a.username AS artist, s.file_url
+            FROM songs s
+            INNER JOIN users a ON s.artist_id = a.user_id
+            JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
+            LEFT JOIN vote_counts vc ON vc.target_id = s.song_id
+            LEFT JOIN play_counts pc ON pc.song_id = s.song_id
             WHERE s.genre_id = :genreId
-            GROUP BY s.song_id, s.title, s.artwork_url, a.username, s.file_url
-            ORDER BY score DESC, COUNT(v.vote_id) DESC
+            ORDER BY score DESC, COALESCE(vc.vote_count, 0) DESC
             LIMIT :limit
             """;
             Query q = entityManager.createNativeQuery(query);
@@ -571,22 +632,35 @@ public class VoteService {
             q.setParameter("intervalId", intervalId);
             q.setParameter("startDate", startDate);
             q.setParameter("endDate", endDate);
+            q.setParameter("endExclusive", endExclusive);
             q.setParameter("limit", limit);
             List<Object[]> results = q.getResultList();
 
-            // Fallback if <5: Top by plays only
-            if (results.size() < 5) {
+            // Fallback if <5: Top by plays only, excluding already-returned songs
+            if (results.size() < 5 && !results.isEmpty()) {
+                List<UUID> excludeIds = new ArrayList<>();
+                for (Object[] row : results) excludeIds.add((UUID) row[0]);
+
                 String fallbackQuery = """
                 WITH RECURSIVE jurisdiction_hierarchy AS (
                     SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
                     UNION ALL
                     SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+                ),
+                play_counts AS (
+                    SELECT sp.song_id, COUNT(*) AS play_count
+                    FROM song_plays sp
+                    WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                    GROUP BY sp.song_id
                 )
-                SELECT s.song_id, s.title, COALESCE(COUNT(sp.play_id), 0) as score, s.artwork_url, a.username as artist, s.file_url
-                FROM songs s LEFT JOIN song_plays sp ON sp.song_id = s.song_id AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-                INNER JOIN users a ON s.artist_id = a.user_id JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
+                SELECT s.song_id, s.title, COALESCE(pc.play_count, 0) AS score,
+                       s.artwork_url, a.username AS artist, s.file_url
+                FROM songs s
+                INNER JOIN users a ON s.artist_id = a.user_id
+                JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
+                LEFT JOIN play_counts pc ON pc.song_id = s.song_id
                 WHERE s.genre_id = :genreId
-                GROUP BY s.song_id, s.title, s.artwork_url, a.username, s.file_url
+                  AND s.song_id NOT IN (:excludeIds)
                 ORDER BY score DESC
                 LIMIT :fallbackLimit
                 """;
@@ -594,21 +668,21 @@ public class VoteService {
                 fq.setParameter("jurisdictionId", jurisdictionId);
                 fq.setParameter("genreId", genreId);
                 fq.setParameter("startDate", startDate);
-                fq.setParameter("endDate", endDate);
+                fq.setParameter("endExclusive", endExclusive);
+                fq.setParameter("excludeIds", excludeIds);
                 fq.setParameter("fallbackLimit", 5 - results.size());
                 List<Object[]> fallback = fq.getResultList();
                 results.addAll(fallback);
             }
 
-            // FIXED: Add targetId (song_id from row[0]) and fileUrl (row[5])
             List<LeaderboardDto> leaderboard = new ArrayList<>();
             for (int i = 0; i < results.size(); i++) {
                 Object[] row = results.get(i);
                 leaderboard.add(LeaderboardDto.builder()
                     .rank(i + 1)
-                    .targetId((UUID) row[0])  // ADD THIS - song_id
+                    .targetId((UUID) row[0])  // song_id
                     .name(row[1].toString())
-                    .votes((Long) row[2])
+                    .votes(((Number) row[2]).longValue())
                     .artwork(row[3] != null ? row[3].toString() : null)
                     .artist(row[4] != null ? row[4].toString() : null)
                     .fileUrl(row[5] != null ? row[5].toString() : null)
