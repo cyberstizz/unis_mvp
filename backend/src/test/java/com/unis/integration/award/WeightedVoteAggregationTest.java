@@ -196,8 +196,8 @@ class WeightedVoteAggregationTest extends BaseIntegrationTest {
 
             assertThat(awards).hasSize(1);
             assertThat(awards.get(0).getWeightedPoints()).isEqualTo(250);
-            // Should NOT be WEIGHTED_VOTES since it was a tie
-            assertThat(awards.get(0).getDeterminationMethod()).isNotEqualTo("WEIGHTED_VOTES");
+            // Should NOT be VOTES since it was a tie
+            assertThat(awards.get(0).getDeterminationMethod()).isNotEqualTo("VOTES");
         }
 
         @Test
@@ -225,7 +225,7 @@ class WeightedVoteAggregationTest extends BaseIntegrationTest {
             assertThat(awards).hasSize(1);
             assertThat(awards.get(0).getTargetId()).isEqualTo(artistA.getUserId());
             assertThat(awards.get(0).getWeightedPoints()).isEqualTo(250);
-            assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("WEIGHTED_VOTES");
+            assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("VOTES");
         }
     }
 

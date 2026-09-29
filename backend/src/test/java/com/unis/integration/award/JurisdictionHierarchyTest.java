@@ -168,7 +168,7 @@ class JurisdictionHierarchyTest extends BaseIntegrationTest {
             // Either no award (if fallback also finds nothing) or award with 0 weighted points
             if (!awards.isEmpty()) {
                 assertThat(awards.get(0).getWeightedPoints()).isEqualTo(0);
-                assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("FALLBACK");
+                assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("NO_ACTIVITY");
             }
         }
 
