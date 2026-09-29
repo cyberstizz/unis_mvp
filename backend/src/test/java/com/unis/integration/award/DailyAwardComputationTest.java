@@ -76,7 +76,7 @@ class DailyAwardComputationTest extends BaseIntegrationTest {
             assertThat(winner.getTargetId()).isEqualTo(artistA.getUserId());
             assertThat(winner.getWeightedPoints()).isEqualTo(50); // 5 × 10
             assertThat(winner.getVotesCount()).isEqualTo(5);
-            assertThat(winner.getDeterminationMethod()).isEqualTo("WEIGHTED_VOTES");
+            assertThat(winner.getDeterminationMethod()).isEqualTo("VOTES");
         }
 
         @Test
@@ -112,7 +112,7 @@ class DailyAwardComputationTest extends BaseIntegrationTest {
             Award winner = awards.get(0);
             assertThat(winner.getTargetId()).isEqualTo(songA.getSongId());
             assertThat(winner.getWeightedPoints()).isEqualTo(70);
-            assertThat(winner.getDeterminationMethod()).isEqualTo("WEIGHTED_VOTES");
+            assertThat(winner.getDeterminationMethod()).isEqualTo("VOTES");
         }
 
         @Test
@@ -222,8 +222,8 @@ class DailyAwardComputationTest extends BaseIntegrationTest {
             assertThat(winner.getWeightedPoints()).isEqualTo(250);
             // Winner should be artist A (higher score as tiebreaker)
             assertThat(winner.getTargetId()).isEqualTo(artistA.getUserId());
-            // Determination should NOT be WEIGHTED_VOTES since it was a tie
-            assertThat(winner.getDeterminationMethod()).isNotEqualTo("WEIGHTED_VOTES");
+            // Determination should NOT be VOTES since it was a tie
+            assertThat(winner.getDeterminationMethod()).isNotEqualTo("VOTES");
         }
 
         @Test
@@ -264,7 +264,7 @@ class DailyAwardComputationTest extends BaseIntegrationTest {
     class ZeroVoteFallback {
 
         @Test
-        @DisplayName("When no votes exist, artist with highest score wins with FALLBACK method")
+        @DisplayName("When no votes exist, artist with highest score wins with NO_ACTIVITY method")
         void noVotesFallsBackToScore() {
             // Given: Two artists with different scores, NO votes
             User artistA = testDataFactory.createArtist("test_artistA", TestDataFactory.TEST_CHILD_A_ID,
@@ -290,7 +290,7 @@ class DailyAwardComputationTest extends BaseIntegrationTest {
             assertThat(winner.getTargetId()).isEqualTo(artistA.getUserId());
             assertThat(winner.getWeightedPoints()).isEqualTo(0);
             assertThat(winner.getVotesCount()).isEqualTo(0);
-            assertThat(winner.getDeterminationMethod()).isEqualTo("FALLBACK");
+            assertThat(winner.getDeterminationMethod()).isEqualTo("NO_ACTIVITY");
         }
 
         @Test
@@ -320,7 +320,7 @@ class DailyAwardComputationTest extends BaseIntegrationTest {
 
             assertThat(awards).hasSize(1);
             assertThat(awards.get(0).getTargetId()).isEqualTo(olderArtist.getUserId());
-            assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("FALLBACK");
+            assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("NO_ACTIVITY");
         }
     }
 
@@ -366,7 +366,7 @@ class DailyAwardComputationTest extends BaseIntegrationTest {
             assertThat(winner.getWeightedPoints()).isEqualTo(20);
             assertThat(winner.getTiedCandidatesCount()).isGreaterThan(0);
             // Should be SCORE since plays/likes are 0 for both
-            assertThat(winner.getDeterminationMethod()).isIn("PLAYS", "LIKES", "SCORE", "SENIORITY");
+            assertThat(winner.getDeterminationMethod()).isIn("VOTE_POINTS", "PLAYS", "LIKES", "SCORE", "SENIORITY");
         }
 
         @Test

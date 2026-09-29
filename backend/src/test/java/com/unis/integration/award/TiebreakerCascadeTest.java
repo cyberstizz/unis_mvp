@@ -40,7 +40,7 @@ class TiebreakerCascadeTest extends BaseIntegrationTest {
     class WeightedPointsNoTie {
 
         @Test
-        @DisplayName("Clear winner by weighted points - determination method is WEIGHTED_VOTES")
+        @DisplayName("Clear winner by weighted points - determination method is VOTES")
         void clearWinnerByWeightedPoints() {
             User artistA = testDataFactory.createArtist("test_artistA", TestDataFactory.TEST_CHILD_A_ID);
             User artistB = testDataFactory.createArtist("test_artistB", TestDataFactory.TEST_CHILD_A_ID);
@@ -64,7 +64,7 @@ class TiebreakerCascadeTest extends BaseIntegrationTest {
 
             assertThat(awards).hasSize(1);
             assertThat(awards.get(0).getTargetId()).isEqualTo(artistA.getUserId());
-            assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("WEIGHTED_VOTES");
+            assertThat(awards.get(0).getDeterminationMethod()).isEqualTo("VOTES");
             assertThat(awards.get(0).getTiedCandidatesCount()).isEqualTo(0);
         }
     }
@@ -110,7 +110,7 @@ class TiebreakerCascadeTest extends BaseIntegrationTest {
             assertThat(awards).hasSize(1);
             assertThat(awards.get(0).getWeightedPoints()).isEqualTo(20);
             // Since plays are 0 for both, should fall through to next tiebreaker
-            assertThat(awards.get(0).getDeterminationMethod()).isIn("PLAYS", "LIKES", "SCORE", "SENIORITY");
+            assertThat(awards.get(0).getDeterminationMethod()).isIn("VOTE_POINTS", "PLAYS", "LIKES", "SCORE", "SENIORITY");
             assertThat(awards.get(0).getTiedCandidatesCount()).isGreaterThanOrEqualTo(2);
         }
     }
@@ -193,7 +193,7 @@ class TiebreakerCascadeTest extends BaseIntegrationTest {
                     .as("Artist A should win by higher score")
                     .isEqualTo(artistA.getUserId());
             // Should be SCORE since plays/likes are 0, but scores differ
-            assertThat(awards.get(0).getDeterminationMethod()).isIn("PLAYS", "LIKES", "SCORE");
+            assertThat(awards.get(0).getDeterminationMethod()).isIn("VOTE_POINTS", "PLAYS", "LIKES", "SCORE");
         }
     }
 

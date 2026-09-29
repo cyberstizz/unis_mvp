@@ -122,6 +122,24 @@ public class AwardService {
     );
 
     // =========================================================================
+    // ENGAGEMENT WEIGHTS - Plays and likes now score directly, they are no
+    // longer a zero-vote fallback. A candidate's total is:
+    //
+    //     total_points = weighted_vote_points
+    //                  + (plays * PLAY_WEIGHT)
+    //                  + (likes * LIKE_WEIGHT)
+    //
+    // Votes stay primary by weight (one daily vote = 10 plays) and by the
+    // tiebreaker order below total_points, but enough engagement can now beat
+    // a thin vote lead. Raw plays are counted deliberately, not distinct
+    // listeners: a superfan on repeat is meant to be worth more than a
+    // one-and-done listener. MediaService's 30-minute per-song cooldown is
+    // what bounds this.
+    // =========================================================================
+    private static final int PLAY_WEIGHT = 1;
+    private static final int LIKE_WEIGHT = 5;
+
+    // =========================================================================
     // PUBLIC API METHODS
     // =========================================================================
 
@@ -193,8 +211,8 @@ public class AwardService {
 
     /**
  * Get the full ranked leaderboard for a period, plus the saved winner Award.
- * Reuses getCandidatesWithWeightedVotes (and the engagement fallback) so the
- * ranking matches what the cron uses to determine winners.
+ * Reuses getRankedCandidates so the ranking matches what the cron uses to
+ * determine winners, including engagement points.
  */
 @Transactional(readOnly = true)
 public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDate, LocalDate endDate,
@@ -219,16 +237,11 @@ public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDat
         populateAwardEntities(awards);
     }
 
-    // 2. Compute the full ranked candidate list, live, using the same cascade
-    //    (weighted points → plays → likes → score → seniority).
-    List<CandidateResult> candidates = getCandidatesWithWeightedVotes(
+    // 2. Compute the full ranked candidate list, live, using the exact query
+    //    the cron uses — total points, then the tiebreaker cascade. The
+    //    standings a user reads mid-period therefore predict the winner.
+    List<CandidateResult> candidates = getRankedCandidates(
         type, jurisdictionId, genreId, startDate, endDate);
-
-    // 3. Engagement fallback when no votes exist for the period
-    if (candidates.isEmpty()) {
-        candidates = getCandidatesByEngagement(
-            type, jurisdictionId, genreId, startDate, endDate);
-    }
 
     // 4. Build response
     int totalVotes = candidates.stream().mapToInt(c -> c.rawVoteCount).sum();
@@ -293,6 +306,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         .artistId(artistId)
         .votes((long) c.rawVoteCount)
         .weightedPoints(c.weightedPoints)
+        .engagementPoints(c.engagementPoints)
+        .totalPoints(c.totalPoints)
         .playsCount(c.playsCount)
         .likesCount(c.likesCount)
         .isWinner(isWinner);
@@ -390,22 +405,18 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
             return false;
         }
 
-        // Get candidates with full weighted scoring
-        List<CandidateResult> candidates = getCandidatesWithWeightedVotes(
+        // ONE ranked field. Every eligible candidate is scored on votes AND
+        // engagement in the same query, so an artist with plays but no votes is
+        // a competitor rather than a fallback. Empty means the category has no
+        // eligible artist/song at all, which is the only no-award case left.
+        List<CandidateResult> candidates = getRankedCandidates(
             targetType, jurisdictionId, genreId, startDate, awardDate
         );
 
-        // ZERO-VOTE FALLBACK: If no votes, get candidates by plays/likes/score/seniority
         if (candidates.isEmpty()) {
-            System.out.println("No votes found for " + targetType + " in jurisdiction " + jurisdictionId + " on " + awardDate);
-            System.out.println("FALLBACK: Querying candidates by plays/likes/score/seniority");
-            
-            candidates = getCandidatesByEngagement(targetType, jurisdictionId, genreId, startDate, awardDate);
-            
-            if (candidates.isEmpty()) {
-                System.out.println("No eligible " + targetType + "s found in jurisdiction hierarchy for fallback award");
-                return false;
-            }
+            System.out.println("No eligible " + targetType + "s in jurisdiction " + jurisdictionId
+                             + " / genre " + genreId + " — no award for this category");
+            return false;
         }
 
         // Determine winner using tiebreaker cascade
@@ -427,6 +438,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
             .awardDate(awardDate)
             .votesCount(winner.rawVoteCount)
             .weightedPoints(winner.weightedPoints)
+            .engagementPoints(winner.engagementPoints)
+            .totalPoints(winner.totalPoints)
             .playsCount(winner.playsCount)
             .likesCount(winner.likesCount)
             .engagementScore(winner.score)
@@ -441,7 +454,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         
         System.out.println("✓ Award SAVED with ID: " + savedAward.getAwardId() + " for " + targetType + 
                           " winner in jurisdiction " + jurisdictionId + 
-                          " with " + winner.weightedPoints + " weighted points" +
+                          " with " + winner.totalPoints + " total points (" +
+                          winner.weightedPoints + " vote + " + winner.engagementPoints + " engagement)" +
                           " (" + winner.rawVoteCount + " votes, " + winner.playsCount + " plays, " + winner.likesCount + " likes)" +
                           " (determined by " + winner.determinationMethod + ")");
         
@@ -451,126 +465,188 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     }
 
     // =========================================================================
-    // WEIGHTED VOTE AGGREGATION WITH FULL TIEBREAKER DATA
+    // RANKED CANDIDATE AGGREGATION (VOTES + ENGAGEMENT, ONE PASS)
     // =========================================================================
 
     /**
-     * Get candidates with weighted vote points and all tiebreaker metrics.
-     * 
-     * Vote weights:
-     * - Annual = 250 points
-     * - Midterm = 200 points
-     * - Quarterly = 60 points
-     * - Monthly = 25 points
-     * - Weekly = 20 points
-     * - Daily = 10 points
-     * 
-     * Also fetches: plays, likes, score, seniority for tiebreaking
+     * Rank every eligible candidate for one category on total points.
+     *
+     * The candidate set is the POPULATION, not the vote list. The old query
+     * selected FROM votes, so an artist with 200 plays and no votes was never a
+     * candidate at all — they could only surface through a separate zero-vote
+     * fallback query that ran when nobody had voted. That is why one vote beat
+     * two hundred plays. Here the population is the driving table and votes,
+     * plays and likes are LEFT JOINed onto it.
+     *
+     *   total_points = weighted_vote_points
+     *                + plays * PLAY_WEIGHT
+     *                + likes * LIKE_WEIGHT
+     *
+     * Vote weights are unchanged: Annual 250, Midterm 200, Quarterly 60,
+     * Monthly 25, Weekly 20, Daily 10.
+     *
+     * Ordering is total → vote points → plays → likes → score → seniority.
+     * Vote points sitting directly under total is what keeps votes primary:
+     * when two candidates reach the same total, the one who got there on votes
+     * takes it.
+     *
+     * Eligibility is unchanged from the old pair of queries:
+     *  - votes are aggregated bidirectionally (this jurisdiction + all children
+     *    + all ancestors), so a vote cast at Harlem counts for a Downtown
+     *    Harlem artist and vice versa;
+     *  - the artist must live in this jurisdiction or below;
+     *  - a candidate qualifies for the genre either by their own genre_id or by
+     *    having received a vote in that genre — the same union the two old
+     *    queries produced between them, kept so nothing that used to be
+     *    eligible silently stops being eligible.
+     *
+     * Date bucketing deliberately still uses DATE(col) BETWEEN, matching the
+     * old queries exactly. Switching to half-open timestamp ranges would be
+     * faster and index-sargable, but it would also move which calendar day a
+     * play lands in. That is a separate decision, not something to change
+     * underneath a scoring rewrite.
      */
     @SuppressWarnings("unchecked")
-    private List<CandidateResult> getCandidatesWithWeightedVotes(String targetType, UUID jurisdictionId, 
-                                                                  UUID genreId, LocalDate startDate, 
-                                                                  LocalDate endDate) {
-        // Build jurisdiction sets for bidirectional aggregation
+    private List<CandidateResult> getRankedCandidates(String targetType, UUID jurisdictionId,
+                                                       UUID genreId, LocalDate startDate,
+                                                       LocalDate endDate) {
+        // Bidirectional jurisdiction set for vote aggregation
         Set<UUID> allRelatedJurisdictions = new HashSet<>();
         allRelatedJurisdictions.add(jurisdictionId);
-        
-        List<UUID> children = getJurisdictionAndAllChildren(jurisdictionId);
-        allRelatedJurisdictions.addAll(children);
-        
-        List<UUID> ancestors = getJurisdictionAncestors(jurisdictionId);
-        allRelatedJurisdictions.addAll(ancestors);
-        
+        allRelatedJurisdictions.addAll(getJurisdictionAndAllChildren(jurisdictionId));
+        allRelatedJurisdictions.addAll(getJurisdictionAncestors(jurisdictionId));
+
+        // Residency set for eligibility (this jurisdiction and below only)
         List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
 
-        System.out.println("Weighted vote aggregation for " + jurisdictionId + 
-                          ": checking " + allRelatedJurisdictions.size() + " jurisdictions");
+        System.out.println("Ranking " + targetType + " candidates for " + jurisdictionId +
+                          ": votes from " + allRelatedJurisdictions.size() + " jurisdictions, " +
+                          "residents of " + thisAndChildren.size());
+
+        String voteWeightCase = """
+                        SUM(CASE
+                            WHEN vi.name = 'Annual'    THEN 250
+                            WHEN vi.name = 'Midterm'   THEN 200
+                            WHEN vi.name = 'Quarterly' THEN 60
+                            WHEN vi.name = 'Monthly'   THEN 25
+                            WHEN vi.name = 'Weekly'    THEN 20
+                            WHEN vi.name = 'Daily'     THEN 10
+                            ELSE 0
+                        END)""";
 
         String sql;
-        
+
         if ("song".equals(targetType)) {
             sql = """
-                SELECT 
-                    v.target_id,
-                    COUNT(v.vote_id) as raw_vote_count,
-                    SUM(CASE 
-                        WHEN vi.name = 'Annual' THEN 250
-                        WHEN vi.name = 'Midterm' THEN 200
-                        WHEN vi.name = 'Quarterly' THEN 60
-                        WHEN vi.name = 'Monthly' THEN 25
-                        WHEN vi.name = 'Weekly' THEN 20
-                        WHEN vi.name = 'Daily' THEN 10
-                        ELSE 0
-                    END) as weighted_points,
-                    COALESCE((
-                        SELECT COUNT(*) FROM song_plays sp 
-                        WHERE sp.song_id = v.target_id 
-                        AND sp.played_at IS NOT NULL
-                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-                    ), 0) as plays_count,
-                    COALESCE((
-                        SELECT COUNT(*) FROM likes l 
-                        WHERE l.media_id = v.target_id 
-                        AND l.media_type = 'song'
-                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
-                    ), 0) as likes_count,
-                    COALESCE(s.score, 0) as score,
-                    s.created_at as seniority
-                FROM votes v
-                JOIN voting_intervals vi ON v.interval_id = vi.interval_id
-                JOIN songs s ON v.target_id = s.song_id
-                JOIN users artist ON s.artist_id = artist.user_id
-                WHERE v.target_type = 'song'
-                  AND v.genre_id = :genreId
-                  AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
-                  AND v.jurisdiction_id IN (:allRelatedJurisdictions)
-                  AND artist.jurisdiction_id IN (:thisAndChildren)
-                GROUP BY v.target_id, s.score, s.created_at
-                ORDER BY weighted_points DESC, plays_count DESC, likes_count DESC, score DESC, seniority ASC
-            """;
+                SELECT * FROM (
+                    SELECT
+                        s.song_id                          AS target_id,
+                        COALESCE(v.raw_vote_count, 0)      AS raw_vote_count,
+                        COALESCE(v.weighted_points, 0)     AS weighted_points,
+                        COALESCE(p.plays_count, 0)         AS plays_count,
+                        COALESCE(l.likes_count, 0)         AS likes_count,
+                        COALESCE(s.score, 0)               AS score,
+                        s.created_at                       AS seniority,
+                        (COALESCE(p.plays_count, 0) * :playWeight
+                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS engagement_points,
+                        (COALESCE(v.weighted_points, 0)
+                         + COALESCE(p.plays_count, 0) * :playWeight
+                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS total_points
+                    FROM songs s
+                    JOIN users artist ON s.artist_id = artist.user_id
+                    LEFT JOIN (
+                        SELECT
+                            v.target_id,
+                            COUNT(v.vote_id) AS raw_vote_count,
+                            __VOTE_WEIGHT_CASE__ AS weighted_points
+                        FROM votes v
+                        JOIN voting_intervals vi ON v.interval_id = vi.interval_id
+                        WHERE v.target_type = 'song'
+                          AND v.genre_id = :genreId
+                          AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
+                          AND v.jurisdiction_id IN (:allRelatedJurisdictions)
+                        GROUP BY v.target_id
+                    ) v ON v.target_id = s.song_id
+                    LEFT JOIN (
+                        SELECT sp.song_id, COUNT(*) AS plays_count
+                        FROM song_plays sp
+                        WHERE sp.played_at IS NOT NULL
+                          AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                        GROUP BY sp.song_id
+                    ) p ON p.song_id = s.song_id
+                    LEFT JOIN (
+                        SELECT l.media_id, COUNT(*) AS likes_count
+                        FROM likes l
+                        WHERE l.media_type = 'song'
+                          AND DATE(l.created_at) BETWEEN :startDate AND :endDate
+                        GROUP BY l.media_id
+                    ) l ON l.media_id = s.song_id
+                    WHERE s.deleted_at IS NULL
+                      AND artist.deleted_at IS NULL
+                      AND artist.jurisdiction_id IN (:thisAndChildren)
+                      AND (s.genre_id = :genreId OR v.raw_vote_count IS NOT NULL)
+                ) c
+                ORDER BY total_points DESC, weighted_points DESC, plays_count DESC,
+                         likes_count DESC, score DESC, seniority ASC
+                LIMIT 50
+            """.replace("__VOTE_WEIGHT_CASE__", voteWeightCase);
         } else {
-            // Artist query - plays are sum of all their songs' plays
             sql = """
-                SELECT 
-                    v.target_id,
-                    COUNT(v.vote_id) as raw_vote_count,
-                    SUM(CASE 
-                        WHEN vi.name = 'Annual' THEN 250
-                        WHEN vi.name = 'Midterm' THEN 200
-                        WHEN vi.name = 'Quarterly' THEN 60
-                        WHEN vi.name = 'Monthly' THEN 25
-                        WHEN vi.name = 'Weekly' THEN 20
-                        WHEN vi.name = 'Daily' THEN 10
-                        ELSE 0
-                    END) as weighted_points,
-                    COALESCE((
-                        SELECT COUNT(*) FROM song_plays sp 
+                SELECT * FROM (
+                    SELECT
+                        u.user_id                          AS target_id,
+                        COALESCE(v.raw_vote_count, 0)      AS raw_vote_count,
+                        COALESCE(v.weighted_points, 0)     AS weighted_points,
+                        COALESCE(p.plays_count, 0)         AS plays_count,
+                        COALESCE(l.likes_count, 0)         AS likes_count,
+                        COALESCE(u.score, 0)               AS score,
+                        u.created_at                       AS seniority,
+                        (COALESCE(p.plays_count, 0) * :playWeight
+                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS engagement_points,
+                        (COALESCE(v.weighted_points, 0)
+                         + COALESCE(p.plays_count, 0) * :playWeight
+                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS total_points
+                    FROM users u
+                    LEFT JOIN (
+                        SELECT
+                            v.target_id,
+                            COUNT(v.vote_id) AS raw_vote_count,
+                            __VOTE_WEIGHT_CASE__ AS weighted_points
+                        FROM votes v
+                        JOIN voting_intervals vi ON v.interval_id = vi.interval_id
+                        WHERE v.target_type = 'artist'
+                          AND v.genre_id = :genreId
+                          AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
+                          AND v.jurisdiction_id IN (:allRelatedJurisdictions)
+                        GROUP BY v.target_id
+                    ) v ON v.target_id = u.user_id
+                    LEFT JOIN (
+                        SELECT song.artist_id, COUNT(*) AS plays_count
+                        FROM song_plays sp
                         JOIN songs song ON sp.song_id = song.song_id
-                        WHERE song.artist_id = v.target_id 
-                        AND sp.played_at IS NOT NULL
-                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-                    ), 0) as plays_count,
-                    COALESCE((
-                        SELECT COUNT(*) FROM likes l 
+                        WHERE sp.played_at IS NOT NULL
+                          AND song.deleted_at IS NULL
+                          AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                        GROUP BY song.artist_id
+                    ) p ON p.artist_id = u.user_id
+                    LEFT JOIN (
+                        SELECT song.artist_id, COUNT(*) AS likes_count
+                        FROM likes l
                         JOIN songs song ON l.media_id = song.song_id
-                        WHERE song.artist_id = v.target_id 
-                        AND l.media_type = 'song'
-                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
-                    ), 0) as likes_count,
-                    COALESCE(u.score, 0) as score,
-                    u.created_at as seniority
-                FROM votes v
-                JOIN voting_intervals vi ON v.interval_id = vi.interval_id
-                JOIN users u ON v.target_id = u.user_id
-                WHERE v.target_type = 'artist'
-                  AND v.genre_id = :genreId
-                  AND Date(v.vote_date) BETWEEN :startDate AND :endDate
-                  AND (u.deleted_at IS NULL)
-                  AND v.jurisdiction_id IN (:allRelatedJurisdictions)
-                  AND u.jurisdiction_id IN (:thisAndChildren)
-                GROUP BY v.target_id, u.score, u.created_at
-                ORDER BY weighted_points DESC, plays_count DESC, likes_count DESC, score DESC, seniority ASC
-            """;
+                        WHERE l.media_type = 'song'
+                          AND song.deleted_at IS NULL
+                          AND DATE(l.created_at) BETWEEN :startDate AND :endDate
+                        GROUP BY song.artist_id
+                    ) l ON l.artist_id = u.user_id
+                    WHERE u.role = 'artist'
+                      AND u.deleted_at IS NULL
+                      AND u.jurisdiction_id IN (:thisAndChildren)
+                      AND (u.genre_id = :genreId OR v.raw_vote_count IS NOT NULL)
+                ) c
+                ORDER BY total_points DESC, weighted_points DESC, plays_count DESC,
+                         likes_count DESC, score DESC, seniority ASC
+                LIMIT 50
+            """.replace("__VOTE_WEIGHT_CASE__", voteWeightCase);
         }
 
         Query query = entityManager.createNativeQuery(sql);
@@ -579,128 +655,37 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         query.setParameter("genreId", genreId);
         query.setParameter("startDate", startDate);
         query.setParameter("endDate", endDate);
+        query.setParameter("playWeight", PLAY_WEIGHT);
+        query.setParameter("likeWeight", LIKE_WEIGHT);
 
         List<Object[]> results = query.getResultList();
-        
+
         List<CandidateResult> candidates = new ArrayList<>();
         for (Object[] row : results) {
             CandidateResult candidate = new CandidateResult();
-            candidate.targetId = (UUID) row[0];
-            candidate.rawVoteCount = ((Number) row[1]).intValue();
-            candidate.weightedPoints = ((Number) row[2]).intValue();
-            candidate.playsCount = ((Number) row[3]).intValue();
-            candidate.likesCount = ((Number) row[4]).intValue();
-            candidate.score = ((Number) row[5]).intValue();
-            candidate.seniority = row[6] != null ? ((java.sql.Timestamp) row[6]).toLocalDateTime() : LocalDateTime.now();
+            candidate.targetId         = (UUID) row[0];
+            candidate.rawVoteCount     = ((Number) row[1]).intValue();
+            candidate.weightedPoints   = ((Number) row[2]).intValue();
+            candidate.playsCount       = ((Number) row[3]).intValue();
+            candidate.likesCount       = ((Number) row[4]).intValue();
+            candidate.score            = ((Number) row[5]).intValue();
+            candidate.seniority        = row[6] != null
+                    ? ((java.sql.Timestamp) row[6]).toLocalDateTime()
+                    : LocalDateTime.now();
+            candidate.engagementPoints = ((Number) row[7]).intValue();
+            candidate.totalPoints      = ((Number) row[8]).intValue();
             candidates.add(candidate);
         }
 
-        System.out.println("Found " + candidates.size() + " candidates with weighted votes for " + targetType);
+        System.out.println("Ranked " + candidates.size() + " candidate(s) for " + targetType);
         if (!candidates.isEmpty()) {
             CandidateResult top = candidates.get(0);
-            System.out.println("Top candidate: " + top.targetId + " with " + top.weightedPoints + " weighted points, " +
-                              top.playsCount + " plays, " + top.likesCount + " likes, score=" + top.score);
-        }
-        
-        return candidates;
-    }
-
-    /**
-     * FALLBACK: Get candidates by engagement metrics when no votes exist.
-     * Uses same tiebreaker cascade: plays → likes → score → seniority
-     */
-    @SuppressWarnings("unchecked")
-    private List<CandidateResult> getCandidatesByEngagement(String targetType, UUID jurisdictionId, 
-                                                             UUID genreId, LocalDate startDate, 
-                                                             LocalDate endDate) {
-        List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
-
-        System.out.println("FALLBACK: Querying " + targetType + "s by engagement from " + 
-                          thisAndChildren.size() + " jurisdictions");
-
-        String sql;
-        
-        if ("song".equals(targetType)) {
-            sql = """
-                SELECT 
-                    s.song_id as target_id,
-                    0 as raw_vote_count,
-                    0 as weighted_points,
-                    COALESCE((
-                        SELECT COUNT(*) FROM song_plays sp 
-                        WHERE sp.song_id = s.song_id 
-                        AND sp.played_at IS NOT NULL
-                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-                    ), 0) as plays_count,
-                    COALESCE((
-                        SELECT COUNT(*) FROM likes l 
-                        WHERE l.media_id = s.song_id 
-                        AND l.media_type = 'song'
-                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
-                    ), 0) as likes_count,
-                    COALESCE(s.score, 0) as score,
-                    s.created_at as seniority
-                FROM songs s
-                JOIN users artist ON s.artist_id = artist.user_id
-                WHERE s.genre_id = :genreId
-                  AND artist.jurisdiction_id IN (:thisAndChildren)
-                ORDER BY plays_count DESC, likes_count DESC, score DESC, seniority ASC
-                LIMIT 10
-            """;
-        } else {
-            sql = """
-                SELECT 
-                    u.user_id as target_id,
-                    0 as raw_vote_count,
-                    0 as weighted_points,
-                    COALESCE((
-                        SELECT COUNT(*) FROM song_plays sp 
-                        JOIN songs song ON sp.song_id = song.song_id
-                        WHERE song.artist_id = u.user_id 
-                        AND sp.played_at IS NOT NULL
-                        AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-                    ), 0) as plays_count,
-                    COALESCE((
-                        SELECT COUNT(*) FROM likes l 
-                        JOIN songs song ON l.media_id = song.song_id
-                        WHERE song.artist_id = u.user_id 
-                        AND l.media_type = 'song'
-                        AND DATE(l.created_at) BETWEEN :startDate AND :endDate
-                    ), 0) as likes_count,
-                    COALESCE(u.score, 0) as score,
-                    u.created_at as seniority
-                FROM users u
-                WHERE u.role = 'artist'
-                  AND u.genre_id = :genreId
-                  AND u.deleted_at IS NULL
-                  AND u.jurisdiction_id IN (:thisAndChildren)
-                ORDER BY plays_count DESC, likes_count DESC, score DESC, seniority ASC
-                LIMIT 10
-            """;
+            System.out.println("Leader: " + top.targetId + " — total " + top.totalPoints +
+                              " (" + top.weightedPoints + " vote pts from " + top.rawVoteCount +
+                              " votes, " + top.engagementPoints + " engagement pts from " +
+                              top.playsCount + " plays / " + top.likesCount + " likes)");
         }
 
-        Query query = entityManager.createNativeQuery(sql);
-        query.setParameter("thisAndChildren", thisAndChildren);
-        query.setParameter("genreId", genreId);
-        query.setParameter("startDate", startDate);
-        query.setParameter("endDate", endDate);
-
-        List<Object[]> results = query.getResultList();
-        
-        List<CandidateResult> candidates = new ArrayList<>();
-        for (Object[] row : results) {
-            CandidateResult candidate = new CandidateResult();
-            candidate.targetId = (UUID) row[0];
-            candidate.rawVoteCount = ((Number) row[1]).intValue();
-            candidate.weightedPoints = ((Number) row[2]).intValue();
-            candidate.playsCount = ((Number) row[3]).intValue();
-            candidate.likesCount = ((Number) row[4]).intValue();
-            candidate.score = ((Number) row[5]).intValue();
-            candidate.seniority = row[6] != null ? ((java.sql.Timestamp) row[6]).toLocalDateTime() : LocalDateTime.now();
-            candidates.add(candidate);
-        }
-
-        System.out.println("FALLBACK: Found " + candidates.size() + " candidate(s) by engagement for " + targetType);
         return candidates;
     }
 
@@ -709,64 +694,79 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     // =========================================================================
 
     /**
-     * Determine winner using the full tiebreaker cascade:
-     * 1. Weighted vote points (primary)
-     * 2. Song plays during interval
-     * 3. Likes during interval
-     * 4. Platform score
-     * 5. Seniority (oldest wins)
+     * Determine the winner from the ranked list.
+     *
+     * The list arrives already sorted by the SQL, so candidates.get(0) is the
+     * winner. This method's real job is to record HOW they won, for the audit
+     * trail and the Milestones badge.
+     *
+     * Order: total points → vote points → plays → likes → score → seniority.
+     *
+     * determinationMethod values:
+     *  - "VOTES"       clear win on total, votes were the larger half of it
+     *  - "ENGAGEMENT"  clear win on total, plays/likes were the larger half
+     *  - "VOTE_POINTS" tied on total, taken by the candidate with more vote points
+     *  - "PLAYS" / "LIKES" / "SCORE" / "SENIORITY"  further tiebreakers
+     *  - "NO_ACTIVITY" nothing happened in this category at all; the winner is
+     *                  whoever leads on lifetime score, then seniority
+     *
+     * "WEIGHTED_VOTES" and "FALLBACK" are retired but still exist on historical
+     * rows, so the frontend keeps rendering them.
      */
     private WinnerResult determineWinner(List<CandidateResult> candidates) {
         if (candidates.isEmpty()) {
             return null;
         }
 
-        CandidateResult topCandidate = candidates.get(0);
-        
+        CandidateResult top = candidates.get(0);
+
         WinnerResult winner = new WinnerResult();
-        winner.targetId = topCandidate.targetId;
-        winner.rawVoteCount = topCandidate.rawVoteCount;
-        winner.weightedPoints = topCandidate.weightedPoints;
-        winner.playsCount = topCandidate.playsCount;
-        winner.likesCount = topCandidate.likesCount;
-        winner.score = topCandidate.score;
-        winner.seniority = topCandidate.seniority;
+        winner.targetId         = top.targetId;
+        winner.rawVoteCount     = top.rawVoteCount;
+        winner.weightedPoints   = top.weightedPoints;
+        winner.engagementPoints = top.engagementPoints;
+        winner.totalPoints      = top.totalPoints;
+        winner.playsCount       = top.playsCount;
+        winner.likesCount       = top.likesCount;
+        winner.score            = top.score;
+        winner.seniority        = top.seniority;
 
-        // Check if this is a zero-vote scenario (fallback)
-        if (topCandidate.weightedPoints == 0) {
-            winner.determinationMethod = "FALLBACK";
-            winner.tiedCandidatesCount = 0;
-            return winner;
-        }
-
-        // Count ties at each level
-        int tiedOnWeightedPoints = 0;
-        int tiedOnPlays = 0;
-        int tiedOnLikes = 0;
-        int tiedOnScore = 0;
+        int tiedOnTotal = 0, tiedOnVotePoints = 0, tiedOnPlays = 0, tiedOnLikes = 0, tiedOnScore = 0;
 
         for (CandidateResult c : candidates) {
-            if (c.weightedPoints == topCandidate.weightedPoints) {
-                tiedOnWeightedPoints++;
-                if (c.playsCount == topCandidate.playsCount) {
-                    tiedOnPlays++;
-                    if (c.likesCount == topCandidate.likesCount) {
-                        tiedOnLikes++;
-                        if (c.score == topCandidate.score) {
-                            tiedOnScore++;
+            if (c.totalPoints == top.totalPoints) {
+                tiedOnTotal++;
+                if (c.weightedPoints == top.weightedPoints) {
+                    tiedOnVotePoints++;
+                    if (c.playsCount == top.playsCount) {
+                        tiedOnPlays++;
+                        if (c.likesCount == top.likesCount) {
+                            tiedOnLikes++;
+                            if (c.score == top.score) {
+                                tiedOnScore++;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Determine which level broke the tie
-        if (tiedOnWeightedPoints == 1) {
-            winner.determinationMethod = "WEIGHTED_VOTES";
+        if (top.totalPoints == 0) {
+            // Nothing was voted, played or liked in this category during the
+            // period. Someone is still crowned — an empty jurisdiction should
+            // not show an empty page — but it is labelled honestly.
+            winner.determinationMethod = "NO_ACTIVITY";
+            winner.tiedCandidatesCount = tiedOnTotal > 1 ? tiedOnTotal : 0;
+        } else if (tiedOnTotal == 1) {
+            winner.determinationMethod =
+                    top.weightedPoints >= top.engagementPoints ? "VOTES" : "ENGAGEMENT";
             winner.tiedCandidatesCount = 0;
+        } else if (tiedOnVotePoints == 1) {
+            winner.determinationMethod = "VOTE_POINTS";
+            winner.tiedCandidatesCount = tiedOnTotal;
         } else if (tiedOnPlays == 1) {
             winner.determinationMethod = "PLAYS";
-            winner.tiedCandidatesCount = tiedOnWeightedPoints;
+            winner.tiedCandidatesCount = tiedOnVotePoints;
         } else if (tiedOnLikes == 1) {
             winner.determinationMethod = "LIKES";
             winner.tiedCandidatesCount = tiedOnPlays;
@@ -778,8 +778,9 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
             winner.tiedCandidatesCount = tiedOnScore;
         }
 
-        System.out.println("Winner determination: " + winner.determinationMethod + 
-                          " (tied candidates: " + winner.tiedCandidatesCount + ")");
+        System.out.println("Winner determination: " + winner.determinationMethod +
+                          " (total " + winner.totalPoints + ", tied candidates: " +
+                          winner.tiedCandidatesCount + ")");
 
         return winner;
     }
@@ -1225,7 +1226,9 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     private static class CandidateResult {
         UUID targetId;
         int rawVoteCount;
-        int weightedPoints;
+        int weightedPoints;      // votes only, weighted by interval
+        int engagementPoints;    // plays * PLAY_WEIGHT + likes * LIKE_WEIGHT
+        int totalPoints;         // weightedPoints + engagementPoints — the ranking figure
         int playsCount;
         int likesCount;
         int score;
@@ -1236,6 +1239,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         UUID targetId;
         int rawVoteCount;
         int weightedPoints;
+        int engagementPoints;
+        int totalPoints;
         int playsCount;
         int likesCount;
         int score;

@@ -38,7 +38,16 @@ public class LeaderboardEntryDto {
     private UUID artistId;
 
     private long votes;
+
+    /** Vote points only. */
     private int weightedPoints;
+
+    /** plays * 1 + likes * 5. */
+    private int engagementPoints;
+
+    /** weightedPoints + engagementPoints — what the row is ranked on. */
+    private int totalPoints;
+
     private int playsCount;
     private int likesCount;
     private boolean isWinner;

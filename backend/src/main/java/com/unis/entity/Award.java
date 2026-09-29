@@ -66,12 +66,18 @@ public class Award {
 
     /**
      * How the winner was determined:
-     * - "WEIGHTED_VOTES" = Won by having the most weighted vote points (no tie)
-     * - "PLAYS" = Tied on weighted votes, won by most plays
-     * - "LIKES" = Tied on weighted votes AND plays, won by most likes
-     * - "SCORE" = Tied on weighted votes, plays, AND likes, won by highest score
-     * - "SENIORITY" = Tied on everything, won by oldest account/song
-     * - "FALLBACK" = No votes cast, showing top by plays/likes/score/seniority
+     * - "VOTES"        = Clear win on total points, votes were the larger share
+     * - "ENGAGEMENT"   = Clear win on total points, plays/likes were the larger share
+     * - "VOTE_POINTS"  = Tied on total points, won on vote points
+     * - "PLAYS"        = Tied on total and vote points, won by most plays
+     * - "LIKES"        = Tied through plays, won by most likes
+     * - "SCORE"        = Tied through likes, won by highest lifetime score
+     * - "SENIORITY"    = Tied on everything, won by oldest account/song
+     * - "NO_ACTIVITY"  = No votes, plays or likes in the period; decided on score/seniority
+     *
+     * Retired but still present on historical rows:
+     * - "WEIGHTED_VOTES" = pre-composite equivalent of "VOTES"
+     * - "FALLBACK"       = pre-composite zero-vote branch
      */
     @Column(name = "determination_method")
     private String determinationMethod;
@@ -104,13 +110,34 @@ public class Award {
     // =========================================================================
 
     /**
-     * Total weighted points from votes.
-     * Calculated as: SUM(vote_weight) where weights are:
+     * Weighted points from VOTES ONLY.
+     * SUM(vote_weight) where weights are:
      * Annual=250, Midterm=200, Quarterly=60, Monthly=25, Weekly=20, Daily=10
+     *
+     * This is no longer the ranking figure on its own — see totalPoints. It is
+     * kept with its original meaning so historical rows stay comparable.
      */
     @Column(name = "weighted_points")
     @Builder.Default
     private Integer weightedPoints = 0;
+
+    /**
+     * Points from engagement during the period:
+     *   plays * 1 + likes * 5
+     */
+    @Column(name = "engagement_points")
+    @Builder.Default
+    private Integer engagementPoints = 0;
+
+    /**
+     * The figure the award was actually decided on:
+     *   weightedPoints + engagementPoints
+     *
+     * Backfilled for pre-existing rows from their stored plays/likes.
+     */
+    @Column(name = "total_points")
+    @Builder.Default
+    private Integer totalPoints = 0;
 
     /**
      * Total song plays during the interval (used for tiebreaker #2).
@@ -160,16 +187,28 @@ public class Award {
         }
         
         switch (determinationMethod) {
-            case "WEIGHTED_VOTES":
-                return "Winner by weighted votes (" + weightedPoints + " points)";
+            case "VOTES":
+                return "Winner on " + totalPoints + " points, led by votes ("
+                     + weightedPoints + " of them)";
+            case "ENGAGEMENT":
+                return "Winner on " + totalPoints + " points, led by engagement ("
+                     + engagementPoints + " of them)";
+            case "VOTE_POINTS":
+                return "Tiebreaker: more vote points (" + tiedCandidatesCount
+                     + " tied on " + totalPoints + " total)";
             case "PLAYS":
-                return "Tiebreaker: most plays (" + tiedCandidatesCount + " tied on " + weightedPoints + " points)";
+                return "Tiebreaker: most plays (" + tiedCandidatesCount + " tied on "
+                     + totalPoints + " points)";
             case "LIKES":
                 return "Tiebreaker: most likes (" + tiedCandidatesCount + " tied on points & plays)";
             case "SCORE":
                 return "Tiebreaker: highest score (" + tiedCandidatesCount + " tied on points, plays & likes)";
             case "SENIORITY":
                 return "Tiebreaker: oldest account (" + tiedCandidatesCount + " tied on all metrics)";
+            case "NO_ACTIVITY":
+                return "No votes, plays or likes this period - decided on score and seniority";
+            case "WEIGHTED_VOTES":
+                return "Winner by weighted votes (" + weightedPoints + " points)";
             case "FALLBACK":
                 return "No votes cast - top performer by engagement";
             default:
