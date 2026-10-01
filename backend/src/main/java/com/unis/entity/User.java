@@ -28,6 +28,11 @@ public class User {
     @Column(unique = true, nullable = false)
     private String email;
 
+    // Never serialized. /api/v1/users/profile/{id} is public and returns this
+    // entity, so without this every account's bcrypt hash was readable by anyone
+    // who had a user id (they're in every profile URL). Server code reads the
+    // field through the getter as before.
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
@@ -103,9 +108,17 @@ public class User {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    // Never serialized (public profile endpoint). The app reads
+    // stripeOnboardingComplete, never the account id itself.
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "stripe_account_id")
     private String stripeAccountId;
 
+    // Never serialized: /api/v1/users/profile/{id} is public and returns this
+    // entity, and the signup wizard promises DOB is "never shown publicly".
+    // Leaving it in the JSON also told anyone exactly which accounts are minors,
+    // defeating the under-18 photo safeguard. Server code reads it directly.
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "date_of_birth")
     private LocalDate dateOfBirth;
 
@@ -158,6 +171,9 @@ public class User {
     // Per-user token for one-click email unsubscribe (clicked from an email,
     // so it can't rely on a session -- the unguessable token is the auth).
     // updatable=false: it's assigned once at creation and never rotated here.
+    // Never serialized: this token IS the auth for one-click unsubscribe, and the
+    // public profile endpoint returns this entity. It only belongs in emails.
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Builder.Default
     @Column(name = "unsubscribe_token", nullable = false, unique = true, updatable = false)
     private UUID unsubscribeToken = UUID.randomUUID();

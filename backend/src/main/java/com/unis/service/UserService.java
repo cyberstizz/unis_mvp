@@ -565,6 +565,10 @@ public class UserService {
         // 7. Delete all likes (user preferences)
         likeRepository.deleteByUserUserId(currentUserId);
 
+        // 7b. Delete likes this user left on profile photos (soft delete keeps
+        //     the users row, so the ON DELETE CASCADE on photo_likes never fires)
+        jdbcTemplate.update("DELETE FROM photo_likes WHERE user_id = ?", currentUserId);
+
         // 8. Delete all ad views (activity logs)
         adViewRepository.deleteByUserUserId(currentUserId);
 

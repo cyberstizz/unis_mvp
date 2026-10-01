@@ -232,6 +232,43 @@ Identical structure to `song_plays` with `video_id` instead of `song_id`. Same i
 
 ---
 
+### `artist_photos`
+
+Profile gallery photos for **both** artists and listeners (the name predates listener galleries). One row per photo; the file lives in Cloudflare R2.
+
+| Column | Type | Nullable | Default | Constraint |
+|--------|------|----------|---------|------------|
+| `photo_id` | uuid | NOT NULL | generated | PRIMARY KEY |
+| `artist_id` | uuid | NOT NULL | — | Owner's `users.user_id` (any role) |
+| `photo_url` | varchar | NOT NULL | — | R2 URL |
+| `position` | integer | NOT NULL | `0` | Upload order |
+| `created_at` | timestamp | NOT NULL | now | |
+
+**Notes:**
+- Cap of 15 per owner lives in `ArtistPhotoService.MAX_PHOTOS`
+- Who can see a gallery is decided in code, not the schema — see `ArtistPhotoService.canView` (under-18 / no-DOB listener / "Public profile" off → owner + mutual follows only)
+
+---
+
+### `photo_likes`
+
+Likes on gallery photos. Added by `backend/sql/V2026_09__photo_likes.sql` (hand-applied). **Separate from `likes` on purpose:** photo likes award no points and must never be counted by song/artist scoring, which reads `likes`.
+
+| Column | Type | Nullable | Default | Constraint |
+|--------|------|----------|---------|------------|
+| `photo_id` | uuid | NOT NULL | — | FOREIGN KEY → `artist_photos` ON DELETE CASCADE |
+| `user_id` | uuid | NOT NULL | — | FOREIGN KEY → `users` ON DELETE CASCADE |
+| `created_at` | timestamp | NOT NULL | `now()` | |
+
+**Primary Key:** `(photo_id, user_id)` — one like per person per photo; also serves per-photo counts.
+**Indexes:** `idx_photo_likes_user` on `user_id` (account deletion).
+
+**Notes:**
+- Deleting a photo removes its likes via the cascade
+- Account deletion is a soft delete, so `UserService.deleteCurrentUserAndAllData` removes the user's photo likes explicitly
+
+---
+
 ### `comments`
 
 | Column | Type | Nullable | Default | Constraint |

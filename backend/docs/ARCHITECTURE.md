@@ -431,6 +431,20 @@ Lookup/reference entities. `Genre`: `genreId`, `name`, `createdAt`. `VotingInter
 - N+1 in `getArtistsWithPreview` — still present
 - `PATCH /profile/photo` temp endpoint — remove or secure before launch (L16)
 
+### `ArtistPhotoController.java`
+
+Profile gallery photos for artists and listeners.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/users/{ownerId}/photos` | Public route, gated per viewer | `{ photos, max, hidden, visibility? }` — each photo carries `likeCount` + `likedByMe` |
+| POST | `/api/v1/users/{ownerId}/photos` | Required + Ownership | Upload one photo (multipart `file`), 10MB, cap 15 |
+| DELETE | `/api/v1/users/{ownerId}/photos/{photoId}` | Required + Ownership | Delete photo (its likes cascade) |
+| POST | `/api/v1/users/{ownerId}/photos/{photoId}/like` | Required | Like (idempotent) → `{ liked, likeCount }` |
+| DELETE | `/api/v1/users/{ownerId}/photos/{photoId}/like` | Required | Unlike (idempotent) → `{ liked, likeCount }` |
+
+**Visibility (under-18 safeguard):** a gallery is restricted when the owner is under 18, is a listener with no date of birth on file, or has "Public profile" off. Restricted galleries are visible only to the owner and mutual follows; guests never see them. Blocked viewers and soft-deleted owners see nothing. Non-owners get `hidden: true` with no reason (so "private" and "under 18" look identical); the owner gets `visibility` (`everyone | private | under18 | noBirthdate`). Likes use the same gate and return 404 when the viewer can't see the photo. Photo likes award **no points**.
+
 ---
 
 ### `MediaController.java`
