@@ -1,0 +1,104 @@
+name: Daily database backup
+
+on:
+  schedule:
+    # 08:30 UTC = 4:30 AM EDT / 3:30 AM EST.
+    # Runs after the midnight-Eastern award and territory-rank jobs have finished.
+    - cron: "30 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      HEARTBEAT_URL: ${{ secrets.BACKUP_HEARTBEAT_URL }}
+
+    steps:
+      - name: Check that all required secrets are set
+        run: |
+          missing=0
+          for name in DATABASE_URL R2_ACCOUNT_ID R2_BUCKET AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::A required secret is missing (the one feeding $name)."
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Add the official PostgreSQL apt repository
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+
+      - name: Install the pg_dump version that matches the Supabase server
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq postgresql-client > /dev/null
+          SERVER_NUM=$(psql "$DATABASE_URL" -tAc "SHOW server_version_num")
+          MAJOR=$((SERVER_NUM / 10000))
+          echo "Supabase Postgres major version: $MAJOR"
+          sudo apt-get install -y -qq "postgresql-client-$MAJOR" > /dev/null
+          echo "PG_BIN=/usr/lib/postgresql/$MAJOR/bin" >> "$GITHUB_ENV"
+
+      - name: Dump the public schema
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+          FILE="unis-${STAMP}.dump"
+          "$PG_BIN/pg_dump" "$DATABASE_URL" \
+            --format=custom \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --file="$FILE"
+          TABLES=$("$PG_BIN/pg_restore" --list "$FILE" | grep -c " TABLE DATA public " || true)
+          SIZE=$(stat -c %s "$FILE")
+          echo "Tables with data in this backup: $TABLES"
+          echo "Backup size: $SIZE bytes"
+          if [ "$TABLES" -lt 10 ]; then
+            echo "::error::Backup looks incomplete (only $TABLES tables). Not uploading it."
+            exit 1
+          fi
+          echo "BACKUP_FILE=$FILE" >> "$GITHUB_ENV"
+
+      - name: Upload to Cloudflare R2 and confirm it arrived intact
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          KEY="daily/${BACKUP_FILE}"
+          aws s3 cp "$BACKUP_FILE" "s3://${R2_BUCKET}/${KEY}" \
+            --endpoint-url "$ENDPOINT" --only-show-errors
+          REMOTE_SIZE=$(aws s3api head-object --bucket "$R2_BUCKET" --key "$KEY" \
+            --endpoint-url "$ENDPOINT" --query ContentLength --output text)
+          LOCAL_SIZE=$(stat -c %s "$BACKUP_FILE")
+          if [ "$REMOTE_SIZE" != "$LOCAL_SIZE" ]; then
+            echo "::error::Uploaded size ($REMOTE_SIZE) does not match local size ($LOCAL_SIZE)."
+            exit 1
+          fi
+          echo "Uploaded ${KEY} (${REMOTE_SIZE} bytes)"
+
+      - name: Tell the backup monitor this run succeeded
+        if: env.HEARTBEAT_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEARTBEAT_URL" > /dev/null
