@@ -1,0 +1,165 @@
+name: Restore drill
+
+# Takes a backup out of Cloudflare R2 and rebuilds a database from it, in a
+# throwaway Supabase project, so you know the backups actually work.
+# This NEVER touches the live Unis database.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DRILL to confirm this wipes the restore-drill database'
+        required: true
+        default: ''
+      backup_key:
+        description: 'Backup to restore (leave as "latest" for the newest one)'
+        required: true
+        default: 'latest'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restore-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_URL: ${{ secrets.RESTORE_DATABASE_URL }}
+      SOURCE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+    steps:
+      - name: Safety checks before touching anything
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.confirm }}" != "DRILL" ]; then
+            echo "::error::You must type DRILL in the confirm box to run this."
+            exit 1
+          fi
+          if [ -z "$TARGET_URL" ]; then
+            echo "::error::RESTORE_DATABASE_URL secret is not set."
+            exit 1
+          fi
+          if [ "$TARGET_URL" = "$SOURCE_URL" ]; then
+            echo "::error::The restore target is the SAME database as the live one. Stopping."
+            exit 1
+          fi
+          echo "Safety checks passed."
+          echo "DRILL_START=$(date -u +%s)" >> "$GITHUB_ENV"
+
+      - name: Add the official PostgreSQL apt repository
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+
+      - name: Install the matching PostgreSQL client tools
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq postgresql-client > /dev/null
+          SERVER_NUM=$(psql "$TARGET_URL" -tAc "SHOW server_version_num")
+          MAJOR=$((SERVER_NUM / 10000))
+          echo "Restore target Postgres major version: $MAJOR"
+          sudo apt-get install -y -qq "postgresql-client-$MAJOR" > /dev/null
+          echo "PG_BIN=/usr/lib/postgresql/$MAJOR/bin" >> "$GITHUB_ENV"
+
+      - name: Find and download the backup
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          REQUESTED="${{ github.event.inputs.backup_key }}"
+          if [ "$REQUESTED" = "latest" ]; then
+            KEY=$(aws s3api list-objects-v2 \
+              --bucket "$R2_BUCKET" --prefix "daily/" \
+              --endpoint-url "$ENDPOINT" \
+              --query 'sort_by(Contents, &LastModified)[-1].Key' --output text)
+            if [ -z "$KEY" ] || [ "$KEY" = "None" ]; then
+              echo "::error::No backups found under daily/ in the bucket."
+              exit 1
+            fi
+          else
+            KEY="$REQUESTED"
+          fi
+          echo "Restoring from: $KEY"
+          aws s3 cp "s3://${R2_BUCKET}/${KEY}" ./backup.dump \
+            --endpoint-url "$ENDPOINT" --only-show-errors
+          echo "Downloaded $(stat -c %s ./backup.dump) bytes"
+          echo "RESTORED_FROM=$KEY" >> "$GITHUB_ENV"
+
+      - name: Check the backup file is readable before restoring
+        run: |
+          set -euo pipefail
+          TABLES=$("$PG_BIN/pg_restore" --list ./backup.dump | grep -c " TABLE DATA public " || true)
+          echo "The backup file contains $TABLES tables with data."
+          if [ "$TABLES" -lt 10 ]; then
+            echo "::error::This backup looks incomplete. Stopping before restore."
+            exit 1
+          fi
+
+      - name: Empty the drill database
+        run: |
+          set -euo pipefail
+          psql "$TARGET_URL" -v ON_ERROR_STOP=1 -c \
+            "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
+          echo "Drill database emptied and ready."
+
+      - name: Restore the backup
+        run: |
+          set -euo pipefail
+          START=$(date -u +%s)
+          set +e
+          "$PG_BIN/pg_restore" \
+            --dbname="$TARGET_URL" \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --exit-on-error=0 \
+            ./backup.dump 2> restore-errors.log
+          set -e
+          END=$(date -u +%s)
+          echo "RESTORE_SECONDS=$((END - START))" >> "$GITHUB_ENV"
+          echo "Restore finished in $((END - START)) seconds."
+          if [ -s restore-errors.log ]; then
+            echo "--- messages from the restore (some are normal) ---"
+            tail -40 restore-errors.log
+          fi
+
+      - name: Count the rows that landed
+        run: |
+          set -euo pipefail
+          psql "$TARGET_URL" -v ON_ERROR_STOP=1 -P pager=off -c "
+            SELECT table_name,
+                   (xpath('/row/cnt/text()', xml_count))[1]::text::bigint AS rows
+            FROM (
+              SELECT table_name,
+                     query_to_xml(format('SELECT count(*) AS cnt FROM public.%I', table_name),
+                                  false, true, '') AS xml_count
+              FROM information_schema.tables
+              WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            ) t
+            ORDER BY rows DESC, table_name;"
+
+      - name: Summary
+        if: always()
+        run: |
+          TOTAL=$(( $(date -u +%s) - DRILL_START ))
+          echo "## Restore drill result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backup used: \`${RESTORED_FROM:-unknown}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Restore took: ${RESTORE_SECONDS:-unknown} seconds" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Whole drill took: ${TOTAL} seconds" >> "$GITHUB_STEP_SUMMARY"
