@@ -1,9 +1,98 @@
-name: Restore drill
 
+Claude finished the response
+Screen Shot 2026-10-04 at 11.57.59 PM.png
+hmmm. it seems to have failed. here is some of the message in the logs "6s
+5s
+Run set -euo pipefail
+Running kernel seems to be up-to-date.
+No services need to be restarted.
+No containers need to be restarted.
+No user sessions are running outdated binaries.
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+psql: error: connection to server at "db.crunkhtbxzchotvbwlkz.supabase.co" (2600:1f18:3036:4e00:a8ed:963c:9636:8d56), port 5432 failed: Network is unreachable
+    Is the server running on that host and accepting TCP/IP connections?
+Error: Process completed with exit code
+0s
+0s
+0s
+0s
+0s
+0s
+0s" also here is a screenshot of the full message on my computer screen
+
+Diagnosing a database connection error involving host configuration.
+Diagnosing a database connection error involving host configuration.
+Good news: it failed at the earliest possible point, before downloading or erasing anything. Nothing was touched.
+
+The cause: when you copied the connection string, you got the Direct connection one rather than the Session pooler one. You can see it in the error, db.crunkhtbxzchotvbwlkz.supabase.co. Supabase's direct connection only works over the newer style of internet addressing called IPv6, and GitHub's machines don't have it. That's exactly what "Network is unreachable" means. The pooler works over the older style that GitHub does have, which is why the backup workflow connects fine.
+
+A quick way to tell them apart:
+
+Wrong one contains db. and ends in .supabase.co
+Right one contains pooler.supabase.com
+Get the correct string
+Go to supabase.com/dashboard and open the unis-restore-drill project. Check the organization switcher at the top left says Lamb Services DR, so you're definitely not in the Unis project.
+Click Connect at the top of the page.
+A panel opens showing several connection options. Scroll down past Direct connection and Transaction pooler until you reach Session pooler. Copy the string from that section.
+Confirm it contains pooler.supabase.com. If it doesn't, you've got the wrong section.
+Replace [YOUR-PASSWORD] with the password you set when creating the project. If that password contains any of @ # / ? : %, tell me before continuing, since those characters have to be written specially.
+Replace the secret
+GitHub won't let you view an existing secret, only overwrite it.
+
+GitHub → unis_mvp → Settings → Secrets and variables → Actions.
+Find RESTORE_DATABASE_URL in the list and click the pencil icon next to it.
+Paste the new string into the value box, replacing what's there.
+Click Update secret.
+Run it again
+Actions tab → Restore drill in the left column → Run workflow.
+Type DRILL in the confirm box, leave the other box as latest, and click the green Run workflow button.
+This time it should get past the client-install step, which is where it reads the database version. Watch for the Count the rows that landed step and send me what it prints.
+
+ok great it succesfully completed in 24 seconds. does this mean i am done? i mean it is exciting but please explain why checking the backup supabase account(the one wired throught the connection string) using lambservices gmail as an email still shows no tables in the table editor? is that normal and this is still some type of compressed dump or should i see the tables? I was under the impression that I would be able to. but if now I am ready for the final step to close this out after a long day
+
+Investigating why a quick restore left no visible tables.
+Investigating why a quick restore left no visible tables.
+No, you're not done, and your instinct is right. You should see your tables in the Table Editor. An empty Table Editor means nothing was actually restored.
+
+This is a bug in the file I gave you. I used --exit-on-error=0 on the restore command. That option doesn't accept a value, so Postgres rejected the whole command and quit instantly. I'd also written that step to tolerate errors and send them to a log file, so the failure was swallowed and the run went green. Then the counting step found no tables, printed nothing, and also reported success. A 24-second run is the giveaway: a real restore of your database would take longer than that.
+
+That's two mistakes worth naming. The flag was wrong, and the verification was too weak to catch it. A drill whose whole purpose is proving the backup works should fail loudly when nothing lands. Let me fix both.
+
+Ran 3 commands, shared files
+To answer the question directly: the dump file is compressed, but a restore unpacks it into real tables you can browse. Once this works, the Table Editor will show the same tables as your Unis project, filled with the same data. Empty means it didn't happen.
+
+The corrected file does two things differently. The restore command no longer carries the bad option, and the counting step now checks that at least 10 tables exist, failing the run if they don't. Green will mean something from now on.
+
+Replace the file on GitHub
+Go to github.com/cyberstizz/unis_mvp.
+Click the .github folder, then workflows, then restore-drill.yml.
+Near the top right of the file, click the pencil icon to edit it.
+Click anywhere in the text area, select everything with Command + A, and delete it.
+Open the newly downloaded restore-drill.yml in TextEdit, select all with Command + A, copy with Command + C, then paste into the empty GitHub editor with Command + V.
+Click Commit changes..., then Commit changes.
+Run it again
+Actions tab → Restore drill in the left column → Run workflow.
+Type DRILL, leave the other box as latest, click the green Run workflow.
+Expect this one to take noticeably longer than 24 seconds. If it fails this time, the failure is real information: it means your backup genuinely can't be restored, which is exactly what we need to find out now rather than during an outage.
+
+When it finishes, check both places. In the run log, the Count the rows that landed step should print a list of your tables with row counts. In Supabase, open the unis-restore-drill project's Table Editor and reload the page. Your tables should be there.
+
+Send me the row counts when you have them. After that it's just the runbook, which is writing rather than setup.
+
+
+Restore drill
+YML 
+
+
+
+Claude is AI and can make mistakes.
+Restore drill · YML
+name: Restore drill
+ 
 # Takes a backup out of Cloudflare R2 and rebuilds a database from it, in a
 # throwaway Supabase project, so you know the backups actually work.
 # This NEVER touches the live Unis database.
-
+ 
 on:
   workflow_dispatch:
     inputs:
@@ -15,14 +104,14 @@ on:
         description: 'Backup to restore (leave as "latest" for the newest one)'
         required: true
         default: 'latest'
-
+ 
 permissions:
   contents: read
-
+ 
 concurrency:
   group: restore-drill
   cancel-in-progress: false
-
+ 
 jobs:
   drill:
     runs-on: ubuntu-24.04
@@ -37,7 +126,7 @@ jobs:
       AWS_DEFAULT_REGION: auto
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
       AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-
+ 
     steps:
       - name: Safety checks before touching anything
         run: |
@@ -56,7 +145,7 @@ jobs:
           fi
           echo "Safety checks passed."
           echo "DRILL_START=$(date -u +%s)" >> "$GITHUB_ENV"
-
+ 
       - name: Add the official PostgreSQL apt repository
         run: |
           set -euo pipefail
@@ -67,7 +156,7 @@ jobs:
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
           sudo apt-get update -qq
-
+ 
       - name: Install the matching PostgreSQL client tools
         run: |
           set -euo pipefail
@@ -77,7 +166,7 @@ jobs:
           echo "Restore target Postgres major version: $MAJOR"
           sudo apt-get install -y -qq "postgresql-client-$MAJOR" > /dev/null
           echo "PG_BIN=/usr/lib/postgresql/$MAJOR/bin" >> "$GITHUB_ENV"
-
+ 
       - name: Find and download the backup
         run: |
           set -euo pipefail
@@ -100,7 +189,7 @@ jobs:
             --endpoint-url "$ENDPOINT" --only-show-errors
           echo "Downloaded $(stat -c %s ./backup.dump) bytes"
           echo "RESTORED_FROM=$KEY" >> "$GITHUB_ENV"
-
+ 
       - name: Check the backup file is readable before restoring
         run: |
           set -euo pipefail
@@ -110,14 +199,14 @@ jobs:
             echo "::error::This backup looks incomplete. Stopping before restore."
             exit 1
           fi
-
+ 
       - name: Empty the drill database
         run: |
           set -euo pipefail
           psql "$TARGET_URL" -v ON_ERROR_STOP=1 -c \
             "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
           echo "Drill database emptied and ready."
-
+ 
       - name: Restore the backup
         run: |
           set -euo pipefail
@@ -125,23 +214,37 @@ jobs:
           set +e
           "$PG_BIN/pg_restore" \
             --dbname="$TARGET_URL" \
-            --schema=public \
             --no-owner \
             --no-privileges \
-            --exit-on-error=0 \
             ./backup.dump 2> restore-errors.log
+          PG_STATUS=$?
           set -e
           END=$(date -u +%s)
+          echo "pg_restore exit status: $PG_STATUS"
+          if grep -qiE "unrecognized option|invalid option|doesn't allow an argument|too many command-line" restore-errors.log; then
+            echo "::error::pg_restore rejected its own options - nothing was restored."
+            cat restore-errors.log
+            exit 1
+          fi
           echo "RESTORE_SECONDS=$((END - START))" >> "$GITHUB_ENV"
           echo "Restore finished in $((END - START)) seconds."
           if [ -s restore-errors.log ]; then
             echo "--- messages from the restore (some are normal) ---"
-            tail -40 restore-errors.log
+            tail -60 restore-errors.log
           fi
-
+ 
       - name: Count the rows that landed
         run: |
           set -euo pipefail
+          TABLES=$(psql "$TARGET_URL" -tAc \
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';")
+          echo "Tables now present in the drill database: $TABLES"
+          if [ "$TABLES" -lt 10 ]; then
+            echo "::error::Only $TABLES tables exist after the restore. The restore did NOT work."
+            echo "--- restore messages ---"
+            cat restore-errors.log || true
+            exit 1
+          fi
           psql "$TARGET_URL" -v ON_ERROR_STOP=1 -P pager=off -c "
             SELECT table_name,
                    (xpath('/row/cnt/text()', xml_count))[1]::text::bigint AS rows
@@ -153,7 +256,7 @@ jobs:
               WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
             ) t
             ORDER BY rows DESC, table_name;"
-
+ 
       - name: Summary
         if: always()
         run: |
@@ -163,3 +266,4 @@ jobs:
           echo "- Backup used: \`${RESTORED_FROM:-unknown}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Restore took: ${RESTORE_SECONDS:-unknown} seconds" >> "$GITHUB_STEP_SUMMARY"
           echo "- Whole drill took: ${TOTAL} seconds" >> "$GITHUB_STEP_SUMMARY"
+ 
