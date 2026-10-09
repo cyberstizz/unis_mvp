@@ -78,6 +78,9 @@ public class PlaylistDtos {
         private int followerCount;
         private boolean isFollowing;
         private boolean isOwner;
+        // Points this playlist paid its owner (community start + 10-follower
+        // milestone). Deleting the playlist takes these back. 0 for non-owners.
+        private int ownerPointsEarned;
 
         private List<TrackResponse> tracks;
 
@@ -102,6 +105,8 @@ public class PlaylistDtos {
         private int position;
         private LocalDateTime addedAt;
         private String addedByUsername;
+        private UUID addedById;           // lets the page hide voting on your own suggestion
+        private String myVote;            // "up", "down", or null — pending list only
 
         // Community playlist fields
         private int upvotes;

@@ -20,6 +20,12 @@ import java.util.UUID;
 
 @Service
 public class ScoreUpdateService {
+
+    // Playlist rewards. Public so PlaylistService takes back exactly what was
+    // paid when a playlist is deleted — the two can never drift apart.
+    public static final int COMMUNITY_PLAYLIST_POINTS = 5;
+    public static final int FOLLOWER_MILESTONE = 10;          // followers needed
+    public static final int FOLLOWER_MILESTONE_POINTS = 10;   // points paid, once per playlist
     @Autowired
     private UserRepository userRepository;
 
@@ -147,19 +153,32 @@ public class ScoreUpdateService {
     @Transactional
     public void onPlaylistCreated(UUID userId, String playlistType) {
         if ("community".equals(playlistType)) {
-            updateUserScoreIncrement(userId, 5);
+            updateUserScoreIncrement(userId, COMMUNITY_PLAYLIST_POINTS);
         }
     }
 
     /**
-     * Called when a playlist reaches a follower milestone.
-     * Awards +10 points to the playlist creator when it hits 10 followers.
-     * This should be called by PlaylistService after incrementing follower count.
+     * Pays the playlist owner the 10-follower bonus.
+     *
+     * PlaylistService decides WHEN: it calls this only after atomically flipping
+     * the playlist's followerMilestoneAwarded flag, so the bonus is paid once per
+     * playlist, ever. (Previously this paid whenever the count landed on exactly
+     * 10, so an unfollow and re-follow at 9 paid it again every time.)
      */
     @Transactional
-    public void onPlaylistFollowerMilestone(UUID creatorId, int newFollowerCount) {
-        if (newFollowerCount == 10) {
-            updateUserScoreIncrement(creatorId, 10);
+    public void onPlaylistFollowerMilestone(UUID creatorId) {
+        updateUserScoreIncrement(creatorId, FOLLOWER_MILESTONE_POINTS);
+    }
+
+    /**
+     * Called when an owner deletes their playlist. Takes back the points that
+     * playlist earned them directly (see PlaylistService.pointsEarnedByOwner).
+     * Without this, creating and deleting a community playlist paid +5 every time.
+     */
+    @Transactional
+    public void onPlaylistDeleted(UUID ownerId, int pointsEarned) {
+        if (pointsEarned > 0) {
+            updateUserScoreIncrement(ownerId, -pointsEarned);
         }
     }
 
@@ -208,7 +227,9 @@ public class ScoreUpdateService {
     private void updateUserScoreIncrement(UUID userId, int increment) {
         User user = userRepository.findById(userId).orElse(null);
         if (user != null) {
-            int newScore = user.getScore() + increment;
+            // Floor at zero: taking points back (deleting a playlist) must never
+            // leave a negative score, even for data created before the award existed.
+            int newScore = Math.max(0, user.getScore() + increment);
             String level = getLevel(newScore);
             user.setScore(newScore);
             user.setLevel(level);

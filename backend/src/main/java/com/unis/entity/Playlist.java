@@ -81,6 +81,14 @@ public class Playlist {
     @Builder.Default
     private Integer songCount = 0;
 
+    // True once the owner has been paid the 10-follower bonus. The bonus is paid
+    // once per playlist, ever, so a follower leaving and coming back at 9 can't
+    // trigger it again. @Builder.Default keeps builder-created playlists from
+    // inserting NULL into this NOT NULL column.
+    @Column(name = "follower_milestone_awarded", nullable = false)
+    @Builder.Default
+    private Boolean followerMilestoneAwarded = false;
+
     // --- End V2 additions ---
 
     @OneToMany(mappedBy = "playlist", cascade = CascadeType.ALL, orphanRemoval = true)

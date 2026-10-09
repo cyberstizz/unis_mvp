@@ -161,7 +161,33 @@ public class PlaylistService {
     @Transactional
     public void deletePlaylist(UUID playlistId, UUID userId) {
         Playlist playlist = getOwnedPlaylist(playlistId, userId);
-        playlistRepository.softDelete(playlistId, LocalDateTime.now());
+
+        // softDelete reports whether THIS call deleted it. Only that call takes
+        // points back, so a double-click or a retried request can't deduct twice.
+        int deleted = playlistRepository.softDelete(playlistId, LocalDateTime.now());
+        if (deleted == 0) return;
+
+        // A playlist's own rewards leave with it: +5 for starting a community
+        // playlist, +10 if it reached the follower milestone. Without this,
+        // create → delete → create paid +5 every time.
+        scoreUpdateService.onPlaylistDeleted(userId, pointsEarnedByOwner(playlist));
+    }
+
+    /**
+     * Points this playlist paid its owner directly. Deleting the playlist takes
+     * exactly this much back, and the playlist page shows it in the delete
+     * confirmation. Points other people earned through it (votes, approved
+     * suggestions) are theirs and are never touched.
+     */
+    private int pointsEarnedByOwner(Playlist playlist) {
+        int points = 0;
+        if (playlist.isCommunity()) {
+            points += ScoreUpdateService.COMMUNITY_PLAYLIST_POINTS;
+        }
+        if (Boolean.TRUE.equals(playlist.getFollowerMilestoneAwarded())) {
+            points += ScoreUpdateService.FOLLOWER_MILESTONE_POINTS;
+        }
+        return points;
     }
 
     @Transactional
@@ -310,6 +336,19 @@ public class PlaylistService {
             throw new RuntimeException("Voting is only for community playlists");
         }
 
+        // Voting is for suggestions still waiting on the community — that's what
+        // the help center describes and the only place the app offers it. Votes on
+        // songs already in a playlist used to be accepted (and paid +1) via the API.
+        if (!track.isPending()) {
+            throw new RuntimeException("Voting is only open on pending suggestions");
+        }
+
+        // A suggestion is already its suggester's vote. Without this, suggesting a
+        // song and upvoting it paid +1 every time, on every community playlist.
+        if (track.getAddedBy() != null && userId.equals(track.getAddedBy().getUserId())) {
+            throw new RuntimeException("You can't vote on your own suggestion");
+        }
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
@@ -410,8 +449,19 @@ public class PlaylistService {
             throw new RuntimeException("Playlist not found");
         }
 
+        // myVote lets the page show which way you already voted, so tapping the
+        // same direction again doesn't hit "already voted" with no explanation.
+        final UUID viewer = viewerUserId;
         return playlistTrackRepository.findPendingByPlaylist(playlistId).stream()
-                .map(this::toTrackResponse)
+                .map(t -> {
+                    TrackResponse r = toTrackResponse(t);
+                    if (viewer != null) {
+                        playlistVoteRepository
+                                .findByPlaylistItem_PlaylistItemIdAndUser_UserId(t.getPlaylistItemId(), viewer)
+                                .ifPresent(v -> r.setMyVote(v.getVoteType()));
+                    }
+                    return r;
+                })
                 .collect(Collectors.toList());
     }
 
@@ -467,13 +517,15 @@ public class PlaylistService {
         playlistFollowRepository.save(follow);
         playlistRepository.updateFollowerCount(playlistId, 1);
 
-        // Award creator +10 points if this follow brings them to the 10-follower milestone
+        // 10-follower bonus: paid once per playlist, ever. The flag flips in a
+        // single conditional UPDATE, so an unfollow and re-follow at 9 can't pay
+        // it again, and two follows landing together can't both pay it. ">="
+        // rather than "==" so a stale count can only delay the bonus, never skip it.
         int newFollowerCount = playlist.getFollowerCount() + 1;
-        if (playlist.getUser() != null) {
-            scoreUpdateService.onPlaylistFollowerMilestone(
-                    playlist.getUser().getUserId(),
-                    newFollowerCount
-            );
+        if (playlist.getUser() != null
+                && newFollowerCount >= ScoreUpdateService.FOLLOWER_MILESTONE
+                && playlistRepository.markFollowerMilestoneAwarded(playlistId) == 1) {
+            scoreUpdateService.onPlaylistFollowerMilestone(playlist.getUser().getUserId());
         }
     }
 
@@ -661,6 +713,8 @@ public class PlaylistService {
                 .followerCount(p.getFollowerCount())
                 .isFollowing(isFollowing)
                 .isOwner(isOwner)
+                // Only the owner sees what deleting would take back from them.
+                .ownerPointsEarned(isOwner ? pointsEarnedByOwner(p) : 0)
                 .tracks(tracks)
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
@@ -710,6 +764,7 @@ public class PlaylistService {
                 .position(t.getPosition())
                 .addedAt(t.getAddedAt())
                 .addedByUsername(t.getAddedBy() != null ? t.getAddedBy().getUsername() : null)
+                .addedById(t.getAddedBy() != null ? t.getAddedBy().getUserId() : null)
                 .upvotes(t.getUpvotes())
                 .downvotes(t.getDownvotes())
                 .status(t.getStatus())

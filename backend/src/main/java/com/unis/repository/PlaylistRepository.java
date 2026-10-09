@@ -52,9 +52,20 @@ public interface PlaylistRepository extends JpaRepository<Playlist, UUID> {
     List<Playlist> searchPublicPlaylists(@Param("q") String query);
 
     // --- Soft delete ---
+    // Returns how many rows changed: 1 if this call deleted the playlist, 0 if it
+    // was already deleted. Callers use that so a double-click or a retried
+    // request can't run delete side effects (like taking points back) twice.
     @Modifying
-    @Query("UPDATE Playlist p SET p.deletedAt = :now WHERE p.playlistId = :id")
-    void softDelete(@Param("id") UUID playlistId, @Param("now") LocalDateTime now);
+    @Query("UPDATE Playlist p SET p.deletedAt = :now WHERE p.playlistId = :id AND p.deletedAt IS NULL")
+    int softDelete(@Param("id") UUID playlistId, @Param("now") LocalDateTime now);
+
+    // Flips the 10-follower flag only if it hasn't flipped yet. Returns 1 for the
+    // single call that wins, 0 for everyone else, so the bonus is paid exactly
+    // once even if two follows land at the same moment.
+    @Modifying
+    @Query("UPDATE Playlist p SET p.followerMilestoneAwarded = true " +
+           "WHERE p.playlistId = :id AND p.followerMilestoneAwarded = false")
+    int markFollowerMilestoneAwarded(@Param("id") UUID playlistId);
 
     // --- Denormalized counter updates (atomic, no race conditions) ---
     @Modifying
