@@ -322,7 +322,9 @@ public class PlaylistService {
             if (vote.getVoteType().equals(voteType)) {
                 throw new RuntimeException("You already voted " + voteType + " on this track");
             }
-            // Switching vote direction
+            // Switching vote direction. No point is awarded here: the +1 is for
+            // taking part, once per suggestion. Paying it again on every switch
+            // let a user flip up/down/up/down and earn without limit.
             vote.setVoteType(voteType);
             playlistVoteRepository.save(vote);
         } else {
@@ -332,10 +334,11 @@ public class PlaylistService {
                     .voteType(voteType)
                     .build();
             playlistVoteRepository.save(vote);
-        }
 
-        // Award +1 to the voter for participating in community curation
-        scoreUpdateService.onPlaylistVoteCast(userId);
+            // Award +1 to the voter for participating in community curation —
+            // first vote on this suggestion only.
+            scoreUpdateService.onPlaylistVoteCast(userId);
+        }
 
         // Recount votes
         int upvotes = playlistVoteRepository.countUpvotes(itemId);
