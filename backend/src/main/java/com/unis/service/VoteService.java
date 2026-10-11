@@ -70,6 +70,87 @@ public class VoteService {
     @Autowired
     private UserRepository userRepository;
 
+    // =========================================================================
+    // VOTE RULES
+    //
+    // Every date below is New York time — the same clock the controller stamps
+    // vote_date with and the award cron closes periods on.
+    // =========================================================================
+    private static final java.time.ZoneId UNIS_ZONE = java.time.ZoneId.of("America/New_York");
+
+    private static final java.time.format.DateTimeFormatter REOPEN_FORMAT =
+        java.time.format.DateTimeFormatter.ofPattern("EEEE, MMMM d", java.util.Locale.US);
+
+    /**
+     * A vote the server refuses. Carries the HTTP status and machine code the
+     * controller returns, and a message the wizard shows the user verbatim.
+     */
+    public static class VoteRejectedException extends RuntimeException {
+        private final org.springframework.http.HttpStatus status;
+        private final String code;
+
+        public VoteRejectedException(org.springframework.http.HttpStatus status, String code, String message) {
+            super(message);
+            this.status = status;
+            this.code = code;
+        }
+
+        public org.springframework.http.HttpStatus getStatus() { return status; }
+        public String getCode() { return code; }
+    }
+
+    /**
+     * The calendar period a vote belongs to — identical to the window the award
+     * cron closes (AwardService.getIntervalStartDate): Daily = the day,
+     * Weekly = Monday–Sunday, Monthly = the calendar month, Quarterly =
+     * Jan–Mar / Apr–Jun / Jul–Sep / Oct–Dec, Midterm = Jan–Jun / Jul–Dec,
+     * Annual = the calendar year.
+     *
+     * One vote per race per period: a weekly vote cast on Sunday is spent until
+     * that week's award is decided — and Monday is a new week, so the voter
+     * can vote again the next day.
+     */
+    static LocalDate[] votingPeriod(String intervalName, LocalDate day) {
+        String name = intervalName == null ? "" : intervalName;
+        switch (name) {
+            case "Weekly": {
+                LocalDate start = day.with(DayOfWeek.MONDAY);
+                return new LocalDate[] { start, start.plusDays(6) };
+            }
+            case "Monthly": {
+                LocalDate start = day.withDayOfMonth(1);
+                return new LocalDate[] { start, start.plusMonths(1).minusDays(1) };
+            }
+            case "Quarterly": {
+                int q = (day.getMonthValue() - 1) / 3;
+                LocalDate start = day.withMonth(q * 3 + 1).withDayOfMonth(1);
+                return new LocalDate[] { start, start.plusMonths(3).minusDays(1) };
+            }
+            case "Midterm": {
+                LocalDate start = day.withMonth(day.getMonthValue() >= 7 ? 7 : 1).withDayOfMonth(1);
+                return new LocalDate[] { start, start.plusMonths(6).minusDays(1) };
+            }
+            case "Annual": {
+                LocalDate start = day.withDayOfYear(1);
+                return new LocalDate[] { start, start.plusYears(1).minusDays(1) };
+            }
+            case "Daily":
+            default:
+                return new LocalDate[] { day, day };
+        }
+    }
+
+    private static String periodNoun(String intervalName) {
+        switch (intervalName == null ? "" : intervalName) {
+            case "Weekly":    return "this week";
+            case "Monthly":   return "this month";
+            case "Quarterly": return "this quarter";
+            case "Midterm":   return "this half of the year";
+            case "Annual":    return "this year";
+            default:          return "today";
+        }
+    }
+
     @CacheEvict(value = {"leaderboards", "nominees", "voteCounts"}, allEntries = true)
     @Transactional
     public Vote submitVote(Vote vote) {
@@ -78,13 +159,31 @@ public class VoteService {
         if (vote.getGenre() == null) throw new IllegalArgumentException("Genre is required");
         if (vote.getJurisdiction() == null) throw new IllegalArgumentException("Jurisdiction is required");
         if (vote.getInterval() == null) throw new IllegalArgumentException("Interval is required");
+        if (!"artist".equals(vote.getTargetType()) && !"song".equals(vote.getTargetType())) {
+            throw new VoteRejectedException(org.springframework.http.HttpStatus.BAD_REQUEST, "TARGET_TYPE_INVALID",
+                "A vote has to be for an artist or a song. Please close the wizard and try again.");
+        }
+        if (vote.getTargetId() == null) {
+            throw new VoteRejectedException(org.springframework.http.HttpStatus.BAD_REQUEST, "TARGET_MISSING",
+                "This vote is missing who it's for. Please close the wizard and try again.");
+        }
 
-        // =====================================================================
-        // 2. NEW: Validate jurisdiction eligibility BEFORE saving
-        // =====================================================================
         UUID userId = vote.getUser().getUserId();
         UUID targetJurisdictionId = vote.getJurisdiction().getJurisdictionId();
-        
+        LocalDate voteDate = vote.getVoteDate() != null ? vote.getVoteDate() : LocalDate.now(UNIS_ZONE);
+        vote.setVoteDate(voteDate);
+
+        // 2. Lock this voter's row for the rest of the transaction. Two submits
+        //    from the same person (double-tap, two tabs) now run one after the
+        //    other, so the second one always sees the first vote in step 5
+        //    instead of both slipping past the duplicate check.
+        entityManager.createNativeQuery("SELECT user_id FROM users WHERE user_id = :userId FOR UPDATE")
+            .setParameter("userId", userId)
+            .getResultList();
+
+        // =====================================================================
+        // 3. Voter eligibility — the voter must live in (or under) this race.
+        // =====================================================================
         if (!canUserVoteInJurisdiction(userId, targetJurisdictionId)) {
             throw new IllegalArgumentException(
                 "User is not eligible to vote in this jurisdiction. " +
@@ -93,22 +192,41 @@ public class VoteService {
         }
 
         // =====================================================================
-        // 3. Check unique constraint - FIXED: Removed target_id from check
-        // User can only cast ONE vote per category per jurisdiction per day
+        // 4. Nominee eligibility — the artist/song must exist, be in this
+        //    genre, and be on the ballot in this jurisdiction (its home or an
+        //    area above it). Previously only the wizard enforced this, so a
+        //    direct API call could vote anyone into any race.
         // =====================================================================
-        Long existingCount = voteRepository.existsByUserAndCategoryAndJurisdictionAndIntervalAndDate(
-                vote.getUser().getUserId(), 
+        checkNomineeEligibility(vote);
+
+        // =====================================================================
+        // 5. One vote per race per period.
+        //    Race = voter + artist/song + genre + jurisdiction + interval.
+        //    Period = the interval's calendar window (see votingPeriod). The
+        //    old check only looked at today's date, so a weekly or annual vote
+        //    could be cast again every single day.
+        // =====================================================================
+        String intervalName = vote.getInterval().getName();
+        LocalDate[] period = votingPeriod(intervalName, voteDate);
+
+        Long existingCount = voteRepository.countVotesInPeriod(
+                userId,
                 vote.getTargetType(),
                 vote.getGenre().getGenreId(),
-                vote.getJurisdiction().getJurisdictionId(), 
-                vote.getInterval().getIntervalId(), 
-                vote.getVoteDate());
-        
-        if (existingCount > 0) {
-            throw new RuntimeException(
-                "You have already cast a " + vote.getTargetType() + " vote " +
-                "in this jurisdiction for today. Votes cannot be changed."
-            );
+                targetJurisdictionId,
+                vote.getInterval().getIntervalId(),
+                period[0],
+                period[1]);
+
+        if (existingCount != null && existingCount > 0) {
+            String reopens = "Daily".equals(intervalName) || intervalName == null
+                ? "tomorrow"
+                : period[1].plusDays(1).format(REOPEN_FORMAT);
+            String interval = intervalName == null ? "" : intervalName.toLowerCase() + " ";
+            throw new VoteRejectedException(org.springframework.http.HttpStatus.CONFLICT, "ALREADY_VOTED",
+                "You already cast your " + interval + vote.getGenre().getName() + " " + vote.getTargetType()
+                    + " vote in " + vote.getJurisdiction().getName() + " " + periodNoun(intervalName)
+                    + ". Votes can't be changed — this race opens again " + reopens + ".");
         }
 
         // 4. Save the vote
@@ -140,7 +258,78 @@ public class VoteService {
 
         return saved;
     }
-   
+
+    /**
+     * Server-side nominee check (mirrors what the voting wizard offers).
+     *
+     * A song's home is its own jurisdiction (what the nominee lists and the
+     * wizard use), falling back to its artist's. Throws VoteRejectedException
+     * with a message the user can act on.
+     */
+    private void checkNomineeEligibility(Vote vote) {
+        org.springframework.http.HttpStatus forbidden = org.springframework.http.HttpStatus.FORBIDDEN;
+        UUID targetId = vote.getTargetId();
+        Jurisdiction race = vote.getJurisdiction();
+        UUID raceGenreId = vote.getGenre().getGenreId();
+
+        String nomineeName;
+        Jurisdiction home;
+        UUID nomineeGenreId;
+
+        if ("artist".equals(vote.getTargetType())) {
+            User artist = userRepository.findById(targetId).orElse(null);
+            if (artist == null || artist.isDeleted() || artist.getRole() != User.Role.artist) {
+                throw new VoteRejectedException(org.springframework.http.HttpStatus.NOT_FOUND, "NOMINEE_NOT_FOUND",
+                    "That artist isn't on Unis anymore, so this vote can't be cast.");
+            }
+            nomineeName = artist.getUsername();
+            home = artist.getJurisdiction();
+            nomineeGenreId = artist.getGenre() != null ? artist.getGenre().getGenreId() : null;
+        } else {
+            Song song = songRepository.findById(targetId).orElse(null);
+            if (song == null || song.getDeletedAt() != null
+                    || (song.getArtist() != null && song.getArtist().isDeleted())) {
+                throw new VoteRejectedException(org.springframework.http.HttpStatus.NOT_FOUND, "NOMINEE_NOT_FOUND",
+                    "That song isn't on Unis anymore, so this vote can't be cast.");
+            }
+            nomineeName = song.getTitle();
+            home = song.getJurisdiction() != null
+                ? song.getJurisdiction()
+                : (song.getArtist() != null ? song.getArtist().getJurisdiction() : null);
+            nomineeGenreId = song.getGenre() != null ? song.getGenre().getGenreId() : null;
+        }
+
+        if (nomineeGenreId == null || !nomineeGenreId.equals(raceGenreId)) {
+            throw new VoteRejectedException(forbidden, "NOMINEE_WRONG_GENRE",
+                nomineeName + " isn't in the " + vote.getGenre().getName()
+                    + " race, so this vote can't be counted there.");
+        }
+
+        Jurisdiction homeWithPath = home == null ? null
+            : jurisdictionRepository.findById(home.getJurisdictionId()).orElse(null);
+        if (homeWithPath == null) {
+            throw new VoteRejectedException(forbidden, "NOMINEE_NO_HOME",
+                nomineeName + " doesn't have a home area on Unis yet, so they can't be voted for.");
+        }
+        String nomineePath = homeWithPath.getPath();
+        if (nomineePath == null || nomineePath.isEmpty()) {
+            org.slf4j.LoggerFactory.getLogger(VoteService.class).error(
+                "[Vote] nominee home jurisdiction {} has no path — cannot verify eligibility (target {} {})",
+                homeWithPath.getJurisdictionId(), vote.getTargetType(), targetId);
+            throw new VoteRejectedException(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR,
+                "NOMINEE_PATH_MISSING",
+                "We couldn't confirm where " + nomineeName + " can be voted on. Your vote was not counted — please try again later.");
+        }
+
+        // Same rule as voters: the race must be the nominee's home or an area
+        // above it, and voting must be on there.
+        if (!jurisdictionRepository.canUserVoteInJurisdiction(nomineePath, race.getJurisdictionId())) {
+            throw new VoteRejectedException(forbidden, "NOMINEE_NOT_ELIGIBLE",
+                nomineeName + " isn't on the ballot in " + race.getName()
+                    + ". Artists and songs can only be voted for in their home area and the areas above it.");
+        }
+    }
+
     // =========================================================================
     // FIXED: Jurisdiction Eligibility Check - Now traverses FULL hierarchy
     // =========================================================================

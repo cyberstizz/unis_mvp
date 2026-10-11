@@ -73,6 +73,30 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
         @Param("voteDate") LocalDate voteDate
     );
 
+    /**
+     * Votes this user already cast in one race during one interval period
+     * (e.g. Monday–Sunday for Weekly). Used by VoteService.submitVote to allow
+     * exactly one vote per race per period. 0 = can vote.
+     */
+    @Query(value = """
+        SELECT COUNT(*) FROM votes v
+        WHERE v.user_id = :userId
+          AND v.target_type = :targetType
+          AND v.genre_id = :genreId
+          AND v.jurisdiction_id = :jurisdictionId
+          AND v.interval_id = :intervalId
+          AND v.vote_date BETWEEN :startDate AND :endDate
+        """, nativeQuery = true)
+    Long countVotesInPeriod(
+        @Param("userId") UUID userId,
+        @Param("targetType") String targetType,
+        @Param("genreId") UUID genreId,
+        @Param("jurisdictionId") UUID jurisdictionId,
+        @Param("intervalId") UUID intervalId,
+        @Param("startDate") LocalDate startDate,
+        @Param("endDate") LocalDate endDate
+    );
+
     // =========================================================================
     // DEPRECATED: Old method that included target_id (keeping for reference)
     // This allowed voting for multiple different targets per day - WRONG behavior

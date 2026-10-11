@@ -158,6 +158,12 @@ public class VoteController {
 
             return ResponseEntity.ok(response);
 
+        } catch (VoteService.VoteRejectedException e) {
+            // Already voted this period (409), nominee not in this race (403),
+            // nominee gone (404), malformed vote (400). Message is user-facing.
+            org.slf4j.LoggerFactory.getLogger(VoteController.class)
+                .info("Vote refused code={} target={} {}", e.getCode(), req.getTargetType(), req.getTargetId());
+            return voteError(e.getStatus(), e.getCode(), e.getMessage());
         } catch (IllegalArgumentException e) {
             // Service-level validation (missing fields, eligibility re-check)
             if (e.getMessage() != null && e.getMessage().contains("not eligible")) { // ★ ironclad
