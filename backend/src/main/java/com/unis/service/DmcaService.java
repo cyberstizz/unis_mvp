@@ -37,6 +37,9 @@ public class DmcaService {
     @Autowired
     private ModerationService moderationService;
 
+    @Autowired
+    private MediaService mediaService;
+
     /**
      * Submit a new DMCA claim (called from public endpoint)
      */
@@ -109,11 +112,13 @@ public class DmcaService {
             throw new RuntimeException("Can only execute takedown on upheld claims");
         }
 
-        // If a specific song was identified, soft-delete it
+        // If a specific song was identified, remove it through the same path as
+        // every other deletion: hidden everywhere, files moved out of reach of
+        // saved links, kept in award history. The files are held 30 days, so an
+        // upheld counter-notice can restore it by clearing deleted_at.
         if (claim.getInfringSong() != null) {
             Song song = claim.getInfringSong();
-            song.setDeletedAt(LocalDateTime.now());
-            songRepository.save(song);
+            mediaService.removeSong(song, "dmca");
 
             moderationService.logAction(adminUserId, "content_removed", "song",
                     song.getSongId(), "DMCA takedown for claim " + claimId, null);

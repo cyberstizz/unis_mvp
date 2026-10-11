@@ -34,6 +34,9 @@ public class AdminUserService {
     @Autowired
     private ModerationService moderationService;
 
+    @Autowired
+    private UserService userService;
+
     /**
      * Get paginated user list with optional search
      */
@@ -134,12 +137,15 @@ public class AdminUserService {
             throw new RuntimeException("This account is protected and cannot be deleted");
         }
 
-        moderationService.logAction(adminUserId, "account_deleted", "user", userId,
-                "Permanent deletion by super admin", "Username: " + user.getUsername());
+        // Same cleanup as a self-deletion (songs removed but kept in history,
+        // fans re-pointed, likes/follows/comments/playlists removed, earnings
+        // records kept, details wiped). Previously this only set deleted_at,
+        // which left the account's songs live and its fans still "supporting" it.
+        java.math.BigDecimal forfeited = userService.deleteAccountByAdmin(userId);
 
-        // Soft delete the user
-        user.setDeletedAt(LocalDateTime.now());
-        userRepository.save(user);
+        moderationService.logAction(adminUserId, "account_deleted", "user", userId,
+                "Permanent deletion by super admin",
+                "Username: " + user.getUsername() + ", unpaid balance forfeited: $" + forfeited);
     }
 
     /**

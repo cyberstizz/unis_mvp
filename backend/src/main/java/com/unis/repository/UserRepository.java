@@ -41,7 +41,7 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             "  SELECT j.jurisdiction_id FROM jurisdictions j JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id " +
             ") " +
             "SELECT u.* FROM users u JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id " +
-            "WHERE u.role = 'artist' " +
+            "WHERE u.role = 'artist' AND u.deleted_at IS NULL " +
             "ORDER BY ( " +
             "  COALESCE((SELECT COUNT(sp.play_id) FROM song_plays sp " +
             "            JOIN songs s ON sp.song_id = s.song_id " +
@@ -74,7 +74,9 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     @Query("UPDATE User u SET u.supportedArtistId = NULL WHERE u.supportedArtistId = :artistId")
     void nullifySupportedArtistForListeners(@Param("artistId") UUID artistId);
 
-    @Query("SELECT u FROM User u WHERE u.role = :role ORDER BY u.score DESC")
+    // Live accounts only: feeds the sign-up "pick an artist" list and the
+    // artists-with-preview list, which must never offer a deleted artist.
+    @Query("SELECT u FROM User u WHERE u.role = :role AND u.deletedAt IS NULL ORDER BY u.score DESC")
     List<User> findByRoleOrderByScoreDesc(@Param("role") User.Role role);
 
     List<User> findAllByRole(User.Role role);
@@ -85,10 +87,13 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     
     Optional<User> findByReferralCode(String referralCode);
         
-    @Query("SELECT u FROM User u WHERE u.role = :role AND u.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY u.score DESC")
+    @Query("SELECT u FROM User u WHERE u.role = :role AND u.jurisdiction.jurisdictionId = :jurisdictionId AND u.deletedAt IS NULL ORDER BY u.score DESC")
     List<User> findByRoleAndJurisdiction(@Param("role") User.Role role, @Param("jurisdictionId") UUID jurisdictionId);
 
     long countBySupportedArtistId(UUID artistId);
+
+    // Fans whose supported artist is this account (account deletion re-points them).
+    List<User> findBySupportedArtistId(UUID artistId);
 
     @Query("SELECT u FROM User u WHERE (LOWER(u.username) LIKE LOWER(CONCAT('%', :search, '%')) " +
            "OR LOWER(u.email) LIKE LOWER(CONCAT('%', :search, '%'))) AND u.deletedAt IS NULL")

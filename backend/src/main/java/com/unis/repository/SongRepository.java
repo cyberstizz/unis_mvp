@@ -24,6 +24,7 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
                "SELECT s.* FROM songs s " +
                "JOIN users u ON s.artist_id = u.user_id " +
                "JOIN jurisdiction_tree jt ON u.jurisdiction_id = jt.jurisdiction_id " +
+               "WHERE s.deleted_at IS NULL AND u.deleted_at IS NULL " +
                "ORDER BY ( " +
                "  COALESCE((SELECT COUNT(sp.play_id) FROM song_plays sp " +
                "            WHERE sp.song_id = s.song_id), 0) " +
@@ -56,19 +57,20 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Query("UPDATE Song s SET s.score = s.score + :increment WHERE s.songId = :id")
     void incrementScore(@Param("id") UUID id, @Param("increment") int increment);
 
-    // Add for artist dashboard (page 7)
-    @Query("SELECT s FROM Song s WHERE s.artist.userId = :artistId ORDER BY s.createdAt DESC")
+    // An artist's live songs (removed songs excluded). Account deletion
+    // removes each of these through MediaService.removeSong.
+    @Query("SELECT s FROM Song s WHERE s.artist.userId = :artistId AND s.deletedAt IS NULL ORDER BY s.createdAt DESC")
     List<Song> findByArtistId(@Param("artistId") UUID artistId);
 
-    @Query("SELECT s FROM Song s JOIN s.artist a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY s.score DESC")
+    @Query("SELECT s FROM Song s JOIN s.artist a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId AND s.deletedAt IS NULL ORDER BY s.score DESC")
     List<Song> findTopByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId);
 
-    @Query("SELECT s FROM Song s WHERE s.jurisdiction.jurisdictionId = :jurisdictionId ORDER BY s.score DESC")
+    @Query("SELECT s FROM Song s WHERE s.jurisdiction.jurisdictionId = :jurisdictionId AND s.deletedAt IS NULL ORDER BY s.score DESC")
     List<Song> findByJurisdictionOrderByScoreDesc(@Param("jurisdictionId") UUID jurisdictionId);
 
-    @Modifying
-    @Query("DELETE FROM Song s WHERE s.artist.userId = :artistId")
-    void deleteByArtistUserId(@Param("artistId") UUID artistId);
+    // (deleteByArtistUserId was removed on purpose: songs are never hard-deleted.
+    //  Hard deletes wiped other people's comments and playlist entries and left
+    //  award history pointing at nothing. Use MediaService.removeSong.)
 
     @Modifying
     @Query("UPDATE Song s SET s.playsToday = 0, s.lastPlayResetDate = :today " +

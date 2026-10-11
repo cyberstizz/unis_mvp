@@ -11,6 +11,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
@@ -73,7 +74,67 @@ public class CloudflareR2Service implements FileStorageService  {
                     .build();
 
             s3Client.deleteObject(deleteObjectRequest);
+
+            // A hidden copy (removed/<random>/<old key>): also delete the old
+            // key, in case moving the file there failed at removal time.
+            // Deleting a key that doesn't exist is harmless.
+            if (key.startsWith("removed/")) {
+                int slash = key.indexOf('/', "removed/".length());
+                if (slash > 0 && slash < key.length() - 1) {
+                    s3Client.deleteObject(DeleteObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key(key.substring(slash + 1))
+                            .build());
+                }
+            }
         }
+    }
+
+    /** Removed songs' files live under removed/<random>/<original key>. */
+    private static final String REMOVED_PREFIX = "removed/";
+
+    /**
+     * Where a removed song's file will be hidden: removed/<random>/<old key>.
+     * The random folder makes the URL unguessable, so the old URL (saved in
+     * queues, playlists, shared links) leads nowhere once the file is moved.
+     * RemovedMediaPurgeScheduler deletes it after 30 days; until then the song
+     * can be restored by clearing its deleted_at.
+     */
+    @Override
+    public String hiddenLocationFor(String fileUrl) {
+        String prefix = publicUrl + "/";
+        if (fileUrl == null || !fileUrl.startsWith(prefix)) {
+            return fileUrl;
+        }
+        String key = fileUrl.substring(prefix.length());
+        if (key.startsWith(REMOVED_PREFIX)) {
+            return fileUrl; // already hidden
+        }
+        return prefix + REMOVED_PREFIX + UUID.randomUUID() + "/" + key;
+    }
+
+    /** Copies the object to its new key, then deletes the old one. */
+    @Override
+    public void moveFile(String fromUrl, String toUrl) {
+        String prefix = publicUrl + "/";
+        if (fromUrl == null || toUrl == null || fromUrl.equals(toUrl)
+                || !fromUrl.startsWith(prefix) || !toUrl.startsWith(prefix)) {
+            return;
+        }
+        String fromKey = fromUrl.substring(prefix.length());
+        String toKey = toUrl.substring(prefix.length());
+
+        s3Client.copyObject(CopyObjectRequest.builder()
+                .sourceBucket(bucketName)
+                .sourceKey(fromKey)
+                .destinationBucket(bucketName)
+                .destinationKey(toKey)
+                .build());
+
+        s3Client.deleteObject(DeleteObjectRequest.builder()
+                .bucket(bucketName)
+                .key(fromKey)
+                .build());
     }
 
     @Override

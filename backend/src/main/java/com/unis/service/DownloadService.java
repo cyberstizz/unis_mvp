@@ -2,6 +2,9 @@ package com.unis.service;
 
 import com.stripe.Stripe;
 import com.stripe.model.PaymentIntent;
+import com.stripe.model.Refund;
+import com.stripe.net.RequestOptions;
+import com.stripe.param.RefundCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
 import com.unis.entity.Purchase;
 import com.unis.entity.Song;
@@ -97,6 +100,9 @@ public class DownloadService {
 
         Song song = songRepository.findById(songId)
                 .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
+        if (song.isRemoved() || (song.getArtist() != null && song.getArtist().getDeletedAt() != null)) {
+            throw new RuntimeException("This song was removed and is no longer for sale.");
+        }
 
         if (!"paid".equals(song.getDownloadPolicy())) {
             throw new RuntimeException("This song is not available for purchase.");
@@ -174,6 +180,13 @@ public class DownloadService {
         Song song = songRepository.findById(songId)
                 .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
 
+        // The song was removed after checkout started: never charge for a file
+        // nobody can download. Refund in full (the artist's share and Unis's fee
+        // both come back) and record it as refunded.
+        if (song.isRemoved()) {
+            return refundRemovedSongPurchase(song, buyerId, paymentIntentId);
+        }
+
         // Idempotency — if already purchased, just return the download URL
         if (purchaseRepository.existsByBuyerIdAndSongId(buyerId, songId)) {
             Map<String, Object> response = new HashMap<>();
@@ -241,6 +254,16 @@ public class DownloadService {
         Map<String, Object> response = new HashMap<>();
         response.put("songId", songId);
         response.put("title", song.getTitle());
+
+        // A removed song can't be downloaded or bought by anyone, including
+        // past buyers (they got the file when they bought it).
+        if (song.isRemoved()) {
+            response.put("downloadPolicy", "unavailable");
+            response.put("canDownload", false);
+            response.put("removed", true);
+            return response;
+        }
+
         response.put("downloadPolicy", song.getDownloadPolicy());
 
         switch (song.getDownloadPolicy()) {
@@ -269,6 +292,78 @@ public class DownloadService {
         }
 
         return response;
+    }
+
+    /**
+     * A buyer paid for a song that was removed before the purchase was
+     * confirmed. Verifies the payment is really theirs, refunds it in full
+     * (reverse_transfer pulls the artist's share back from their Stripe
+     * account; refund_application_fee returns Unis's fee), and records the
+     * purchase as refunded. The idempotency key makes a retried confirm return
+     * the same refund instead of failing.
+     */
+    private Map<String, Object> refundRemovedSongPurchase(Song song, UUID buyerId, String paymentIntentId) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", false);
+        response.put("refunded", true);
+        response.put("message", "This song was removed before your purchase finished. "
+                + "You've been refunded in full.");
+
+        // Already handled on an earlier attempt.
+        var existing = purchaseRepository.findByStripePaymentIntentId(paymentIntentId);
+        if (existing.isPresent()) {
+            return response;
+        }
+
+        try {
+            PaymentIntent paymentIntent = PaymentIntent.retrieve(paymentIntentId);
+            String metaSongId = paymentIntent.getMetadata().get("song_id");
+            String metaBuyerId = paymentIntent.getMetadata().get("buyer_id");
+            if (!song.getSongId().toString().equals(metaSongId) || !buyerId.toString().equals(metaBuyerId)) {
+                throw new RuntimeException("Payment verification failed — metadata mismatch.");
+            }
+            if (!"succeeded".equals(paymentIntent.getStatus())) {
+                // Nothing was charged, so there's nothing to refund.
+                response.put("refunded", false);
+                response.put("message", "This song was removed and is no longer for sale. You were not charged.");
+                return response;
+            }
+
+            RefundCreateParams params = RefundCreateParams.builder()
+                    .setPaymentIntent(paymentIntentId)
+                    .setReverseTransfer(true)
+                    .setRefundApplicationFee(true)
+                    .setReason(RefundCreateParams.Reason.REQUESTED_BY_CUSTOMER)
+                    .putMetadata("unis_reason", "song_removed_before_confirm")
+                    .build();
+            RequestOptions options = RequestOptions.builder()
+                    .setIdempotencyKey("unis-refund-removed-" + paymentIntentId)
+                    .build();
+            Refund refund = Refund.create(params, options);
+
+            int amount = paymentIntent.getAmount().intValue();
+            int platformFee = paymentIntent.getApplicationFeeAmount() != null
+                    ? paymentIntent.getApplicationFeeAmount().intValue() : 0;
+            purchaseRepository.save(Purchase.builder()
+                    .buyerId(buyerId)
+                    .songId(song.getSongId())
+                    .artistId(song.getArtist().getUserId())
+                    .amount(amount)
+                    .platformFee(platformFee)
+                    .stripePaymentIntentId(paymentIntentId)
+                    .status("refunded")
+                    .build());
+
+            log.info("Refunded purchase of removed song {} for buyer {}: refund {} ({} cents)",
+                    song.getSongId(), buyerId, refund.getId(), amount);
+            return response;
+        } catch (Exception e) {
+            log.error("Refund for removed song {} (intent {}) failed: {}",
+                    song.getSongId(), paymentIntentId, e.getMessage());
+            throw new RuntimeException("This song was removed before your purchase finished. "
+                    + "We couldn't refund you automatically — please contact support with this reference: "
+                    + paymentIntentId);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════

@@ -243,6 +243,14 @@ public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDat
     List<CandidateResult> candidates = getRankedCandidates(
         type, jurisdictionId, genreId, startDate, endDate);
 
+    // 3. A decided period always lists its winner first. The award was decided
+    //    on the data at the time; since then a voter may have left (their likes
+    //    go with them) and nudged the live numbers. The winner card and the
+    //    #1 row must never disagree.
+    if (winner != null) {
+        candidates = pinWinnerFirst(candidates, winner);
+    }
+
     // 4. Build response
     int totalVotes = candidates.stream().mapToInt(c -> c.rawVoteCount).sum();
     UUID winnerId = winner != null
@@ -519,6 +527,20 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         // Residency set for eligibility (this jurisdiction and below only)
         List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
 
+        // DELETION RULE: a race is judged as it stood when it closed.
+        //  - A removed song or deleted artist stays in races that closed before
+        //    the removal (past leaderboards don't lose their winner) and drops
+        //    out of races still open.
+        //  - Votes and plays from a deleted account count for races that closed
+        //    before the account was deleted, and stop counting in open ones —
+        //    so deleting and rejoining can't double a vote.
+        // closesAt is the first moment after this period (midnight New York time
+        // after endDate), in the server's clock, which is what deleted_at uses.
+        LocalDateTime closesAt = endDate.plusDays(1)
+            .atStartOfDay(UNIS_ZONE)
+            .withZoneSameInstant(java.time.ZoneId.systemDefault())
+            .toLocalDateTime();
+
         System.out.println("Ranking " + targetType + " candidates for " + jurisdictionId +
                           ": votes from " + allRelatedJurisdictions.size() + " jurisdictions, " +
                           "residents of " + thisAndChildren.size());
@@ -561,7 +583,9 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                             __VOTE_WEIGHT_CASE__ AS weighted_points
                         FROM votes v
                         JOIN voting_intervals vi ON v.interval_id = vi.interval_id
+                        JOIN users voter ON voter.user_id = v.user_id
                         WHERE v.target_type = 'song'
+                          AND (voter.deleted_at IS NULL OR voter.deleted_at >= :closesAt)
                           AND v.genre_id = :genreId
                           AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
                           AND v.jurisdiction_id IN (:allRelatedJurisdictions)
@@ -570,8 +594,10 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                     LEFT JOIN (
                         SELECT sp.song_id, COUNT(*) AS plays_count
                         FROM song_plays sp
+                        LEFT JOIN users listener ON listener.user_id = sp.user_id
                         WHERE sp.played_at IS NOT NULL
                           AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
+                          AND (listener.deleted_at IS NULL OR listener.deleted_at >= :closesAt)
                         GROUP BY sp.song_id
                     ) p ON p.song_id = s.song_id
                     LEFT JOIN (
@@ -581,8 +607,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                           AND DATE(l.created_at) BETWEEN :startDate AND :endDate
                         GROUP BY l.media_id
                     ) l ON l.media_id = s.song_id
-                    WHERE s.deleted_at IS NULL
-                      AND artist.deleted_at IS NULL
+                    WHERE (s.deleted_at IS NULL OR s.deleted_at >= :closesAt)
+                      AND (artist.deleted_at IS NULL OR artist.deleted_at >= :closesAt)
                       AND artist.jurisdiction_id IN (:thisAndChildren)
                       AND (s.genre_id = :genreId OR v.raw_vote_count IS NOT NULL)
                 ) c
@@ -614,7 +640,9 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                             __VOTE_WEIGHT_CASE__ AS weighted_points
                         FROM votes v
                         JOIN voting_intervals vi ON v.interval_id = vi.interval_id
+                        JOIN users voter ON voter.user_id = v.user_id
                         WHERE v.target_type = 'artist'
+                          AND (voter.deleted_at IS NULL OR voter.deleted_at >= :closesAt)
                           AND v.genre_id = :genreId
                           AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
                           AND v.jurisdiction_id IN (:allRelatedJurisdictions)
@@ -624,8 +652,10 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                         SELECT song.artist_id, COUNT(*) AS plays_count
                         FROM song_plays sp
                         JOIN songs song ON sp.song_id = song.song_id
+                        LEFT JOIN users listener ON listener.user_id = sp.user_id
                         WHERE sp.played_at IS NOT NULL
-                          AND song.deleted_at IS NULL
+                          AND (song.deleted_at IS NULL OR song.deleted_at >= :closesAt)
+                          AND (listener.deleted_at IS NULL OR listener.deleted_at >= :closesAt)
                           AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
                         GROUP BY song.artist_id
                     ) p ON p.artist_id = u.user_id
@@ -634,12 +664,12 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                         FROM likes l
                         JOIN songs song ON l.media_id = song.song_id
                         WHERE l.media_type = 'song'
-                          AND song.deleted_at IS NULL
+                          AND (song.deleted_at IS NULL OR song.deleted_at >= :closesAt)
                           AND DATE(l.created_at) BETWEEN :startDate AND :endDate
                         GROUP BY song.artist_id
                     ) l ON l.artist_id = u.user_id
                     WHERE u.role = 'artist'
-                      AND u.deleted_at IS NULL
+                      AND (u.deleted_at IS NULL OR u.deleted_at >= :closesAt)
                       AND u.jurisdiction_id IN (:thisAndChildren)
                       AND (u.genre_id = :genreId OR v.raw_vote_count IS NOT NULL)
                 ) c
@@ -657,6 +687,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         query.setParameter("endDate", endDate);
         query.setParameter("playWeight", PLAY_WEIGHT);
         query.setParameter("likeWeight", LIKE_WEIGHT);
+        query.setParameter("closesAt", closesAt);
 
         List<Object[]> results = query.getResultList();
 
@@ -1131,6 +1162,8 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         
         if ("song".equals(type)) {
             List<Song> songs = songRepository.findAll().stream()
+                .filter(s -> !s.isRemoved())
+                .filter(s -> s.getArtist() == null || s.getArtist().getDeletedAt() == null)
                 .filter(s -> s.getJurisdiction() != null && jurisdictionIds.contains(s.getJurisdiction().getJurisdictionId()))
                 .sorted((a, b) -> Integer.compare(b.getScore(), a.getScore()))
                 .limit(10)
@@ -1188,6 +1221,38 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         }
         
         return fallbackAwards;
+    }
+
+    /**
+     * Moves the decided winner to the top of a past period's ranking. If the
+     * winner isn't in the live ranking at all any more, it is added back from
+     * the numbers stored on its award row.
+     */
+    private List<CandidateResult> pinWinnerFirst(List<CandidateResult> candidates, Award winner) {
+        List<CandidateResult> ordered = new ArrayList<>(candidates);
+        CandidateResult pinned = null;
+        for (CandidateResult c : ordered) {
+            if (c.targetId.equals(winner.getTargetId())) {
+                pinned = c;
+                break;
+            }
+        }
+        if (pinned != null) {
+            ordered.remove(pinned);
+        } else {
+            pinned = new CandidateResult();
+            pinned.targetId = winner.getTargetId();
+            pinned.rawVoteCount = winner.getVotesCount() != null ? winner.getVotesCount() : 0;
+            pinned.weightedPoints = winner.getWeightedPoints() != null ? winner.getWeightedPoints() : 0;
+            pinned.engagementPoints = winner.getEngagementPoints() != null ? winner.getEngagementPoints() : 0;
+            pinned.totalPoints = winner.getTotalPoints() != null ? winner.getTotalPoints() : 0;
+            pinned.playsCount = winner.getPlaysCount() != null ? winner.getPlaysCount() : 0;
+            pinned.likesCount = winner.getLikesCount() != null ? winner.getLikesCount() : 0;
+            pinned.score = winner.getEngagementScore() != null ? winner.getEngagementScore() : 0;
+            pinned.seniority = winner.getWinnerSeniority();
+        }
+        ordered.add(0, pinned);
+        return ordered;
     }
 
     private List<Award> populateAwardEntities(List<Award> awards) {

@@ -87,7 +87,8 @@ public class DirectSupportService {
         }
 
         User artist = userRepository.findById(artistId)
-                .orElseThrow(() -> new RuntimeException("Artist not found."));
+                .filter(a -> a.getDeletedAt() == null)
+                .orElseThrow(() -> new RuntimeException("This artist is no longer on Unis."));
 
         String artistStripeAccountId = artist.getStripeAccountId();
         if (artistStripeAccountId == null || artistStripeAccountId.isEmpty()

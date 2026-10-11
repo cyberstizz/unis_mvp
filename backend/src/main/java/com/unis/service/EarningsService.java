@@ -28,6 +28,12 @@ public class EarningsService {
     @Autowired
     private ReferralRepository referralRepository;
 
+    @Autowired
+    private com.unis.repository.PayoutRepository payoutRepository;
+
+    /** Smallest payout Stripe Connect sends (StripeConnectService uses the same $50). */
+    public static final BigDecimal PAYOUT_THRESHOLD = new BigDecimal("50.00");
+
     // ═══════════════════════════════════════════════════════════════════════════
     // CONSTANTS — Display Ad Revenue Split
     //
@@ -91,31 +97,36 @@ public class EarningsService {
         adView.setRevenueShare(REVENUE_PER_VIEW);
         adView.setViewedAt(LocalDateTime.now());
 
+        // Each share goes only to a live, phone-verified account. A deleted
+        // account earns nothing from here on: its own share stays with Unis,
+        // and everyone else in the chain keeps their level — a deleted level-1
+        // referrer doesn't cut levels 2 and 3 off from this branch.
+
         // Set supported artist (15%)
         if (supportedArtistId != null) {
             userRepository.findById(supportedArtistId)
-                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))   
+                .filter(EarningsService::canEarn)
                 .ifPresent(adView::setSupportedArtist);
         }
 
         // Set Level 1 referrer (10%)
         if (level1Id != null) {
             userRepository.findById(level1Id)
-                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))  
+                .filter(EarningsService::canEarn)
                 .ifPresent(adView::setReferredArtist);        
         }
 
         // Set Level 2 referrer (5%)
         if (level2Id != null) {
             userRepository.findById(level2Id)
-                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))   
+                .filter(EarningsService::canEarn)
                 .ifPresent(adView::setReferrerLevel2);          
         }
 
         // Set Level 3 referrer (2%)
         if (level3Id != null) {
             userRepository.findById(level3Id)
-                .filter(u -> Boolean.TRUE.equals(u.getPhoneVerified()))   
+                .filter(EarningsService::canEarn)
                 .ifPresent(adView::setReferrerLevel3);         
         }
 
@@ -174,7 +185,7 @@ public class EarningsService {
         long referralViewsThisMonth = adViewRepository.countLevel1ReferralViewsSince(userId, monthStart);
 
         // ── Payout ──
-        BigDecimal payoutThreshold = new BigDecimal("50.00");
+        BigDecimal payoutThreshold = PAYOUT_THRESHOLD;
         BigDecimal currentBalance = totalLifetime; // Simplified — subtract past payouts in production
 
         summary.put("referralEarnings", Map.of(
@@ -287,6 +298,22 @@ public class EarningsService {
     // ═══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Who can be credited a share of an ad view: live and phone-verified. */
+    private static boolean canEarn(com.unis.entity.User u) {
+        return u.getDeletedAt() == null && Boolean.TRUE.equals(u.getPhoneVerified());
+    }
+
+    /**
+     * What a user could be paid right now: everything ever earned minus
+     * completed payouts. Same formula StripeConnectService.requestPayout uses.
+     * Account deletion uses it to apply the $50 rule.
+     */
+    public BigDecimal getAvailableBalance(UUID userId) {
+        BigDecimal lifetime = new BigDecimal(getEarningsSummary(userId).get("currentBalance").toString());
+        BigDecimal paid = safeSum(payoutRepository.sumCompletedPayouts(userId));
+        return lifetime.subtract(paid);
+    }
 
     private BigDecimal safeSum(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;

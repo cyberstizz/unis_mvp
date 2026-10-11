@@ -66,14 +66,34 @@ public class MediaController {
         return ResponseEntity.ok(saved);
     }
 
-    // DELETE /api/v1/media/song/{id}
-    @DeleteMapping("/song/{songId}")
-    public ResponseEntity<Void> deleteSong(@PathVariable UUID songId) {
-        mediaService.deleteSong(songId);
-        return ResponseEntity.ok().build();
+    /** True if the logged-in user holds the admin role (set by UserDetailsServiceImpl). */
+    private static boolean isAdmin() {
+        org.springframework.security.core.Authentication auth =
+            org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+            .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
     }
 
-    // PATCH /api/v1/media/song/{id}
+    // DELETE /api/v1/media/song/{id}
+    // Removes the song (it stays in award history; see MediaService.removeSong).
+    // Only the song's artist or an admin — previously any logged-in user could
+    // delete anyone's song.
+    @DeleteMapping("/song/{songId}")
+    public ResponseEntity<?> deleteSong(@PathVariable UUID songId) {
+        try {
+            UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+            mediaService.removeSongAsOwner(songId, requesterId, isAdmin());
+            log.info("[SongRemove] songId={} requester={}", songId, requesterId);
+            return ResponseEntity.ok().build();
+        } catch (MediaService.NotOwnerException e) {
+            log.warn("[SongRemove] refused songId={} reason=not_owner", songId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(Map.of("error", String.valueOf(e.getReason())));
+        }
+    }
+
+    // PATCH /api/v1/media/song/{id} — only the song's artist or an admin
     @PatchMapping(value = "/song/{songId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Song> updateSong(
             @PathVariable UUID songId,
@@ -81,23 +101,37 @@ public class MediaController {
             @RequestParam(value = "artwork", required = false) MultipartFile artwork,
             @RequestParam(value = "lyrics", required = false) String lyrics,
             @RequestParam(required = false) String isrc,
-            @RequestParam(required = false) UUID cleanVersionId  
+            @RequestParam(required = false) UUID cleanVersionId
 )
              {
         try {
-            Song updated = mediaService.updateSong(songId, description, artwork, lyrics, isrc, cleanVersionId);
+            UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+            Song updated = mediaService.updateSong(songId, requesterId, isAdmin(), description, artwork, lyrics, isrc, cleanVersionId);
             return ResponseEntity.ok(updated);
+        } catch (MediaService.NotOwnerException e) {
+            log.warn("Refused update of song {}: not the owner", songId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode()).build();
         } catch (Exception e) {
             log.error("Failed to update song {}: {}", songId, e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
 
-    // DELETE /api/v1/media/video/{id}
+    // DELETE /api/v1/media/video/{id} — only the video's artist or an admin
     @DeleteMapping("/video/{videoId}")
-    public ResponseEntity<Void> deleteVideo(@PathVariable UUID videoId) {
-        mediaService.deleteVideo(videoId);
-        return ResponseEntity.ok().build();
+    public ResponseEntity<?> deleteVideo(@PathVariable UUID videoId) {
+        try {
+            UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+            mediaService.deleteVideoAsOwner(videoId, requesterId, isAdmin());
+            return ResponseEntity.ok().build();
+        } catch (MediaService.NotOwnerException e) {
+            log.warn("[VideoDelete] refused videoId={} reason=not_owner", videoId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(Map.of("error", String.valueOf(e.getReason())));
+        }
     }
 
     // POST /api/v1/media/song/{id}/play
@@ -151,10 +185,12 @@ public class MediaController {
         try {
             // C6 FIX: Use JWT userId
             UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
-            boolean liked = mediaService.likeSong(songId, authenticatedUserId);
+            MediaService.LikeOutcome outcome = mediaService.likeSong(songId, authenticatedUserId);
             Map<String, Object> response = new HashMap<>();
-            response.put("success", liked);
-            response.put("message", liked ? "Song liked" : "Already liked");
+            response.put("success", outcome.liked());
+            response.put("message", outcome.liked() ? "Song liked" : "Already liked");
+            // 1 the first time this person likes this track, 0 on a re-like.
+            response.put("pointsAwarded", outcome.pointsAwarded());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("Failed to like song {}: {}", songId, e.getMessage());
@@ -223,10 +259,11 @@ public class MediaController {
             @RequestParam(required = false) UUID userId) {
         try {
             UUID authenticatedUserId = SecurityUtils.getAuthenticatedUserId();
-            boolean liked = mediaService.likeVideo(videoId, authenticatedUserId);
+            MediaService.LikeOutcome outcome = mediaService.likeVideo(videoId, authenticatedUserId);
             Map<String, Object> response = new HashMap<>();
-            response.put("success", liked);
-            response.put("message", liked ? "Video liked" : "Already liked");
+            response.put("success", outcome.liked());
+            response.put("message", outcome.liked() ? "Video liked" : "Already liked");
+            response.put("pointsAwarded", outcome.pointsAwarded());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("Failed to like video {}: {}", videoId, e.getMessage());
@@ -330,16 +367,26 @@ public class MediaController {
         return ResponseEntity.ok(video);
     }
 
+    // A removed song still answers 200 with "removed": true (title and artist,
+    // no audio or artwork), so its page can say it was removed. A song that
+    // never existed is a 404.
     @GetMapping("/song/{songId}")
     public ResponseEntity<Song> getSong(@PathVariable UUID songId) {
-        Song song = mediaService.getSongById(songId);
-        return ResponseEntity.ok(song);
+        try {
+            Song song = mediaService.getSongById(songId);
+            return ResponseEntity.ok(song);
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
     }
 
     @GetMapping("/song/{songId}/lyrics")
     public ResponseEntity<Map<String, Object>> getSongLyrics(@PathVariable UUID songId) {
         try {
             Song song = mediaService.getSongById(songId);
+            if (song.isRemoved()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+            }
             Map<String, Object> response = new HashMap<>();
             response.put("songId", song.getSongId());
             response.put("title", song.getTitle());
@@ -398,12 +445,21 @@ public class MediaController {
         }
     }
 
+    // Only the song's artist or an admin (previously any logged-in user).
     @PatchMapping("/song/{songId}/lyrics")
     public ResponseEntity<Song> updateLyrics(
             @PathVariable UUID songId,
             @RequestBody Map<String, String> body) {
         String lyrics = body.get("lyrics");
-        Song updated = mediaService.updateSong(songId, null, null, lyrics, null, null);
-        return ResponseEntity.ok(updated);
+        try {
+            UUID requesterId = SecurityUtils.getAuthenticatedUserId();
+            Song updated = mediaService.updateSong(songId, requesterId, isAdmin(), null, null, lyrics, null, null);
+            return ResponseEntity.ok(updated);
+        } catch (MediaService.NotOwnerException e) {
+            log.warn("Refused lyrics update of song {}: not the owner", songId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode()).build();
+        }
     }
 }

@@ -170,7 +170,8 @@ public class UserController {
     @GetMapping("/profile/{userId}")
     public ResponseEntity<User> getProfile(@PathVariable UUID userId) {
         Optional<User> optUser = userRepository.findByIdWithAssociations(userId);
-        if (optUser.isEmpty()) return ResponseEntity.notFound().build();
+        // A deleted account has no public profile; its name only appears in history.
+        if (optUser.isEmpty() || optUser.get().getDeletedAt() != null) return ResponseEntity.notFound().build();
         return ResponseEntity.ok(optUser.get());
     }
 
@@ -307,29 +308,56 @@ public class UserController {
         return optSong.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
     }
 
+    // GET /api/v1/users/me/deletion-check
+    // What the delete-account wizard shows first: the balance, whether a payout
+    // is still processing, and whether deleting is blocked or needs the
+    // "I give up my $X.XX" confirmation.
+    @GetMapping("/me/deletion-check")
+    public ResponseEntity<?> getDeletionCheck() {
+        UUID userId;
+        try {
+            userId = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Not authenticated"));
+        }
+        return ResponseEntity.ok(userService.getDeletionCheck(userId));
+    }
+
+    // DELETE /api/v1/users/me?forfeitBalance=true
+    // forfeitBalance is required only when the user has a balance under $50
+    // (they ticked "I give up my $X.XX"). At $50 or more they must cash out
+    // first; while a payout is processing, deletion waits (409 with a code).
     @DeleteMapping("/me")
-    public ResponseEntity<Map<String, String>> deleteMyAccount(Authentication auth) {
-        String email = auth.getName();
-
-        User user = userRepository.findByEmail(email)
-            .orElseThrow(() -> new RuntimeException("User not found"));
-
-        UUID userId = user.getUserId();
+    public ResponseEntity<Map<String, Object>> deleteMyAccount(
+            @RequestParam(defaultValue = "false") boolean forfeitBalance) {
+        UUID userId;
+        try {
+            userId = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Not authenticated"));
+        }
 
         try {
-            userService.deleteCurrentUserAndAllData(userId);
+            userService.deleteAccount(userId, forfeitBalance);
 
-            Map<String, String> response = new HashMap<>();
+            Map<String, Object> response = new HashMap<>();
             response.put("message", "Account deleted successfully");
             return ResponseEntity.ok(response);
 
+        } catch (UserService.AccountDeletionBlockedException e) {
+            log.info("[AccountDelete] refused userId={} code={}", userId, e.getCode());
+            Map<String, Object> body = new HashMap<>();
+            body.put("error", e.getMessage());
+            body.put("code", e.getCode());
+            if (e.getAvailableBalance() != null) {
+                body.put("availableBalance", e.getAvailableBalance());
+            }
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
         } catch (Exception e) {
-            System.err.println("Failed to delete user " + userId + ": " + e.getMessage());
-            e.printStackTrace();
-
-            Map<String, String> errorResponse = new HashMap<>();
-            errorResponse.put("error", "Failed to delete account: " + e.getMessage());
-            return ResponseEntity.status(500).body(errorResponse);
+            log.error("Failed to delete user {}", userId, e);
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("error", "We couldn't delete your account. Nothing was changed — please try again.");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
         }
     }
 
@@ -427,7 +455,9 @@ public class UserController {
         }
 
         try {
-            Optional<User> referrerOpt = userRepository.findByReferralCode(code);
+            // A deleted account's code no longer refers anyone.
+            Optional<User> referrerOpt = userRepository.findByReferralCode(code)
+                    .filter(r -> r.getDeletedAt() == null);
 
             if (referrerOpt.isPresent()) {
                 User referrer = referrerOpt.get();
@@ -469,11 +499,15 @@ public class UserController {
     }
 
     @GetMapping("/check-username")
-    public ResponseEntity<Map<String, Object>> checkUsernameAvailability(@RequestParam String username) {
+    public ResponseEntity<Map<String, Object>> checkUsernameAvailability(
+            @RequestParam String username,
+            @RequestParam(required = false) String email) {
         Map<String, Object> response = new HashMap<>();
 
         try {
-            boolean exists = userRepository.existsByUsername(username);
+            // Reserved forever, any capitalization, including deleted accounts
+            // and the waitlist (see UserService.isUsernameTaken).
+            boolean exists = userService.isUsernameTaken(username, email);
             response.put("available", !exists);
             response.put("username", username);
 
@@ -566,8 +600,10 @@ public class UserController {
         }
 
         if (!followRepository.existsByFollower_UserIdAndFollowed_UserId(currentUser.getUserId(), artistId)) {
-            User artistToFollow = userRepository.findById(artistId)
-                .orElseThrow(() -> new RuntimeException("Artist not found"));
+            User artistToFollow = userRepository.findById(artistId).orElse(null);
+            if (artistToFollow == null || artistToFollow.getDeletedAt() != null) {
+                return ResponseEntity.notFound().build();
+            }
 
             com.unis.entity.Follow follow = com.unis.entity.Follow.builder()
                 .follower(currentUser)

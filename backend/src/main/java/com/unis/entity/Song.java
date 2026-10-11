@@ -88,4 +88,35 @@ public class Song {
     @Transient
     private Integer likes;
 
+    // ── Removed songs ────────────────────────────────────────────────────
+    // A removed song (deleted_at set) stays in the database so award history
+    // and past leaderboards keep its title and artist. It must never be
+    // playable or shown again, so every API response gets null for its audio
+    // and artwork. JPA reads and writes the fields directly (the @Id is on a
+    // field), so these getters change only what callers and JSON see.
+    // MediaService.removeSong and the purge job use storedFileUrl() /
+    // storedArtworkUrl() to reach the real files.
+
+    public String getFileUrl() {
+        return deletedAt != null ? null : fileUrl;
+    }
+
+    public String getArtworkUrl() {
+        return deletedAt != null ? null : artworkUrl;
+    }
+
+    /** True once the song has been removed. Sent to the app as "removed". */
+    public boolean isRemoved() {
+        return deletedAt != null;
+    }
+
+    /** The real audio location, even after removal. Not exposed in JSON. */
+    public String storedFileUrl() {
+        return fileUrl;
+    }
+
+    /** The real artwork location, even after removal. Not exposed in JSON. */
+    public String storedArtworkUrl() {
+        return artworkUrl;
+    }
 }

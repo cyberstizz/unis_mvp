@@ -72,6 +72,9 @@ public class CommentService {
         } else {
             song = songRepository.findById(request.getSongId())
                     .orElseThrow(() -> new IllegalArgumentException("Song not found"));
+            if (song.isRemoved()) {
+                throw new IllegalArgumentException("This song was removed, so it can't take new comments.");
+            }
         }
  
         // Get user

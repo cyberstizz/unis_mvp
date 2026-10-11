@@ -118,7 +118,7 @@ public class SupportedArtistScheduler {
                         .createdAt(LocalDateTime.now())
                         .build();
                 supporterRepository.save(supporter);
-                scoreUpdateService.onSupporterAdded(newArtistId);
+                scoreUpdateService.onSupporterAdded(newArtistId, fanId);   // +5 once per fan, ever
 
                 promoted++;
                 System.out.println("[SupportPromote] action=promote userId=" + fanId
