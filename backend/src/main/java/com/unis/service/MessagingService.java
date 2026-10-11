@@ -275,6 +275,12 @@ public class MessagingService {
         if (senderId.equals(recipientId)) {
             throw new RuntimeException("You can't message yourself.");
         }
+        // Deleted accounts keep their past threads (the other person's history)
+        // but can't receive anything new.
+        User recipientAccount = userRepository.findById(recipientId).orElse(null);
+        if (recipientAccount == null || recipientAccount.getDeletedAt() != null) {
+            throw new RuntimeException("This account no longer exists.");
+        }
         User sender = userRepository.findById(senderId)
                 .orElseThrow(() -> new RuntimeException("User not found."));
         if (!Boolean.TRUE.equals(sender.getPhoneVerified())) {

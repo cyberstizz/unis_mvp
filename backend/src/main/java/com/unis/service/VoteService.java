@@ -509,9 +509,11 @@ public class VoteService {
                 AND v.jurisdiction_id IN (:jurisdictionIds)
                 AND v.interval_id = :intervalId
                 AND v.vote_date BETWEEN :startDate AND :endDate
+                AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
             WHERE u.role = 'artist'  
             AND u.genre_id = :genreId
             AND u.jurisdiction_id IN (:jurisdictionIds)  
+            AND u.deleted_at IS NULL
             GROUP BY u.user_id
             ORDER BY vote_count DESC
             LIMIT :limit
@@ -560,8 +562,10 @@ public class VoteService {
                     AND v.jurisdiction_id IN (:jurisdictionIds)
                     AND v.interval_id = :intervalId
                     AND v.vote_date BETWEEN :startDate AND :endDate
+                    AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
                 WHERE s.genre_id = :genreId
                   AND s.jurisdiction_id IN (:jurisdictionIds)
+                  AND s.deleted_at IS NULL
                 GROUP BY s.song_id
                 ORDER BY vote_count DESC
                 LIMIT :limit
@@ -698,6 +702,7 @@ public class VoteService {
                 WHERE v.target_type = 'artist' AND v.genre_id = :genreId
                   AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId
                   AND v.vote_date BETWEEN :startDate AND :endDate
+                  AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
                 GROUP BY v.target_id
             ),
             play_counts AS (
@@ -705,6 +710,8 @@ public class VoteService {
                 FROM song_plays sp
                 JOIN songs s ON s.song_id = sp.song_id
                 WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                  AND s.deleted_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
                 GROUP BY s.artist_id
             )
             SELECT u.user_id, u.username,
@@ -714,7 +721,7 @@ public class VoteService {
             JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
             LEFT JOIN vote_counts vc ON vc.target_id = u.user_id
             LEFT JOIN play_counts pc ON pc.artist_id = u.user_id
-            WHERE u.role = 'artist' AND u.genre_id = :genreId
+            WHERE u.role = 'artist' AND u.genre_id = :genreId AND u.deleted_at IS NULL
             ORDER BY score DESC, COALESCE(vc.vote_count, 0) DESC
             LIMIT :limit
             """;
@@ -747,13 +754,15 @@ public class VoteService {
                     FROM song_plays sp
                     JOIN songs s ON s.song_id = sp.song_id
                     WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                      AND s.deleted_at IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
                     GROUP BY s.artist_id
                 )
                 SELECT u.user_id, u.username, COALESCE(pc.play_count, 0) AS score, u.photo_url
                 FROM users u
                 JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
                 LEFT JOIN play_counts pc ON pc.artist_id = u.user_id
-                WHERE u.role = 'artist' AND u.genre_id = :genreId
+                WHERE u.role = 'artist' AND u.genre_id = :genreId AND u.deleted_at IS NULL
                   AND u.user_id NOT IN (:excludeIds)
                 ORDER BY score DESC
                 LIMIT :fallbackLimit
@@ -794,12 +803,14 @@ public class VoteService {
                 WHERE v.target_type = 'song' AND v.genre_id = :genreId
                   AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId
                   AND v.vote_date BETWEEN :startDate AND :endDate
+                  AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
                 GROUP BY v.target_id
             ),
             play_counts AS (
                 SELECT sp.song_id, COUNT(*) AS play_count
                 FROM song_plays sp
                 WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                  AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
                 GROUP BY sp.song_id
             )
             SELECT s.song_id, s.title,
@@ -810,7 +821,7 @@ public class VoteService {
             JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
             LEFT JOIN vote_counts vc ON vc.target_id = s.song_id
             LEFT JOIN play_counts pc ON pc.song_id = s.song_id
-            WHERE s.genre_id = :genreId
+            WHERE s.genre_id = :genreId AND s.deleted_at IS NULL
             ORDER BY score DESC, COALESCE(vc.vote_count, 0) DESC
             LIMIT :limit
             """;
@@ -840,6 +851,7 @@ public class VoteService {
                     SELECT sp.song_id, COUNT(*) AS play_count
                     FROM song_plays sp
                     WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
+                      AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
                     GROUP BY sp.song_id
                 )
                 SELECT s.song_id, s.title, COALESCE(pc.play_count, 0) AS score,
@@ -848,7 +860,7 @@ public class VoteService {
                 INNER JOIN users a ON s.artist_id = a.user_id
                 JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
                 LEFT JOIN play_counts pc ON pc.song_id = s.song_id
-                WHERE s.genre_id = :genreId
+                WHERE s.genre_id = :genreId AND s.deleted_at IS NULL
                   AND s.song_id NOT IN (:excludeIds)
                 ORDER BY score DESC
                 LIMIT :fallbackLimit

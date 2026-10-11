@@ -201,6 +201,9 @@ public class PlaylistService {
 
         Song song = songRepository.findById(songId)
                 .orElseThrow(() -> new RuntimeException("Song not found"));
+        if (song.isRemoved()) {
+            throw new RuntimeException("This song was removed and can't be added");
+        }
 
         // Check duplicate
         if (playlistTrackRepository.existsByPlaylist_PlaylistIdAndSong_SongId(playlistId, songId)) {
@@ -295,6 +298,9 @@ public class PlaylistService {
 
         Song song = songRepository.findById(songId)
                 .orElseThrow(() -> new RuntimeException("Song not found"));
+        if (song.isRemoved()) {
+            throw new RuntimeException("This song was removed and can't be suggested");
+        }
 
         // Check duplicate
         if (playlistTrackRepository.existsByPlaylist_PlaylistIdAndSong_SongId(playlistId, songId)) {
@@ -375,8 +381,12 @@ public class PlaylistService {
             playlistVoteRepository.save(vote);
 
             // Award +1 to the voter for participating in community curation —
-            // first vote on this suggestion only.
-            scoreUpdateService.onPlaylistVoteCast(userId);
+            // first vote on this suggestion only, and once per song per playlist
+            // ever: if the owner takes a song out and it's suggested again, voting
+            // on it again doesn't pay twice.
+            if (scoreUpdateService.claimOnce(userId, suggestionKey("suggestion-vote", track), 1)) {
+                scoreUpdateService.onPlaylistVoteCast(userId);
+            }
         }
 
         // Recount votes
@@ -393,9 +403,13 @@ public class PlaylistService {
             logActivity(track.getPlaylist(), user, "song_approved", track.getSong().getSongId(),
                     "Approved with " + netVotes + " net votes");
 
-            // Award +2 to the user who originally suggested the song
+            // Award +2 to the user who originally suggested the song — once per
+            // song per playlist, so removing and re-suggesting it can't pay again.
             if (track.getAddedBy() != null) {
-                scoreUpdateService.onSongSuggestionApproved(track.getAddedBy().getUserId());
+                UUID suggesterId = track.getAddedBy().getUserId();
+                if (scoreUpdateService.claimOnce(suggesterId, suggestionKey("suggestion-approved", track), 2)) {
+                    scoreUpdateService.onSongSuggestionApproved(suggesterId);
+                }
             }
         } else if (netVotes <= REJECT_THRESHOLD) {
             track.setStatus("removed");
@@ -669,6 +683,11 @@ public class PlaylistService {
         playlistActivityRepository.save(activity);
     }
 
+    /** point_rewards key for a suggestion reward: one per song per playlist, ever. */
+    private static String suggestionKey(String reward, PlaylistTrack track) {
+        return reward + ":" + track.getPlaylist().getPlaylistId() + ":" + track.getSong().getSongId();
+    }
+
     private void reindexPositions(UUID playlistId) {
         List<PlaylistTrack> tracks = playlistTrackRepository.findActiveByPlaylist(playlistId);
         for (int i = 0; i < tracks.size(); i++) {
@@ -691,6 +710,9 @@ public class PlaylistService {
         List<TrackResponse> tracks = p.getItems() != null
                 ? p.getItems().stream()
                     .filter(t -> "active".equals(t.getStatus()))
+                    // Removed songs are marked 'removed' when they go; this is
+                    // the backstop so one can never reach a playlist page.
+                    .filter(t -> t.getSong() != null && !t.getSong().isRemoved())
                     .map(this::toTrackResponse)
                     .collect(Collectors.toList())
                 : Collections.emptyList();

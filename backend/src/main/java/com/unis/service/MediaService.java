@@ -305,18 +305,154 @@ public class MediaService {
         }
     }
 
-    // Delete song - EVICTS cache
-    @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
-    public void deleteSong(UUID songId) {
-        songRepository.deleteById(songId);
+    // =========================================================================
+    // SONG REMOVAL — the one path every deletion goes through
+    //
+    // The artist's delete button, account deletion, DMCA takedowns and admins
+    // all end here. A removed song is never erased: the row stays (deleted_at
+    // set) so award history and past leaderboards keep its title and artist.
+    // Everything live drops it, and its files are moved to a hidden location
+    // so saved queues, playlists and shared links stop playing it at once.
+    // RemovedMediaPurgeScheduler deletes those files 30 days later.
+    // =========================================================================
+
+    /** Thrown when someone other than the owner (or an admin) tries to change a song or video. */
+    public static class NotOwnerException extends RuntimeException {
+        public NotOwnerException(String message) { super(message); }
     }
 
-    // Update song — EVICTS cache
+    /**
+     * Artist or admin removes a song (DELETE /api/v1/media/song/{id}).
+     * Only the song's own artist or an admin may do it. Removing a song that's
+     * already removed does nothing, so a double-click is harmless.
+     */
+    @CacheEvict(value = {"songs", "artists", "trending", "jurisdictions", "leaderboards", "nominees", "awards", "playlists", "userProfiles"}, allEntries = true)
+    public void removeSongAsOwner(UUID songId, UUID requesterId, boolean requesterIsAdmin) {
+        Song song = songRepository.findById(songId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Song not found"));
+        boolean isOwner = song.getArtist() != null && song.getArtist().getUserId().equals(requesterId);
+        if (!isOwner && !requesterIsAdmin) {
+            throw new NotOwnerException("You can only delete your own songs.");
+        }
+        removeSong(song, isOwner ? "artist" : "admin");
+    }
+
+    /**
+     * Removes a song. Safe to call more than once. Callers: removeSongAsOwner,
+     * UserService (account deletion), DmcaService (takedown).
+     *
+     * @param reason short label for the log: artist, admin, account_deleted, dmca
+     */
+    @CacheEvict(value = {"songs", "artists", "trending", "jurisdictions", "leaderboards", "nominees", "awards", "playlists", "userProfiles"}, allEntries = true)
+    public void removeSong(Song song, String reason) {
+        if (song == null || song.isRemoved()) return;
+        UUID songId = song.getSongId();
+
+        // 1. Decide where the files will be hidden and mark the song removed.
+        //    From here on the API never returns its files. The files are moved
+        //    only after this transaction commits (step 5), so if anything here
+        //    fails and rolls back, the song stays live with its files in place.
+        String oldFileUrl = song.storedFileUrl();
+        String oldArtworkUrl = song.storedArtworkUrl();
+        String hiddenFileUrl = fileStorageService.hiddenLocationFor(oldFileUrl);
+        String hiddenArtworkUrl = fileStorageService.hiddenLocationFor(oldArtworkUrl);
+
+        song.setFileUrl(hiddenFileUrl);
+        song.setArtworkUrl(hiddenArtworkUrl);
+        song.setDeletedAt(LocalDateTime.now());
+        songRepository.save(song);
+        entityManager.flush();
+
+        // 3. It leaves every playlist (active tracks and pending suggestions),
+        //    the stored song counts drop to match, and the remaining tracks
+        //    close the gap in their positions.
+        List<UUID> playlistIds = jdbcTemplate.queryForList(
+            "SELECT DISTINCT playlist_id FROM playlist_items WHERE song_id = ? AND status IN ('active','pending')",
+            UUID.class, songId);
+        jdbcTemplate.update("""
+            UPDATE playlist p
+               SET song_count = GREATEST(0, p.song_count - x.n)
+              FROM (SELECT playlist_id, COUNT(*) AS n FROM playlist_items
+                     WHERE song_id = ? AND status = 'active' GROUP BY playlist_id) x
+             WHERE p.playlist_id = x.playlist_id
+            """, songId);
+        jdbcTemplate.update(
+            "UPDATE playlist_items SET status = 'removed' WHERE song_id = ? AND status IN ('active','pending')",
+            songId);
+        for (UUID playlistId : playlistIds) {
+            jdbcTemplate.update("""
+                UPDATE playlist_items pi
+                   SET position = r.rn - 1
+                  FROM (SELECT playlist_item_id,
+                               ROW_NUMBER() OVER (ORDER BY position, added_at) AS rn
+                          FROM playlist_items
+                         WHERE playlist_id = ? AND status = 'active') r
+                 WHERE pi.playlist_item_id = r.playlist_item_id
+                """, playlistId);
+        }
+
+        // 4. If it was the artist's featured song, feature their newest live
+        //    song instead (or none, if this was the last one).
+        if (song.getArtist() != null) {
+            UUID artistId = song.getArtist().getUserId();
+            jdbcTemplate.update("""
+                UPDATE users
+                   SET default_song_id = (SELECT s.song_id FROM songs s
+                                           WHERE s.artist_id = ? AND s.deleted_at IS NULL
+                                           ORDER BY s.created_at DESC LIMIT 1)
+                 WHERE user_id = ? AND default_song_id = ?
+                """, artistId, artistId, songId);
+        }
+
+        // 5. Move the files once the removal is committed. If storage fails,
+        //    the song is still removed everywhere in the app; the file stays
+        //    reachable at its old address until the 30-day purge deletes it
+        //    (the purge removes the old address too), and the error is logged.
+        Runnable hideFiles = () -> {
+            moveQuietly(oldFileUrl, hiddenFileUrl, songId);
+            moveQuietly(oldArtworkUrl, hiddenArtworkUrl, songId);
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        hideFiles.run();
+                    }
+                });
+        } else {
+            hideFiles.run();
+        }
+
+        System.out.println("[SongRemove] action=remove status=ok songId=" + songId
+            + " reason=" + reason + " playlists=" + playlistIds.size());
+    }
+
+    private void moveQuietly(String fromUrl, String toUrl, UUID songId) {
+        if (fromUrl == null || fromUrl.equals(toUrl)) return;
+        try {
+            fileStorageService.moveFile(fromUrl, toUrl);
+        } catch (Exception e) {
+            System.err.println("[SongRemove] action=hide_file status=error songId=" + songId
+                + " url=" + fromUrl + " err=" + e.getMessage()
+                + " (file stays at its old address until the 30-day purge)");
+        }
+    }
+
+    // Update song — EVICTS cache. Only the song's own artist (or an admin) may
+    // edit it, and a removed song can't be edited.
     @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
-    public Song updateSong(UUID songId, String description, MultipartFile artwork, String lyrics, String isrc, UUID cleanVersionId) {
+    public Song updateSong(UUID songId, UUID requesterId, boolean requesterIsAdmin, String description, MultipartFile artwork, String lyrics, String isrc, UUID cleanVersionId) {
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new RuntimeException("Song not found: " + songId));
- 
+        boolean isOwner = song.getArtist() != null && song.getArtist().getUserId().equals(requesterId);
+        if (!isOwner && !requesterIsAdmin) {
+            throw new NotOwnerException("You can only edit your own songs.");
+        }
+        if (song.isRemoved()) {
+            throw new ResponseStatusException(HttpStatus.GONE, "This song was removed and can't be edited.");
+        }
+
         if (description != null && !description.isBlank()) {
             song.setDescription(description.trim());
         }
@@ -352,6 +488,10 @@ public class MediaService {
             Song cleanSong = songRepository.findById(cleanVersionId)
                 .orElseThrow(() -> new RuntimeException("Clean version song not found: " + cleanVersionId));
             
+            if (cleanSong.isRemoved()) {
+                throw new RuntimeException("Clean version song was removed");
+            }
+
             // Verify the clean version belongs to the same artist
             if (!cleanSong.getArtist().getUserId().equals(song.getArtist().getUserId())) {
                 throw new RuntimeException("Clean version must belong to the same artist");
@@ -369,9 +509,41 @@ public class MediaService {
     }
  
 
-    // NOT CACHED - video delete
-    public void deleteVideo(UUID videoId) {
-        videoRepository.deleteById(videoId);
+    /**
+     * Artist or admin deletes a video (DELETE /api/v1/media/video/{id}).
+     * Videos never win awards, so there's no history to keep: the row, its
+     * likes and its files go now (comments go with the row).
+     */
+    public void deleteVideoAsOwner(UUID videoId, UUID requesterId, boolean requesterIsAdmin) {
+        Video video = videoRepository.findById(videoId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Video not found"));
+        boolean isOwner = video.getArtist() != null && video.getArtist().getUserId().equals(requesterId);
+        if (!isOwner && !requesterIsAdmin) {
+            throw new NotOwnerException("You can only delete your own videos.");
+        }
+        deleteVideo(video);
+    }
+
+    /** Deletes a video, its likes and its files. Used by deleteVideoAsOwner and account deletion. */
+    public void deleteVideo(Video video) {
+        UUID videoId = video.getVideoId();
+        String videoUrl = video.getVideoUrl();
+        String artworkUrl = video.getArtworkUrl();
+
+        jdbcTemplate.update("DELETE FROM likes WHERE media_type = 'video' AND media_id = ?", videoId);
+        videoRepository.delete(video);
+        entityManager.flush();
+
+        for (String url : new String[] { videoUrl, artworkUrl }) {
+            if (url == null) continue;
+            try {
+                fileStorageService.deleteFile(url);
+            } catch (Exception e) {
+                System.err.println("[VideoDelete] action=delete_file status=error videoId=" + videoId
+                    + " url=" + url + " err=" + e.getMessage());
+            }
+        }
+        System.out.println("[VideoDelete] action=delete status=ok videoId=" + videoId);
     }
 
     // Play song - EVICTS song cache and trending cache because playsToday changes
@@ -384,6 +556,14 @@ public class MediaService {
 
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
+
+        // A removed song earns nothing: no play, no points, no count. Checked
+        // before anything is written. (A saved queue can still try to play it.)
+        Song target = songRepository.findById(songId).orElse(null);
+        if (target == null || target.isRemoved()) {
+            System.out.println(">>> Play rejected: song " + songId + " is removed or missing");
+            return null;
+        }
 
         // 30-min cooldown (unchanged)
         String cooldownCheckSql = """
@@ -473,6 +653,7 @@ public class MediaService {
             )
             SELECT s.* FROM songs s
             INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
+            WHERE s.deleted_at IS NULL
             ORDER BY COALESCE(s.score, 0) DESC NULLS LAST, s.created_at DESC
             LIMIT :limit
             """;
@@ -505,6 +686,7 @@ public class MediaService {
             )
             SELECT s.* FROM songs s
             INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
+            WHERE s.deleted_at IS NULL
             ORDER BY COALESCE(s.plays_today, 0) DESC, s.created_at DESC
             LIMIT :limit
             """;
@@ -557,6 +739,7 @@ public class MediaService {
     private List<Song> getFallbackSongs(int limit) {
         List<Song> songs = songRepository.findAll(Sort.by(Sort.Direction.ASC, "songId"))
             .stream()
+            .filter(song -> !song.isRemoved())
             .limit(limit)
             .collect(Collectors.toList());
         
@@ -620,6 +803,7 @@ public class MediaService {
                 GROUP BY song_id
             ) play_counts ON s.song_id = play_counts.song_id
             WHERE s.artist_id = ?
+              AND s.deleted_at IS NULL
             ORDER BY s.created_at DESC
         """;
         
@@ -706,6 +890,7 @@ public class MediaService {
             )
             SELECT s.* FROM songs s
             INNER JOIN jurisdiction_hierarchy jh ON s.jurisdiction_id = jh.jurisdiction_id
+            WHERE s.deleted_at IS NULL
             ORDER BY COALESCE(s.created_at, '1900-01-01T00:00:00') DESC
             LIMIT :limit
             """;
@@ -730,35 +915,60 @@ public class MediaService {
     }
 
     // ========== LIKES SERVICE METHODS (NEW) ==========
-    
+
+    /**
+     * Result of a like. pointsAwarded is what the liker earned (1 the first
+     * time they ever like this track, 0 on a re-like), so the app only shows
+     * the "+1" pill when points were really added.
+     */
+    public record LikeOutcome(boolean liked, int pointsAwarded) {}
+
     /**
      * Like a song
      * @param songId The song to like
      * @param userId The user liking the song
-     * @return true if liked, false if already liked
+     * @return liked=false if already liked
      */
 
     @Transactional
     @CacheEvict(value = {"songs", "artists"}, allEntries = true)
-    public boolean likeSong(UUID songId, UUID userId) {
+    public LikeOutcome likeSong(UUID songId, UUID userId) {
         // Check if already liked
         String checkSql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
         Integer count = jdbcTemplate.queryForObject(checkSql, Integer.class, userId, songId);
-        
+
         if (count != null && count > 0) {
-            return false; // Already liked
+            return new LikeOutcome(false, 0); // Already liked
         }
-        
-        // Insert like with created_at
-        String insertSql = "INSERT INTO likes (like_id, user_id, media_id, media_type, created_at) VALUES (?, ?, ?, 'song', NOW())";
-        jdbcTemplate.update(insertSql, UUID.randomUUID(), userId, songId);
-        
-        // Award points: Song +2, Artist +1, User +1
-        scoreUpdateService.onLike(userId, songId);
-        
-        System.out.println("✓ Like created: User " + userId + " liked Song " + songId + " (points awarded)");
-        
-        return true;
+
+        Song song = songRepository.findById(songId).orElse(null);
+        if (song == null || song.isRemoved()) {
+            throw new ResponseStatusException(HttpStatus.GONE, "This song was removed.");
+        }
+
+        // A like pays once per person per track, ever. Unliking and liking
+        // again used to pay every time (you +1, track +2, artist +1).
+        String rewardKey = "like:song:" + songId;
+        boolean firstLike = scoreUpdateService.claimOnce(userId, rewardKey, 1);
+
+        // The like keeps the date of the FIRST like, so a re-like can't count
+        // again toward a later award period.
+        String insertSql = """
+            INSERT INTO likes (like_id, user_id, media_id, media_type, created_at)
+            VALUES (?, ?, ?, 'song',
+                    COALESCE((SELECT created_at FROM point_rewards WHERE user_id = ? AND reward_key = ?), NOW()))
+            """;
+        jdbcTemplate.update(insertSql, UUID.randomUUID(), userId, songId, userId, rewardKey);
+
+        // Award points: Song +2, Artist +1, User +1 — first like only
+        if (firstLike) {
+            scoreUpdateService.onLike(userId, songId);
+        }
+
+        System.out.println("✓ Like created: User " + userId + " liked Song " + songId
+            + (firstLike ? " (points awarded)" : " (re-like, no points)"));
+
+        return new LikeOutcome(true, firstLike ? 1 : 0);
     }
     
     /**
@@ -811,28 +1021,45 @@ public class MediaService {
     // computeVideoScores() already weights video likes x2 — these methods
     // simply expose the missing API surface for videos.
 
+    // Evicts "artists" only: there is no "videos" cache in CacheConfig, and
+    // naming one that doesn't exist makes every call fail.
     @Transactional
-    @CacheEvict(value = {"videos", "artists"}, allEntries = true)
-    public boolean likeVideo(UUID videoId, UUID userId) {
+    @CacheEvict(value = {"artists"}, allEntries = true)
+    public LikeOutcome likeVideo(UUID videoId, UUID userId) {
         String checkSql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'video'";
         Integer count = jdbcTemplate.queryForObject(checkSql, Integer.class, userId, videoId);
 
         if (count != null && count > 0) {
-            return false; // Already liked
+            return new LikeOutcome(false, 0); // Already liked
         }
 
-        String insertSql = "INSERT INTO likes (like_id, user_id, media_id, media_type, created_at) VALUES (?, ?, ?, 'video', NOW())";
-        jdbcTemplate.update(insertSql, UUID.randomUUID(), userId, videoId);
+        if (!videoRepository.existsById(videoId)) {
+            throw new ResponseStatusException(HttpStatus.GONE, "This video was deleted.");
+        }
 
-        // Award points: Video +2, Artist +1, User +1 (same weights as songs)
-        scoreUpdateService.onLikeVideo(userId, videoId);
+        // Same once-ever rule as songs.
+        String rewardKey = "like:video:" + videoId;
+        boolean firstLike = scoreUpdateService.claimOnce(userId, rewardKey, 1);
 
-        System.out.println("✓ Like created: User " + userId + " liked Video " + videoId + " (points awarded)");
-        return true;
+        String insertSql = """
+            INSERT INTO likes (like_id, user_id, media_id, media_type, created_at)
+            VALUES (?, ?, ?, 'video',
+                    COALESCE((SELECT created_at FROM point_rewards WHERE user_id = ? AND reward_key = ?), NOW()))
+            """;
+        jdbcTemplate.update(insertSql, UUID.randomUUID(), userId, videoId, userId, rewardKey);
+
+        // Award points: Video +2, Artist +1, User +1 (same weights as songs) — first like only
+        if (firstLike) {
+            scoreUpdateService.onLikeVideo(userId, videoId);
+        }
+
+        System.out.println("✓ Like created: User " + userId + " liked Video " + videoId
+            + (firstLike ? " (points awarded)" : " (re-like, no points)"));
+        return new LikeOutcome(true, firstLike ? 1 : 0);
     }
 
     @Transactional
-    @CacheEvict(value = {"videos", "artists"}, allEntries = true)
+    @CacheEvict(value = {"artists"}, allEntries = true)
     public boolean unlikeVideo(UUID videoId, UUID userId) {
         String deleteSql = "DELETE FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'video'";
         int rowsAffected = jdbcTemplate.update(deleteSql, userId, videoId);

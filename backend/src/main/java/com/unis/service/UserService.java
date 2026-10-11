@@ -87,6 +87,41 @@ public class UserService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private MediaService mediaService;
+
+    @Autowired
+    private EarningsService earningsService;
+
+    @Autowired
+    private com.unis.repository.PayoutRepository payoutRepository;
+
+    /**
+     * Usernames are reserved forever, ignoring capitalization: an account
+     * that's live, deleted (past awards still show its name), or waiting on the
+     * waitlist all hold their name. A waitlist name is free to the same person
+     * (same email). The database enforces the same rule (V2026_10b).
+     *
+     * @param email the person signing up, or null when it isn't known yet
+     */
+    @Transactional(readOnly = true)
+    public boolean isUsernameTaken(String username, String email) {
+        if (username == null || username.isBlank()) return true;
+        String name = username.trim();
+        Boolean onUsers = jdbcTemplate.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE lower(username) = lower(?))", Boolean.class, name);
+        if (Boolean.TRUE.equals(onUsers)) return true;
+        Boolean onWaitlist = email == null
+            ? jdbcTemplate.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM pre_registrations WHERE lower(username) = lower(?))",
+                Boolean.class, name)
+            : jdbcTemplate.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM pre_registrations WHERE lower(username) = lower(?) "
+                    + "AND lower(email) <> lower(?))",
+                Boolean.class, name, email);
+        return Boolean.TRUE.equals(onWaitlist);
+    }
+
 
 
     @Cacheable(value = "profileSummaries", key = "#userId")
@@ -308,6 +343,16 @@ public class UserService {
  
         newUser.setEmail(newUser.getEmail().toLowerCase().trim());   // normalize before saving
 
+        // Usernames are reserved forever, in any capitalization, including names
+        // held by deleted accounts and by the waitlist.
+        if (newUser.getUsername() == null || newUser.getUsername().isBlank()) {
+            throw new RuntimeException("A username is required.");
+        }
+        newUser.setUsername(newUser.getUsername().trim());
+        if (isUsernameTaken(newUser.getUsername(), newUser.getEmail())) {
+            throw new RuntimeException("That username is taken.");
+        }
+
         // Hash password
         newUser.setPasswordHash(passwordEncoder.encode(newUser.getPasswordHash()));
         newUser.setCreatedAt(LocalDateTime.now());
@@ -328,7 +373,9 @@ public class UserService {
  
         // Handle referral tracking
         if (referralCode != null && !referralCode.trim().isEmpty()) {
-            Optional<User> referrerOpt = userRepository.findByReferralCode(referralCode);
+            // A deleted account's code no longer refers anyone.
+            Optional<User> referrerOpt = userRepository.findByReferralCode(referralCode)
+                    .filter(r -> r.getDeletedAt() == null);
             
             if (referrerOpt.isPresent()) {
                 User referrer = referrerOpt.get();
@@ -341,8 +388,10 @@ public class UserService {
                         .build();
                 referralRepository.save(referral);
                 
-                // Award points to referrer (+5 for listeners, +2 for artists)
-                scoreUpdateService.onReferral(referrer.getUserId());
+                // Award points to referrer (+5 for listeners, +2 for artists).
+                // Recorded so it can be taken back if this account is deleted
+                // within 30 days.
+                scoreUpdateService.onReferral(referrer.getUserId(), savedUser.getUserId());
                 
                 System.out.println("Referral tracked: " + referrer.getUsername() + " referred " + savedUser.getUsername());
             } else {
@@ -352,7 +401,8 @@ public class UserService {
  
         // For ALL users (listeners AND artists): Validate and set supported artist
         if (supportedArtistId != null) {
-            Optional<User> optionalArtist = userRepository.findById(supportedArtistId);
+            Optional<User> optionalArtist = userRepository.findById(supportedArtistId)
+                    .filter(a -> a.getDeletedAt() == null);
             User supportedArtist = optionalArtist.orElseThrow(() -> new RuntimeException("Supported artist not found"));
             
             if (!"artist".equals(supportedArtist.getRole().toString())) {
@@ -374,7 +424,7 @@ public class UserService {
                 .build();
             supporterRepository.save(supporter);
  
-            scoreUpdateService.onSupporterAdded(supportedArtistId);
+            scoreUpdateService.onSupporterAdded(supportedArtistId, savedUser.getUserId());
             System.out.println("Supporter created: " + savedUser.getUsername() + " supports " + supportedArtist.getUsername());
         }
  
@@ -464,6 +514,10 @@ public class UserService {
     public User getArtistProfile(UUID artistId) {
         Optional<User> optionalArtist = userRepository.findByIdWithJurisdiction(artistId);
         User artist = optionalArtist.orElseThrow(() -> new RuntimeException("Artist not found"));
+        if (artist.getDeletedAt() != null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND, "This account no longer exists");
+        }
         if (!"artist".equals(artist.getRole().toString())) {
             throw new RuntimeException("Not an artist");
         }
@@ -495,8 +549,10 @@ public class UserService {
             )
             SELECT DISTINCT u.user_id, u.username, u.default_song_id, COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) as total_score
             FROM users u
-            LEFT JOIN songs s ON s.artist_id = u.user_id AND s.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
+            LEFT JOIN songs s ON s.artist_id = u.user_id AND s.deleted_at IS NULL
+                AND s.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
             LEFT JOIN videos v ON v.artist_id = u.user_id AND v.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
+            WHERE u.deleted_at IS NULL
             GROUP BY u.user_id, u.username, u.default_song_id
             HAVING COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) > 0
             ORDER BY total_score DESC
@@ -527,62 +583,252 @@ public class UserService {
                 .collect(Collectors.toList());
     }
 
-    // Delete user - EVICTS all relevant caches
-    @Transactional
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, allEntries = true)
-    public void deleteCurrentUserAndAllData(UUID currentUserId) {
-        // First, verify user exists
-        User user = userRepository.findById(currentUserId)
-            .orElseThrow(() -> new RuntimeException("User not found: " + currentUserId));
+    // =========================================================================
+    // ACCOUNT DELETION
+    //
+    // The rules (also in the help center):
+    //  - Money first: no deletion while a payout is on its way; a balance of
+    //    $50 or more must be cashed out first; a smaller balance can only be
+    //    given up with an explicit confirmation. Earnings records are kept.
+    //  - Songs are removed (kept in award history), videos deleted.
+    //  - Votes and plays stay: they count for races that closed before the
+    //    deletion and drop out of races still open (AwardService).
+    //  - Likes, follows, playlist follows, comments, playlists, pending
+    //    suggestions and votes on open suggestions leave with the account.
+    //  - Fans of a deleted artist: a queued switch takes effect now, otherwise
+    //    their next pick is immediate.
+    //  - Joined less than 30 days ago: the sign-up rewards this account gave
+    //    others (referrer bonus, supported artist's +5) are taken back.
+    //  - Contact and profile details are wiped. The username stays reserved
+    //    forever; the email and phone are freed.
+    // =========================================================================
 
-        // Check if already deleted
+    /** How long after joining a deleted account's sign-up rewards are taken back. */
+    static final int SIGNUP_REWARD_HOLD_DAYS = 30;
+
+    /** A deletion refused for a reason the user can fix (code tells the app which). */
+    public static class AccountDeletionBlockedException extends RuntimeException {
+        private final String code;
+        private final java.math.BigDecimal availableBalance;
+
+        public AccountDeletionBlockedException(String code, String message, java.math.BigDecimal availableBalance) {
+            super(message);
+            this.code = code;
+            this.availableBalance = availableBalance;
+        }
+
+        public String getCode() { return code; }
+        public java.math.BigDecimal getAvailableBalance() { return availableBalance; }
+    }
+
+    /**
+     * What the delete-account wizard needs to show before anything happens:
+     * the balance, and whether deleting is blocked or needs confirmation.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getDeletionCheck(UUID userId) {
+        java.math.BigDecimal available = earningsService.getAvailableBalance(userId);
+        java.math.BigDecimal shown = available.max(java.math.BigDecimal.ZERO).setScale(2, java.math.RoundingMode.FLOOR);
+        boolean payoutProcessing = payoutRepository.hasActivePayout(userId);
+        boolean mustCashOut = available.compareTo(EarningsService.PAYOUT_THRESHOLD) >= 0;
+        boolean mustConfirmForfeit = !mustCashOut && shown.signum() > 0;
+
+        Map<String, Object> check = new java.util.LinkedHashMap<>();
+        check.put("availableBalance", shown);
+        check.put("payoutThreshold", EarningsService.PAYOUT_THRESHOLD);
+        check.put("payoutProcessing", payoutProcessing);
+        check.put("mustCashOut", mustCashOut);
+        check.put("mustConfirmForfeit", mustConfirmForfeit);
+        check.put("canDelete", !payoutProcessing && !mustCashOut);
+        return check;
+    }
+
+    /**
+     * The user deletes their own account (DELETE /api/v1/users/me).
+     *
+     * @param forfeitConfirmed the user ticked "I give up my $X.XX" in the wizard.
+     *        Required only when they have a balance under $50.
+     */
+    @Transactional
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries", "jurisdictions", "leaderboards", "nominees", "playlists"}, allEntries = true)
+    public void deleteAccount(UUID userId, boolean forfeitConfirmed) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found: " + userId));
         if (user.getDeletedAt() != null) {
             throw new RuntimeException("User is already deleted");
         }
 
-        // 1. Delete all songs by this artist (content removal)
-        songRepository.deleteByArtistUserId(currentUserId);
+        // ---- Money first: nothing is lost or stranded ----
+        if (payoutRepository.hasActivePayout(userId)) {
+            throw new AccountDeletionBlockedException("PAYOUT_PROCESSING",
+                "A payout is still on its way to your bank. You can delete your account once it finishes.",
+                null);
+        }
+        java.math.BigDecimal available = earningsService.getAvailableBalance(userId);
+        java.math.BigDecimal shown = available.max(java.math.BigDecimal.ZERO).setScale(2, java.math.RoundingMode.FLOOR);
+        if (available.compareTo(EarningsService.PAYOUT_THRESHOLD) >= 0) {
+            throw new AccountDeletionBlockedException("BALANCE_MUST_BE_CASHED_OUT",
+                "You have $" + shown + " in earnings. Cash it out from your Earnings page before deleting your account.",
+                shown);
+        }
+        if (shown.signum() > 0 && !forfeitConfirmed) {
+            throw new AccountDeletionBlockedException("BALANCE_FORFEIT_REQUIRED",
+                "You have $" + shown + " in earnings, which is under the $50 payout minimum. "
+                    + "Confirm that you give it up to delete your account.",
+                shown);
+        }
 
-        // 2. Delete all videos by this artist (content removal)
-        videoRepository.deleteByArtistUserId(currentUserId);
+        purgeAccount(user, "self");
+        System.out.println("[AccountDelete] action=delete status=ok userId=" + userId
+            + " by=self forfeited=$" + shown);
+    }
 
-        // 3. REMOVED: Don't delete votes cast BY this user
-        // voteRepository.deleteByUserUserId(currentUserId);
-        // Reason: Preserves voting history for audit trail
+    /**
+     * An admin deletes an account (AdminUserService.permanentlyDeleteUser).
+     * Same cleanup as a self-deletion. No balance check: a removal for cause
+     * forfeits earnings under Terms 11.6. The forfeited amount is logged.
+     */
+    @Transactional
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries", "jurisdictions", "leaderboards", "nominees", "playlists"}, allEntries = true)
+    public java.math.BigDecimal deleteAccountByAdmin(UUID userId) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User not found: " + userId));
+        if (user.getDeletedAt() != null) {
+            throw new RuntimeException("User is already deleted");
+        }
+        java.math.BigDecimal shown = earningsService.getAvailableBalance(userId)
+            .max(java.math.BigDecimal.ZERO).setScale(2, java.math.RoundingMode.FLOOR);
+        purgeAccount(user, "admin");
+        System.out.println("[AccountDelete] action=delete status=ok userId=" + userId
+            + " by=admin forfeited=$" + shown);
+        return shown;
+    }
 
-        // 4. REMOVED: Don't delete votes cast ON this user's songs
-        // voteRepository.deleteByTargetArtistId(currentUserId);
-        // Reason: Preserves historical voting data for Milestones page
+    /** The cleanup itself. Runs inside the caller's transaction. */
+    private void purgeAccount(User user, String actor) {
+        UUID userId = user.getUserId();
+        LocalDateTime now = LocalDateTime.now();
 
-        // 5. REMOVED: Don't delete awards this user received
-        // awardRepository.deleteByTargetArtistId(currentUserId);
-        // Reason: Preserves historical award data for Milestones page
+        // 1. Content. Songs are removed (not erased) so award history keeps
+        //    them; their files are hidden and purged after 30 days. Videos go.
+        for (Song song : songRepository.findByArtistId(userId)) {
+            mediaService.removeSong(song, "account_deleted");
+        }
+        for (com.unis.entity.Video video : videoRepository.findByArtistId(userId)) {
+            mediaService.deleteVideo(video);
+        }
 
-        // 6. Delete all song plays / video plays (activity logs)
-        songPlayRepository.deleteByUserUserId(currentUserId);
-        videoPlayRepository.deleteByUserUserId(currentUserId);
+        // 2. Votes, plays and ad views are KEPT. Votes and plays still count
+        //    for races that closed before today; ad views are other people's
+        //    earnings records (supported artist, referrers) and must never be
+        //    deleted. (Deleting them used to shrink those people's balances.)
 
-        // 7. Delete all likes (user preferences)
-        likeRepository.deleteByUserUserId(currentUserId);
+        // 3. Fans of this artist. A switch they already queued takes effect
+        //    now; otherwise they're cleared and their next pick is immediate.
+        for (User fan : userRepository.findBySupportedArtistId(userId)) {
+            UUID pendingId = fan.getPendingSupportedArtistId();
+            User next = pendingId == null || pendingId.equals(userId) ? null
+                : userRepository.findById(pendingId)
+                    .filter(a -> a.getDeletedAt() == null && "artist".equals(a.getRole().toString()))
+                    .orElse(null);
+            fan.setSupportedArtistId(next != null ? next.getUserId() : null);
+            fan.setPendingSupportedArtistId(null);
+            fan.setPendingSupportedArtistSince(null);
+            userRepository.save(fan);
+            if (next != null && !supporterRepository.existsByListenerAndArtist(fan, next)) {
+                supporterRepository.save(Supporter.builder()
+                    .listener(fan)
+                    .artist(next)
+                    .createdAt(now)
+                    .build());
+                scoreUpdateService.onSupporterAdded(next.getUserId(), fan.getUserId());
+            }
+        }
+        entityManager.flush();
+        // Fans who had queued a switch TO this artist keep their current one.
+        jdbcTemplate.update(
+            "UPDATE users SET pending_supported_artist_id = NULL, pending_supported_artist_since = NULL "
+                + "WHERE pending_supported_artist_id = ?", userId);
+        supporterRepository.deleteByArtistUserId(userId);
 
-        // 7b. Delete likes this user left on profile photos (soft delete keeps
-        //     the users row, so the ON DELETE CASCADE on photo_likes never fires)
-        jdbcTemplate.update("DELETE FROM photo_likes WHERE user_id = ?", currentUserId);
+        // 4. This account as a fan.
+        supporterRepository.deleteByListenerUserId(userId);
 
-        // 8. Delete all ad views (activity logs)
-        adViewRepository.deleteByUserUserId(currentUserId);
+        // 5. Likes and follows are current opinions: they leave with the account
+        //    (points already earned from them stay, same as unliking).
+        likeRepository.deleteByUserUserId(userId);
+        //    Photo likes: the soft delete keeps the users row, so the ON DELETE
+        //    CASCADE on photo_likes never fires.
+        jdbcTemplate.update("DELETE FROM photo_likes WHERE user_id = ?", userId);
+        jdbcTemplate.update("DELETE FROM follows WHERE follower_id = ? OR followed_id = ?", userId, userId);
+        jdbcTemplate.update("""
+            UPDATE playlist SET follower_count = GREATEST(0, follower_count - 1)
+             WHERE playlist_id IN (SELECT playlist_id FROM playlist_follows WHERE user_id = ?)
+            """, userId);
+        jdbcTemplate.update("DELETE FROM playlist_follows WHERE user_id = ?", userId);
 
-        // 9. Clean up supporter relationships
-        userRepository.nullifySupportedArtistForListeners(currentUserId);
-        supporterRepository.deleteByArtistUserId(currentUserId);
-        supporterRepository.deleteByListenerUserId(currentUserId);
+        // 6. Their playlists, comments and pending suggestions are removed.
+        jdbcTemplate.update(
+            "UPDATE playlist SET deleted_at = ? WHERE created_by = ? AND deleted_at IS NULL", now, userId);
+        jdbcTemplate.update(
+            "UPDATE comments SET deleted_at = ? WHERE user_id = ? AND deleted_at IS NULL", now, userId);
+        jdbcTemplate.update(
+            "UPDATE playlist_items SET status = 'removed' WHERE added_by_user_id = ? AND status = 'pending'", userId);
 
-        // 10. SOFT DELETE: Mark user as deleted instead of removing
-        user.setDeletedAt(LocalDateTime.now());
+        // 7. Their votes come off community suggestions that are still open,
+        //    and those suggestions' tallies are recounted.
+        List<UUID> openItems = jdbcTemplate.queryForList("""
+            SELECT pv.playlist_item_id FROM playlist_votes pv
+              JOIN playlist_items pi ON pi.playlist_item_id = pv.playlist_item_id
+             WHERE pv.user_id = ? AND pi.status = 'pending'
+            """, UUID.class, userId);
+        for (UUID itemId : openItems) {
+            jdbcTemplate.update("DELETE FROM playlist_votes WHERE playlist_item_id = ? AND user_id = ?", itemId, userId);
+            jdbcTemplate.update("""
+                UPDATE playlist_items pi SET
+                    upvotes   = (SELECT COUNT(*) FROM playlist_votes pv WHERE pv.playlist_item_id = pi.playlist_item_id AND pv.vote_type = 'up'),
+                    downvotes = (SELECT COUNT(*) FROM playlist_votes pv WHERE pv.playlist_item_id = pi.playlist_item_id AND pv.vote_type = 'down')
+                 WHERE pi.playlist_item_id = ?
+                """, itemId);
+        }
+
+        // 8. Joined less than 30 days ago: take back the sign-up rewards this
+        //    account gave others. Otherwise "join with a code, delete, join
+        //    again with the same email" pays the referrer (and the supported
+        //    artist) every time.
+        if (user.getCreatedAt() != null && user.getCreatedAt().isAfter(now.minusDays(SIGNUP_REWARD_HOLD_DAYS))) {
+            int referral = scoreUpdateService.takeBackRewardsFor("referral:" + userId);
+            int supporter = scoreUpdateService.takeBackRewardsFor("supporter:" + userId);
+            System.out.println("[AccountDelete] action=take_back_signup_rewards userId=" + userId
+                + " referral=" + referral + " supporter=" + supporter);
+        }
+
+        // 9. Wipe contact and profile details. The username stays (reserved
+        //    forever, and past awards still show it). The email and phone are
+        //    freed, and the old login token stops working because it names the
+        //    old email.
+        user.setEmail("deleted-" + userId + "@deleted.unis.invalid");
+        user.setPasswordHash(passwordEncoder.encode(UUID.randomUUID().toString()));
+        user.setPhoneNumber(null);
+        user.setPhoneVerified(false);
+        user.setBio(null);
+        user.setPhotoUrl(null);
+        user.setInstagramUrl(null);
+        user.setTwitterUrl(null);
+        user.setTiktokUrl(null);
+        user.setYoutubeUrl(null);
+        user.setContactEmail(null);
+        user.setGender(null);
+        user.setDateOfBirth(null);
+        user.setEmailNotifications(false);
+        user.setSupportedArtistId(null);
+        user.setPendingSupportedArtistId(null);
+        user.setPendingSupportedArtistSince(null);
+        user.setDefaultSongId(null);
+        user.setDeletedAt(now);
         userRepository.save(user);
 
-        // Log the soft delete
-        System.out.println("User soft-deleted: " + currentUserId + " at " + user.getDeletedAt());
+        System.out.println("[AccountDelete] action=purge status=ok userId=" + userId + " by=" + actor);
     }
 
     /**
@@ -641,7 +887,7 @@ public class UserService {
                     .createdAt(LocalDateTime.now())
                     .build();
             supporterRepository.save(supporter);
-            scoreUpdateService.onSupporterAdded(newArtistId);
+            scoreUpdateService.onSupporterAdded(newArtistId, userId);   // +5 once per fan, ever
 
             System.out.println("[Support] action=set userId=" + userId
                 + " status=ok mode=immediate artist=" + newArtistId);

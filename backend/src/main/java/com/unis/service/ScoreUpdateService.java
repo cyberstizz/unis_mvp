@@ -50,6 +50,55 @@ public class ScoreUpdateService {
     @Autowired
     private com.unis.repository.VideoRepository videoRepository;
 
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    // Points an artist gets when someone picks them to support.
+    public static final int SUPPORTER_POINTS = 5;
+
+    // ============================================================================
+    // ONCE-EVER REWARDS (point_rewards table, see backend/sql/V2026_10c)
+    // ============================================================================
+
+    /**
+     * Records that a one-time reward is being paid. Returns true the first time
+     * this user claims this key, false every time after — so "like, unlike,
+     * like" or "switch away and back" can't pay twice. The primary key makes
+     * this safe even when two requests arrive at the same moment.
+     *
+     * Keys: like:song:<id>, like:video:<id>, supporter:<listenerId>,
+     * referral:<referredUserId>, suggestion-vote:<playlist>:<song>,
+     * suggestion-approved:<playlist>:<song>.
+     */
+    @Transactional
+    public boolean claimOnce(UUID userId, String rewardKey, int points) {
+        int inserted = jdbcTemplate.update(
+            "INSERT INTO point_rewards (user_id, reward_key, points, created_at) "
+                + "VALUES (?, ?, ?, NOW()) ON CONFLICT DO NOTHING",
+            userId, rewardKey, points);
+        return inserted == 1;
+    }
+
+    /**
+     * Takes back a one-time reward this account gave someone else, used when an
+     * account is deleted within 30 days of joining (UserService). Removes the
+     * record and subtracts exactly the points it paid. Returns how many rewards
+     * were taken back.
+     */
+    @Transactional
+    public int takeBackRewardsFor(String rewardKey) {
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(
+            "DELETE FROM point_rewards WHERE reward_key = ? RETURNING user_id, points", rewardKey);
+        for (java.util.Map<String, Object> row : rows) {
+            UUID beneficiary = (UUID) row.get("user_id");
+            int points = ((Number) row.get("points")).intValue();
+            if (points > 0) {
+                updateUserScoreIncrement(beneficiary, -points);
+            }
+        }
+        return rows.size();
+    }
+
     // ============================================================================
     // EVENT-DRIVEN SCORING (Real-Time Updates)
     // ============================================================================
@@ -115,17 +164,30 @@ public class ScoreUpdateService {
         });
     }
 
+    /**
+     * +5 to an artist when a fan picks them to support — once per fan, ever.
+     * Before, a fan switching away and back paid the artist again each time.
+     */
     @Transactional
-    public void onSupporterAdded(UUID artistId) {
-        updateUserScoreIncrement(artistId, 5);
+    public void onSupporterAdded(UUID artistId, UUID listenerId) {
+        if (claimOnce(artistId, "supporter:" + listenerId, SUPPORTER_POINTS)) {
+            updateUserScoreIncrement(artistId, SUPPORTER_POINTS);
+        }
     }
 
+    /**
+     * +5 to a listener (+2 to an artist) for referring someone. Recorded in
+     * point_rewards so it can be taken back if the referred account is deleted
+     * within 30 days (UserService.deleteAccount).
+     */
     @Transactional
-    public void onReferral(UUID referrerId) {
+    public void onReferral(UUID referrerId, UUID referredUserId) {
         User referrer = userRepository.findById(referrerId).orElse(null);
         if (referrer != null) {
             int points = "artist".equals(referrer.getRole().toString()) ? 2 : 5;
-            updateUserScoreIncrement(referrerId, points);
+            if (claimOnce(referrerId, "referral:" + referredUserId, points)) {
+                updateUserScoreIncrement(referrerId, points);
+            }
         }
     }
 
@@ -210,6 +272,7 @@ public class ScoreUpdateService {
         List<User> allUsers = userRepository.findAll();
         
         for (User user : allUsers) {
+            if (user.getDeletedAt() != null) continue;  // deleted accounts don't keep earning
             LocalDateTime created = user.getCreatedAt();
             if (created != null) {
                 long monthsOld = ChronoUnit.MONTHS.between(created, LocalDateTime.now());

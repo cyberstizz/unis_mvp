@@ -24,6 +24,9 @@ public class PreRegistrationService {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
     // ─── Major metro threshold tiers ───
     // In production, pull these from jurisdiction_activation_thresholds table
     private static final Set<String> MAJOR_METROS = Set.of(
@@ -58,6 +61,14 @@ public class PreRegistrationService {
             throw new IllegalArgumentException("Email already registered on the waitlist");
         }
         if (preRegRepo.existsByUsername(req.getUsername().toLowerCase().trim())) {
+            throw new IllegalArgumentException("Username already taken");
+        }
+        // Names held by full accounts (live or deleted — usernames are reserved
+        // forever) are taken too, unless it's the same person's email.
+        Boolean heldByAccount = jdbcTemplate.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE lower(username) = lower(?) AND lower(email) <> lower(?))",
+            Boolean.class, req.getUsername().trim(), req.getEmail().trim());
+        if (Boolean.TRUE.equals(heldByAccount)) {
             throw new IllegalArgumentException("Username already taken");
         }
 
