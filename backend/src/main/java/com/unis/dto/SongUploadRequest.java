@@ -21,4 +21,12 @@ public class SongUploadRequest {
     private String lyrics;
     private String isrc;
     private Boolean isCleanVersion = false;
+
+    // Discovery layer — see MediaService.applyDiscovery for the rules.
+    private UUID primarySubgenreId;
+    private UUID secondarySubgenreId;
+    private String subgenreWriteIn;
+    private UUID primaryMoodId;
+    private UUID secondaryMoodId;
+    private String language;
 }

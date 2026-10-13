@@ -2,6 +2,11 @@ package com.unis.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper; 
 import com.unis.dto.SongUploadRequest;
+import com.unis.dto.SongDiscoveryRequest;
+import com.unis.entity.Mood;
+import com.unis.entity.Subgenre;
+import com.unis.repository.MoodRepository;
+import com.unis.repository.SubgenreRepository;
 import com.unis.dto.VideoUploadRequest;
 import com.unis.entity.Song;
 import com.unis.entity.Video;
@@ -88,6 +93,12 @@ public class MediaService {
 
     @Autowired
     private FileStorageService fileStorageService;
+
+    @Autowired
+    private SubgenreRepository subgenreRepository;
+
+    @Autowired
+    private MoodRepository moodRepository;
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -133,6 +144,12 @@ public class MediaService {
                 genre = genreRepository.findById(req.getGenreId()).orElse(null);
             }
 
+            // Discovery tags — checked BEFORE any file is stored, so a rejected
+            // upload never leaves orphaned audio or artwork in R2.
+            Discovery discovery = resolveDiscovery(genre,
+                    req.getPrimarySubgenreId(), req.getSecondarySubgenreId(), req.getSubgenreWriteIn(),
+                    req.getPrimaryMoodId(), req.getSecondaryMoodId(), req.getLanguage());
+
             // Resolve jurisdiction
             Jurisdiction jurisdiction = null;
             if (req.getJurisdictionId() != null) {
@@ -172,6 +189,7 @@ public class MediaService {
             song.setLyrics(req.getLyrics());
             song.setPlaysToday(0);
             song.setLastPlayResetDate(LocalDate.now());
+            discovery.applyTo(song);
 
 
             // ISRC (optional)
@@ -199,7 +217,139 @@ public class MediaService {
         }
     }
 
-    
+
+    // ========================================================================
+    // DISCOVERY LAYER — subgenres, moods, language
+    // ========================================================================
+    //
+    // The rules (the help center's "Genres and moods" section says the same):
+    //   • Primary subgenre: required, and it must belong to the song's own
+    //     genre. If nothing fits, the artist types a write-in instead; an admin
+    //     maps it at the quarterly review (query in the SQL migration file).
+    //   • Secondary subgenre: optional, ANY genre (crossover), not the primary.
+    //   • Primary mood: required. Secondary mood: optional, not the primary.
+    //   • Language: one of LANGUAGES; defaults to English.
+    // Genres alone drive voting, awards and charts. None of this touches them.
+
+    /** Language codes a song can carry, in the order the upload form shows them. */
+    public static final java.util.Map<String, String> LANGUAGES;
+    static {
+        java.util.LinkedHashMap<String, String> m = new java.util.LinkedHashMap<>();
+        m.put("en", "English");
+        m.put("es", "Spanish");
+        m.put("fr", "French");
+        m.put("other", "Other language");
+        m.put("instrumental", "Instrumental (no vocals)");
+        LANGUAGES = java.util.Collections.unmodifiableMap(m);
+    }
+
+    private static final int WRITE_IN_MAX = 60;
+
+    /** Validated tags, ready to copy onto a song. */
+    private record Discovery(Subgenre primary, Subgenre secondary, String writeIn,
+                             Mood primaryMood, Mood secondaryMood, String language) {
+        void applyTo(Song song) {
+            song.setPrimarySubgenre(primary);
+            song.setSecondarySubgenre(secondary);
+            song.setSubgenreWriteIn(writeIn);
+            song.setPrimaryMood(primaryMood);
+            song.setSecondaryMood(secondaryMood);
+            song.setLanguage(language);
+        }
+    }
+
+    private static ResponseStatusException badTag(String message) {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private Discovery resolveDiscovery(Genre genre,
+                                       UUID primarySubgenreId, UUID secondarySubgenreId, String writeInRaw,
+                                       UUID primaryMoodId, UUID secondaryMoodId, String languageRaw) {
+        String writeIn = writeInRaw == null ? null : writeInRaw.trim();
+        if (writeIn != null && writeIn.isEmpty()) writeIn = null;
+
+        Subgenre primary = null;
+        if (primarySubgenreId != null) {
+            primary = subgenreRepository.findById(primarySubgenreId)
+                    .filter(sg -> Boolean.TRUE.equals(sg.getActive()))
+                    .orElseThrow(() -> badTag("That subgenre isn't available. Pick another."));
+            if (genre != null && !primary.getGenreId().equals(genre.getGenreId())) {
+                throw badTag("Your primary subgenre has to be under this song's genre.");
+            }
+            writeIn = null;   // a real subgenre wins over a write-in
+        } else if (writeIn == null) {
+            throw badTag("Choose a subgenre for this song (or choose Other and type one in).");
+        } else if (writeIn.length() > WRITE_IN_MAX) {
+            throw badTag("Keep the subgenre you type in to " + WRITE_IN_MAX + " characters.");
+        }
+
+        Subgenre secondary = null;
+        if (secondarySubgenreId != null) {
+            if (primary != null && secondarySubgenreId.equals(primary.getSubgenreId())) {
+                throw badTag("The second subgenre has to be different from the first.");
+            }
+            secondary = subgenreRepository.findById(secondarySubgenreId)
+                    .filter(sg -> Boolean.TRUE.equals(sg.getActive()))
+                    .orElseThrow(() -> badTag("That second subgenre isn't available. Pick another."));
+        }
+
+        if (primaryMoodId == null) {
+            throw badTag("Choose at least one mood for this song.");
+        }
+        Mood primaryMood = moodRepository.findById(primaryMoodId)
+                .filter(m -> Boolean.TRUE.equals(m.getActive()))
+                .orElseThrow(() -> badTag("That mood isn't available. Pick another."));
+
+        Mood secondaryMood = null;
+        if (secondaryMoodId != null) {
+            if (secondaryMoodId.equals(primaryMoodId)) {
+                throw badTag("The second mood has to be different from the first.");
+            }
+            secondaryMood = moodRepository.findById(secondaryMoodId)
+                    .filter(m -> Boolean.TRUE.equals(m.getActive()))
+                    .orElseThrow(() -> badTag("That second mood isn't available. Pick another."));
+        }
+
+        String language = languageRaw == null || languageRaw.isBlank() ? "en" : languageRaw.trim().toLowerCase();
+        if (!LANGUAGES.containsKey(language)) {
+            throw badTag("Pick a language from the list.");
+        }
+
+        return new Discovery(primary, secondary, writeIn, primaryMood, secondaryMood, language);
+    }
+
+    /**
+     * Tag or re-tag a song. Only its artist or an admin. Used by the edit-song
+     * wizard, which is how songs uploaded before this existed get their tags.
+     */
+    @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
+    @Transactional
+    public Song updateDiscovery(UUID songId, UUID requesterId, boolean requesterIsAdmin, SongDiscoveryRequest req) {
+        Song song = songRepository.findById(songId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Song not found"));
+        boolean isOwner = song.getArtist() != null && song.getArtist().getUserId().equals(requesterId);
+        if (!isOwner && !requesterIsAdmin) {
+            throw new NotOwnerException("You can only edit your own songs.");
+        }
+        if (song.isRemoved()) {
+            throw new ResponseStatusException(HttpStatus.GONE, "This song was removed and can't be edited.");
+        }
+
+        Discovery discovery = resolveDiscovery(song.getGenre(),
+                req.getPrimarySubgenreId(), req.getSecondarySubgenreId(), req.getSubgenreWriteIn(),
+                req.getPrimaryMoodId(), req.getSecondaryMoodId(), req.getLanguage());
+        discovery.applyTo(song);
+
+        // The clean version is the same song, so it carries the same tags.
+        if (song.getCleanVersionId() != null) {
+            songRepository.findById(song.getCleanVersionId()).ifPresent(clean -> {
+                discovery.applyTo(clean);
+                songRepository.save(clean);
+            });
+        }
+        return songRepository.save(song);
+    }
+
     // NOT CACHED - private helper method
     private Integer computeDuration(MultipartFile file) {
         if (file == null || file.isEmpty()) {
@@ -1140,6 +1290,26 @@ public class MediaService {
             if (jurisdictionId != null) {
                 jurisdictionRepository.findById(jurisdictionId).ifPresent(song::setJurisdiction);
             }
+
+            // Discovery tags (columns added by V2026_10c)
+            UUID primarySubgenreId = (UUID) rs.getObject("primary_subgenre_id");
+            UUID secondarySubgenreId = (UUID) rs.getObject("secondary_subgenre_id");
+            UUID primaryMoodId = (UUID) rs.getObject("primary_mood_id");
+            UUID secondaryMoodId = (UUID) rs.getObject("secondary_mood_id");
+            if (primarySubgenreId != null) {
+                subgenreRepository.findById(primarySubgenreId).ifPresent(song::setPrimarySubgenre);
+            }
+            if (secondarySubgenreId != null) {
+                subgenreRepository.findById(secondarySubgenreId).ifPresent(song::setSecondarySubgenre);
+            }
+            if (primaryMoodId != null) {
+                moodRepository.findById(primaryMoodId).ifPresent(song::setPrimaryMood);
+            }
+            if (secondaryMoodId != null) {
+                moodRepository.findById(secondaryMoodId).ifPresent(song::setSecondaryMood);
+            }
+            song.setLanguage(rs.getString("language"));
+            song.setSubgenreWriteIn(rs.getString("subgenre_write_in"));
             
             // Set the NEW transient fields for likes and plays
             song.setLikes(rs.getInt("likes"));

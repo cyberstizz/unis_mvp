@@ -175,6 +175,11 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/lyrics").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/likes/count").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/is-liked").permitAll()
+                // Subgenres, moods and languages: upload form lists, browse shelves, recommended carousel
+                .requestMatchers(HttpMethod.GET, "/api/v1/taxonomy").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/taxonomy/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/browse").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/recommended").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/artist/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/jurisdiction/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/artist/*").permitAll()

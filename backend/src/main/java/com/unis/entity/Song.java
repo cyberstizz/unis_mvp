@@ -81,6 +81,37 @@ public class Song {
     @Column(name = "download_price")
     private Integer downloadPrice; 
 
+    // ── Discovery layer (subgenres, moods, language) ─────────────────────
+    // For finding music only: browse shelves, the song page, the recommended
+    // carousel. Voting, awards and charts still key off `genre` alone.
+    //
+    // primarySubgenre is always one of the song's own genre's subgenres
+    // (MediaService enforces it). secondarySubgenre may come from any genre,
+    // for crossover songs. If nothing fits, the artist types subgenreWriteIn
+    // instead of a primary, and an admin maps it at the quarterly review.
+    @ManyToOne
+    @JoinColumn(name = "primary_subgenre_id")
+    private Subgenre primarySubgenre;
+
+    @ManyToOne
+    @JoinColumn(name = "secondary_subgenre_id")
+    private Subgenre secondarySubgenre;
+
+    @ManyToOne
+    @JoinColumn(name = "primary_mood_id")
+    private Mood primaryMood;
+
+    @ManyToOne
+    @JoinColumn(name = "secondary_mood_id")
+    private Mood secondaryMood;
+
+    /** en, es, fr, other, or instrumental. Null on songs uploaded before this existed. */
+    @Column(name = "language", length = 16)
+    private String language;
+
+    @Column(name = "subgenre_write_in", length = 60)
+    private String subgenreWriteIn;
+
     @Transient
     private Long playCount;
 
