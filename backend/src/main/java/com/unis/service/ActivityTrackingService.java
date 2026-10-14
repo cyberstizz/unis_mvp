@@ -34,6 +34,7 @@ public class ActivityTrackingService {
                 .user(user)
                 .activityType(activityType)
                 .page(page)
+                .platform(com.unis.util.ClientPlatform.current())  // web | ios | android, for the metrics
                 .build();
 
         userActivityRepository.save(activity);

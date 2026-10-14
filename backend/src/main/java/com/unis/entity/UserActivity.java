@@ -28,6 +28,10 @@ public class UserActivity {
     @Column(length = 100)
     private String page;
 
+    /** web | ios | android, from the X-Unis-Platform header. */
+    @Column(name = "platform", length = 10)
+    private String platform;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

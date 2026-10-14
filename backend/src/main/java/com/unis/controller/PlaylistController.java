@@ -38,7 +38,20 @@ public class PlaylistController {
     @PostMapping
     public ResponseEntity<PlaylistResponse> createPlaylist(@RequestBody CreatePlaylistRequest req) {
         UUID userId = SecurityUtils.getAuthenticatedUserId();
+        // Official (Unis editorial) playlists are for staff with an admin role
+        // of moderator or above. PlaylistService assumed this was checked here,
+        // but it wasn't, so any logged-in user could create one.
+        if ("official".equals(req.getType()) && !hasModeratorRole()) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
+        }
         return ResponseEntity.ok(playlistService.createPlaylist(userId, req));
+    }
+
+    private static boolean hasModeratorRole() {
+        org.springframework.security.core.Authentication auth =
+            org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+            .anyMatch(a -> "ROLE_MODERATOR".equals(a.getAuthority()));
     }
 
     @GetMapping("/{playlistId}")

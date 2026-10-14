@@ -31,6 +31,9 @@ public class MediaController {
     @Autowired 
     private SignupUploadService signupUploadService; 
 
+    @Autowired
+    private com.unis.service.AnonymousPlayService anonymousPlayService;
+
     // POST /api/v1/media/signup-song — debut upload during signup (token-authorized, no login)
     @PostMapping(value = "/signup-song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Song> addSignupSong(
@@ -140,9 +143,13 @@ public class MediaController {
             @PathVariable UUID songId,
             @RequestParam(required = false) UUID userId,
             @RequestParam(required = false) String source) {
+        // Only a logged-in listener's play counts here. The userId in the URL
+        // is no longer trusted on its own: before, a request with no login could
+        // credit plays (and points) to any account by naming it. Logged-out
+        // listening goes to /song/{id}/anonymous-play instead.
         UUID resolvedUserId;
         try { resolvedUserId = SecurityUtils.getAuthenticatedUserId(); }
-        catch (Exception e) { resolvedUserId = userId; }
+        catch (Exception e) { resolvedUserId = null; }
 
         UUID playId = mediaService.playSong(songId, resolvedUserId, source);
         Map<String, Object> body = new HashMap<>();
@@ -161,15 +168,47 @@ public class MediaController {
         return ResponseEntity.ok().build();
     }
 
+    // POST /api/v1/media/song/{id}/anonymous-play?visitorId=&source=
+    // A play by someone who isn't logged in. Kept apart from counted plays:
+    // no points, no play count, no awards. See AnonymousPlayService.
+    @PostMapping("/song/{songId}/anonymous-play")
+    public ResponseEntity<Map<String, Object>> anonymousPlay(
+            @PathVariable UUID songId,
+            @RequestParam UUID visitorId,
+            @RequestParam(required = false) String source) {
+        UUID playId = anonymousPlayService.record(songId, visitorId, source);
+        Map<String, Object> body = new HashMap<>();
+        body.put("playId", playId != null ? playId.toString() : null);
+        body.put("counted", playId != null);
+        return ResponseEntity.ok(body);
+    }
+
+    // POST /api/v1/media/anonymous-play/complete  {playId, visitorId, percentPlayed}
+    @PostMapping("/anonymous-play/complete")
+    public ResponseEntity<Void> completeAnonymousPlay(@RequestBody Map<String, Object> body) {
+        try {
+            UUID playId = UUID.fromString(String.valueOf(body.get("playId")));
+            UUID visitorId = UUID.fromString(String.valueOf(body.get("visitorId")));
+            double pct = body.get("percentPlayed") != null
+                ? Double.parseDouble(body.get("percentPlayed").toString()) : 0.0;
+            anonymousPlayService.complete(playId, visitorId, pct);
+            return ResponseEntity.ok().build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
+    }
+
     // POST /api/v1/media/video/{id}/play
     @PostMapping("/video/{videoId}/play")
     public ResponseEntity<Void> playVideo(@PathVariable UUID videoId,
                                            @RequestParam(required = false) UUID userId) {
+        // Same rule as song plays: only a logged-in viewer's play counts; the
+        // userId in the URL is not trusted on its own.
         UUID resolvedUserId;
         try {
             resolvedUserId = SecurityUtils.getAuthenticatedUserId();
         } catch (Exception e) {
-            resolvedUserId = userId;
+            return ResponseEntity.ok().build();
         }
         mediaService.playVideo(videoId, resolvedUserId);
         return ResponseEntity.ok().build();

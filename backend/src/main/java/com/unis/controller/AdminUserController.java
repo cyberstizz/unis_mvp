@@ -60,8 +60,40 @@ public class AdminUserController {
         detail.put("isSuspended", adminUserService.isUserSuspended(userId));
         detail.put("suspensionHistory", adminUserService.getSuspensionHistory(userId));
         detail.put("adminRole", adminRoleRepository.findByUserId(userId).orElse(null));
+        detail.put("excludeFromMetrics", Boolean.TRUE.equals(user.getExcludeFromMetrics()));
+        detail.put("signupSource", user.getSignupSource());
+        detail.put("signupPlatform", user.getSignupPlatform());
 
         return ResponseEntity.ok(detail);
+    }
+
+    /**
+     * PATCH /api/v1/admin/users/{userId}/metrics-exclusion   {"exclude": true|false, "reason": "..."}
+     * Marks a staff or test account so it is left out of every metric from the
+     * next nightly run on. Earlier days already computed stay as they were.
+     */
+    @PatchMapping("/{userId}/metrics-exclusion")
+    public ResponseEntity<?> setMetricsExclusion(
+            @PathVariable UUID userId,
+            @RequestBody Map<String, Object> request) {
+        Object raw = request.get("exclude");
+        if (!(raw instanceof Boolean)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "\"exclude\" must be true or false"));
+        }
+        boolean exclude = (Boolean) raw;
+        User user = userRepository.findById(userId).orElse(null);
+        if (user == null) {
+            return ResponseEntity.notFound().build();
+        }
+        user.setExcludeFromMetrics(exclude);
+        userRepository.save(user);
+
+        UUID adminUserId = SecurityUtils.getAuthenticatedUserId();
+        String reason = request.get("reason") instanceof String r && !r.isBlank()
+                ? r : (exclude ? "Marked as a staff or test account" : "No longer a staff or test account");
+        adminUserService.logMetricsExclusion(adminUserId, userId, exclude, reason);
+
+        return ResponseEntity.ok(Map.of("excludeFromMetrics", exclude));
     }
 
     /**

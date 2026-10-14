@@ -151,6 +151,33 @@ public class User {
     private Boolean allowMessagesFromAnyone = true;
 
     // -----------------------------------------------------------------------
+    // Metrics (sql/V2026_10d__metrics.sql). Never serialized: this entity is
+    // returned by public profile endpoints, and none of this is public.
+    // The admin user-detail endpoint sends excludeFromMetrics explicitly.
+    // -----------------------------------------------------------------------
+
+    /** Staff or test account: left out of every metric. Set from the admin user page. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Builder.Default
+    @Column(name = "exclude_from_metrics", nullable = false)
+    private Boolean excludeFromMetrics = false;
+
+    /** referral | waitlist | campaign | organic, decided at signup. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "signup_source", length = 20)
+    private String signupSource;
+
+    /** The campaign code from the link the person arrived on, if any. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "signup_campaign", length = 80)
+    private String signupCampaign;
+
+    /** web | ios | android, the platform the account was created on. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "signup_platform", length = 10)
+    private String signupPlatform;
+
+    // -----------------------------------------------------------------------
     // Preference flags (backing columns for AccountSettings toggles).
     // @Builder.Default is required: with @Builder, an un-set field is null,
     // and these columns are NOT NULL -- without the default, builder-created

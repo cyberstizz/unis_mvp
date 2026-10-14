@@ -63,7 +63,6 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                 // ===== ADMIN-ONLY — C2 + C3 =====
-                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/v1/awards/recompute-all").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/v1/awards/compute").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/awards/cron/manual").hasRole("ADMIN")
@@ -81,6 +80,20 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/admin/analytics/**").hasRole("MODERATOR")
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/dmca/**").hasRole("MODERATOR")
                 .requestMatchers("/api/v1/admin/comments/**").hasRole("MODERATOR")
+
+                // ===== METRICS =====
+                // Reading metrics: admins (via the catch-all below). Recomputing
+                // past days or reopening a locked month: super admins only.
+                .requestMatchers(HttpMethod.POST, "/api/v1/admin/metrics/rebuild").hasRole("SUPER_ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/admin/metrics/close").hasRole("SUPER_ADMIN")
+
+                // Everything else under /admin needs at least ADMIN. This catch-all
+                // must come AFTER the specific rules above: Spring uses the first
+                // rule that matches, and when it sat at the top it overrode them
+                // all, which locked moderators out of the moderation endpoints
+                // and let admins (not just super admins) manage roles, read the
+                // audit log and delete accounts through the API.
+                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 
                 // ===== PLAYLIST — ADMIN =====
                 .requestMatchers(HttpMethod.POST, "/api/v1/playlists/official").hasRole("ADMIN")
@@ -186,6 +199,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/jurisdiction/*").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/song/*/play").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/play/complete").permitAll()
+                // Logged-out listening (kept apart from counted plays; see AnonymousPlayService)
+                .requestMatchers(HttpMethod.POST, "/api/v1/media/song/*/anonymous-play").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/media/anonymous-play/complete").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/media/video/*/play").permitAll()
                 .requestMatchers(HttpMethod.PUT, "/api/v1/songs/*/download-settings").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/v1/songs/*/purchase").authenticated()

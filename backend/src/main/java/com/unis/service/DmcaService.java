@@ -58,10 +58,28 @@ public class DmcaService {
                 .workDescription(workDescription)
                 .originalWorkUrl(originalWorkUrl)
                 .infringingUrl(infringingUrl)
+                .infringSong(findSongInUrl(infringingUrl))
                 .status("submitted")
                 .build();
 
         return dmcaClaimRepository.save(claim);
+    }
+
+    private static final java.util.regex.Pattern SONG_URL = java.util.regex.Pattern.compile(
+            "/song/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})");
+
+    /**
+     * The song a claim points at, read from its Unis link (…/song/{id}).
+     * Before this, claims were never linked to a song, so "Uphold (Remove
+     * Content)" marked the claim upheld but left the song playing. A claim
+     * whose link isn't a song page stays unlinked; the claim page says so,
+     * and the song must be found and removed another way.
+     */
+    private Song findSongInUrl(String url) {
+        if (url == null) return null;
+        java.util.regex.Matcher m = SONG_URL.matcher(url);
+        if (!m.find()) return null;
+        return songRepository.findById(UUID.fromString(m.group(1))).orElse(null);
     }
 
     /**
@@ -116,6 +134,19 @@ public class DmcaService {
         // every other deletion: hidden everywhere, files moved out of reach of
         // saved links, kept in award history. The files are held 30 days, so an
         // upheld counter-notice can restore it by clearing deleted_at.
+        // Claims filed before songs were linked automatically: try the link now.
+        if (claim.getInfringSong() == null) {
+            Song fromUrl = findSongInUrl(claim.getInfringingUrl());
+            if (fromUrl != null) {
+                claim.setInfringSong(fromUrl);
+                dmcaClaimRepository.save(claim);
+            }
+        }
+        if (claim.getInfringSong() == null) {
+            throw new RuntimeException("The claim is upheld, but its link is not a Unis song page, "
+                + "so no song was removed. Contact the platform owner to remove the song by hand.");
+        }
+
         if (claim.getInfringSong() != null) {
             Song song = claim.getInfringSong();
             mediaService.removeSong(song, "dmca");

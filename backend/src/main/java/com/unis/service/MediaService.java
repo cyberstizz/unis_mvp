@@ -754,6 +754,7 @@ public class MediaService {
             .source(source)                              // NEW
             .listenerJurisdictionId(listenerJurisdictionId)  // NEW
             .completed(false)                            // NEW — set true on completion
+            .platform(com.unis.util.ClientPlatform.current())  // web | ios | android, for the metrics
             .build();
         SongPlay saved = songPlayRepository.save(play);
 

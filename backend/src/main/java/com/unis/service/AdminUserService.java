@@ -106,6 +106,12 @@ public class AdminUserService {
         return saved;
     }
 
+    /** Audit-log entry for the staff/test account flag (AdminUserController). */
+    public void logMetricsExclusion(UUID adminUserId, UUID userId, boolean exclude, String reason) {
+        moderationService.logAction(adminUserId,
+                exclude ? "metrics_excluded" : "metrics_included", "user", userId, reason, null);
+    }
+
     /**
      * Lift a suspension
      */

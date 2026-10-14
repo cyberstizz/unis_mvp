@@ -372,6 +372,7 @@ public class UserService {
         User savedUser = userRepository.save(newUser);
  
         // Handle referral tracking
+        boolean referralTracked = false;   // feeds signup_source below
         if (referralCode != null && !referralCode.trim().isEmpty()) {
             // A deleted account's code no longer refers anyone.
             Optional<User> referrerOpt = userRepository.findByReferralCode(referralCode)
@@ -387,6 +388,7 @@ public class UserService {
                         .createdAt(LocalDateTime.now())
                         .build();
                 referralRepository.save(referral);
+                referralTracked = true;
                 
                 // Award points to referrer (+5 for listeners, +2 for artists).
                 // Recorded so it can be taken back if this account is deleted
@@ -428,6 +430,22 @@ public class UserService {
             System.out.println("Supporter created: " + savedUser.getUsername() + " supports " + supportedArtist.getUsername());
         }
  
+        // How this person found Unis, for the growth metrics: a referral code
+        // wins, then a waitlist email, then a campaign link, otherwise organic.
+        String signupSource;
+        if (referralTracked) {
+            signupSource = "referral";
+        } else if (markWaitlistConverted(savedUser.getEmail())) {
+            signupSource = "waitlist";
+        } else if (savedUser.getSignupCampaign() != null && !savedUser.getSignupCampaign().isBlank()) {
+            signupSource = "campaign";
+        } else {
+            signupSource = "organic";
+        }
+        savedUser.setSignupSource(signupSource);
+        savedUser.setSignupPlatform(com.unis.util.ClientPlatform.current());
+        savedUser = userRepository.save(savedUser);
+
         System.out.println("User registered successfully: " + savedUser.getUsername() 
             + " (Referral Code: " + savedUser.getReferralCode() + ")"
             + (newUser.getDateOfBirth() != null ? " (DOB: " + newUser.getDateOfBirth() + ")" : "")
@@ -435,6 +453,24 @@ public class UserService {
         return savedUser;
     }
  
+
+    /**
+     * If this email is on the waitlist, mark that entry converted and say so.
+     * The waitlist's "converted" flag was never set before; signups through
+     * the waitlist now count as waitlist conversions in the growth metrics.
+     */
+    private boolean markWaitlistConverted(String email) {
+        if (email == null || email.isBlank()) return false;
+        int updated = jdbcTemplate.update(
+            "UPDATE pre_registrations SET converted = TRUE, converted_at = NOW() "
+          + "WHERE lower(email) = lower(?) AND (converted IS NULL OR converted = FALSE)",
+            email.trim());
+        if (updated > 0) return true;
+        Boolean already = jdbcTemplate.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM pre_registrations WHERE lower(email) = lower(?))",
+            Boolean.class, email.trim());
+        return Boolean.TRUE.equals(already);
+    }
 
     // CACHED: Fetch user profile (5 min TTL via "userProfiles" cache)
     @Cacheable(value = "userProfiles", key = "#userId")

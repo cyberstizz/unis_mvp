@@ -22,5 +22,6 @@ public class UserDto {
     private String referralCode;
     private LocalDate dateOfBirth;
     private String themePreference;
-    private String gender;   
+    private String gender;
+    private String signupCampaign;  // campaign code from the link the person arrived on (?c= or utm_campaign)   
 }

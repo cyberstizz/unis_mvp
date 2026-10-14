@@ -137,6 +137,14 @@ public class UserController {
 
         user.setDateOfBirth(dto.getDateOfBirth());
 
+        // Campaign code from the link the person arrived on; signup source is
+        // decided in UserService.register (referral > waitlist > campaign).
+        String campaign = dto.getSignupCampaign();
+        if (campaign != null) {
+            campaign = campaign.trim().replaceAll("[^A-Za-z0-9_.-]", "");
+            user.setSignupCampaign(campaign.isEmpty() ? null : campaign.substring(0, Math.min(80, campaign.length())));
+        }
+
         Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
             .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
         user.setJurisdiction(jurisdiction);

@@ -44,4 +44,8 @@ public class SongPlay {
     @Column(name = "listener_jurisdiction_id")
     private UUID listenerJurisdictionId;   // raw UUID, not @ManyToOne — avoids a join on a write-heavy table
 
+    /** web | ios | android, from the X-Unis-Platform header. Null for older app builds. */
+    @Column(name = "platform", length = 10)
+    private String platform;
+
 }
