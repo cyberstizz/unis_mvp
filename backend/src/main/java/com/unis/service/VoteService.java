@@ -13,6 +13,7 @@ import java.time.DayOfWeek;
 import com.unis.entity.Vote;
 import com.unis.entity.VotingInterval;
 import com.unis.dto.LeaderboardDto;
+import com.unis.dto.RaceStandingsDto;
 import com.unis.entity.Award;
 import com.unis.repository.VoteRepository;
 import com.unis.repository.SongRepository;
@@ -70,13 +71,19 @@ public class VoteService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private RaceClockService raceClock;
+
+    @Autowired
+    private RaceStandingsService raceStandingsService;
+
     // =========================================================================
     // VOTE RULES
     //
-    // Every date below is New York time — the same clock the controller stamps
-    // vote_date with and the award cron closes periods on.
+    // A vote counts on the VOTER's own calendar day (RaceClockService): the
+    // controller stamps vote_date on the voter's home clock, so an 11:59 PM
+    // vote in New York is that day's and a 12:01 AM vote is the next day's.
     // =========================================================================
-    private static final java.time.ZoneId UNIS_ZONE = java.time.ZoneId.of("America/New_York");
 
     private static final java.time.format.DateTimeFormatter REOPEN_FORMAT =
         java.time.format.DateTimeFormatter.ofPattern("EEEE, MMMM d", java.util.Locale.US);
@@ -100,8 +107,8 @@ public class VoteService {
     }
 
     /**
-     * The calendar period a vote belongs to — identical to the window the award
-     * cron closes (AwardService.getIntervalStartDate): Daily = the day,
+     * The calendar period a vote belongs to — the same window the award job
+     * closes (RaceClockService.periodContaining): Daily = the day,
      * Weekly = Monday–Sunday, Monthly = the calendar month, Quarterly =
      * Jan–Mar / Apr–Jun / Jul–Sep / Oct–Dec, Midterm = Jan–Jun / Jul–Dec,
      * Annual = the calendar year.
@@ -111,33 +118,7 @@ public class VoteService {
      * can vote again the next day.
      */
     static LocalDate[] votingPeriod(String intervalName, LocalDate day) {
-        String name = intervalName == null ? "" : intervalName;
-        switch (name) {
-            case "Weekly": {
-                LocalDate start = day.with(DayOfWeek.MONDAY);
-                return new LocalDate[] { start, start.plusDays(6) };
-            }
-            case "Monthly": {
-                LocalDate start = day.withDayOfMonth(1);
-                return new LocalDate[] { start, start.plusMonths(1).minusDays(1) };
-            }
-            case "Quarterly": {
-                int q = (day.getMonthValue() - 1) / 3;
-                LocalDate start = day.withMonth(q * 3 + 1).withDayOfMonth(1);
-                return new LocalDate[] { start, start.plusMonths(3).minusDays(1) };
-            }
-            case "Midterm": {
-                LocalDate start = day.withMonth(day.getMonthValue() >= 7 ? 7 : 1).withDayOfMonth(1);
-                return new LocalDate[] { start, start.plusMonths(6).minusDays(1) };
-            }
-            case "Annual": {
-                LocalDate start = day.withDayOfYear(1);
-                return new LocalDate[] { start, start.plusYears(1).minusDays(1) };
-            }
-            case "Daily":
-            default:
-                return new LocalDate[] { day, day };
-        }
+        return RaceClockService.periodContaining(intervalName, day);
     }
 
     private static String periodNoun(String intervalName) {
@@ -170,7 +151,7 @@ public class VoteService {
 
         UUID userId = vote.getUser().getUserId();
         UUID targetJurisdictionId = vote.getJurisdiction().getJurisdictionId();
-        LocalDate voteDate = vote.getVoteDate() != null ? vote.getVoteDate() : LocalDate.now(UNIS_ZONE);
+        LocalDate voteDate = vote.getVoteDate() != null ? vote.getVoteDate() : raceClock.todayForUser(userId);
         vote.setVoteDate(voteDate);
 
         // 2. Lock this voter's row for the rest of the transaction. Two submits
@@ -442,455 +423,88 @@ public class VoteService {
         return votes.stream().filter(v -> "song".equals(v.getTargetType()) || "artist".equals(v.getTargetType())).collect(Collectors.toList());
     }
 
-    // NOT CACHED - Scheduled cron job (runs once daily at midnight)
-    // NOTE: Award computation moved to AwardService - this is kept for backwards compatibility
-    @Scheduled(cron = "0 0 0 * * ?")
-    public void computeDailyAwards() {
-        Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
-        if (dailyInterval.isEmpty()) return;
+    // The old computeDailyAwards cron that lived here is gone. It fired at
+    // midnight on the SERVER's clock (8 PM New York time on UTC), wrote song
+    // award rows from all-time vote counts with no genre filter, and could
+    // block the real award for the slot. Awards now come only from
+    // RaceCloseScheduler.
 
-        UUID dailyId = dailyInterval.get().getIntervalId();
-        // FIXED: Only compute for voting-enabled jurisdictions
-        List<UUID> jurisdictions = jurisdictionRepository.findVotingEnabledJurisdictionIds();
-        List<UUID> genres = genreRepository.findAllGenreIds();
-
-        for (UUID jurisdictionId : jurisdictions) {
-            for (UUID genreId : genres) {
-                // Top by votes for songs
-                List<Object[]> topSongVotes = voteRepository.findTopVoteCounts(jurisdictionId, dailyId);
-                for (Object[] top : topSongVotes) {
-                    UUID targetId = (UUID) top[0];
-                    int voteCount = ((Number) top[1]).intValue();
-                    if (voteCount > 0) {
-                        Award award = Award.builder()
-                            .targetType("song")
-                            .targetId(targetId)
-                            .genre(genreRepository.findById(genreId).orElse(null))
-                            .jurisdiction(jurisdictionRepository.findById(jurisdictionId).orElse(null))
-                            .interval(votingIntervalRepository.findById(dailyId).orElse(null))
-                            .awardDate(LocalDate.now())
-                            .votesCount(voteCount)
-                            .engagementScore(voteCount * 10)
-                            .weight(100)
-                            .build();
-                        awardRepository.save(award);
-                        scoreUpdateService.onAward(targetId, 100);
-                    }
-                }
-                // Mirror for artists (add findTopArtistVotes if needed)
-            }
-        }
-        
-    }
-
-    // CACHED: Get nominees ranked by vote count (1 min TTL via "nominees" cache)
-    // Expensive query with recursive CTE, aggregations, and date filtering
-    // Cache key includes all parameters since filters change results
-    @Cacheable(value = "nominees", key = "'nominees-' + #targetType + '-' + #genreId + '-' + #jurisdictionId + '-' + #intervalId + '-' + #limit")
-    @SuppressWarnings("unchecked")
+    /**
+     * Nominees for the voting page, in standings order for the period this
+     * viewer's vote would count toward (their own day), using the same formula
+     * that decides the award. Before anyone scores in that period, the previous
+     * period's order is used (the midnight rule — RaceStandingsService).
+     *
+     * Returns User entities for artist races and Song entities for song races,
+     * the shape the voting page already reads. Anything removed since the
+     * previous period closed is left off — it can't be voted for.
+     */
     public List<?> getNominees(String targetType, UUID genreId, UUID jurisdictionId, UUID intervalId, int limit) {
-        LocalDate startDate = getIntervalStartDate(intervalId);
-        LocalDate endDate = LocalDate.now();
-        List<UUID> jurisdictionIds = getJurisdictionHierarchy(jurisdictionId);
-        
-        // Temp log for debugging (remove later)
-        System.out.println("getNominees params: targetType=" + targetType + ", genreId=" + genreId + 
-                           ", jurisdictionIds=" + jurisdictionIds + ", interval=" + startDate + " to " + endDate + 
-                           ", limit=" + limit);
-        
-        if ("artist".equalsIgnoreCase(targetType)) {
-            // Get artist IDs with vote counts first
-            String countQuery = """
-            SELECT u.user_id, COALESCE(COUNT(v.vote_id), 0) as vote_count
-            FROM users u
-            LEFT JOIN votes v ON v.target_id = u.user_id 
-                AND v.target_type = 'artist'
-                AND v.genre_id = :genreId
-                AND v.jurisdiction_id IN (:jurisdictionIds)
-                AND v.interval_id = :intervalId
-                AND v.vote_date BETWEEN :startDate AND :endDate
-                AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
-            WHERE u.role = 'artist'  
-            AND u.genre_id = :genreId
-            AND u.jurisdiction_id IN (:jurisdictionIds)  
-            AND u.deleted_at IS NULL
-            GROUP BY u.user_id
-            ORDER BY vote_count DESC
-            LIMIT :limit
-        """;
-            
-            Query countQ = entityManager.createNativeQuery(countQuery);
-            countQ.setParameter("genreId", genreId);
-            countQ.setParameter("jurisdictionIds", jurisdictionIds);
-            countQ.setParameter("intervalId", intervalId);
-            countQ.setParameter("startDate", startDate);
-            countQ.setParameter("endDate", endDate);
-            countQ.setParameter("limit", limit);
-            
-            List<Object[]> results = countQ.getResultList();
-            System.out.println("Artist query results count: " + results.size());  // Log: If 0, check DB seeding
-            
-            if (results.isEmpty()) {
-                return new ArrayList<>();
-            }
-            
-            // Extract artist IDs in order
-            List<UUID> artistIds = results.stream()
-                .map(row -> UUID.fromString(row[0].toString()))
+        VotingInterval interval = votingIntervalRepository.findById(intervalId)
+            .orElseThrow(() -> new RuntimeException("Interval not found"));
+        String type = RaceStandingsService.normalizeType(targetType);
+        LocalDate viewDate = raceClock.viewerDateForRace(jurisdictionId);
+
+        RaceStandingsService.Resolved resolved = raceStandingsService.resolve(
+            type, jurisdictionId, genreId, interval, viewDate, Math.min(Math.max(limit, 1), 100), 0);
+
+        List<UUID> ids = resolved.candidates().stream()
+            .map(RankingService.Candidate::targetId)
+            .collect(Collectors.toList());
+        if (ids.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<UUID, Integer> order = new HashMap<>();
+        for (int i = 0; i < ids.size(); i++) order.put(ids.get(i), i);
+
+        if ("artist".equals(type)) {
+            List<User> artists = userRepository.findAllById(ids).stream()
+                .filter(u -> !u.isDeleted())
+                .sorted(Comparator.comparingInt(u -> order.getOrDefault(u.getUserId(), Integer.MAX_VALUE)))
                 .collect(Collectors.toList());
-            
-            // Fetch full User entities maintaining order
-            List<User> artists = userRepository.findAllById(artistIds);
-            
-            // Sort to maintain vote count order (since findAllById doesn't guarantee order)
-            Map<UUID, Integer> orderMap = new HashMap<>();
-            for (int i = 0; i < artistIds.size(); i++) {
-                orderMap.put(artistIds.get(i), i);
-            }
-            artists.sort(Comparator.comparingInt(a -> orderMap.getOrDefault(a.getUserId(), Integer.MAX_VALUE)));
-            
             return artists;
-            
-        } else {
-            // Same approach for songs
-            String countQuery = """
-                SELECT s.song_id, COALESCE(COUNT(v.vote_id), 0) as vote_count
-                FROM songs s
-                LEFT JOIN votes v ON v.target_id = s.song_id 
-                    AND v.target_type = 'song'
-                    AND v.genre_id = :genreId
-                    AND v.jurisdiction_id IN (:jurisdictionIds)
-                    AND v.interval_id = :intervalId
-                    AND v.vote_date BETWEEN :startDate AND :endDate
-                    AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
-                WHERE s.genre_id = :genreId
-                  AND s.jurisdiction_id IN (:jurisdictionIds)
-                  AND s.deleted_at IS NULL
-                GROUP BY s.song_id
-                ORDER BY vote_count DESC
-                LIMIT :limit
-            """;
-            
-            Query countQ = entityManager.createNativeQuery(countQuery);
-            countQ.setParameter("genreId", genreId);
-            countQ.setParameter("jurisdictionIds", jurisdictionIds);
-            countQ.setParameter("intervalId", intervalId);
-            countQ.setParameter("startDate", startDate);
-            countQ.setParameter("endDate", endDate);
-            countQ.setParameter("limit", limit);
-            
-            List<Object[]> results = countQ.getResultList();
-            System.out.println("Song query results count: " + results.size());  // Log: If 0, check DB seeding
-            
-            if (results.isEmpty()) {
-                return new ArrayList<>();
-            }
-            
-            List<UUID> songIds = results.stream()
-                .map(row -> UUID.fromString(row[0].toString()))
-                .collect(Collectors.toList());
-            
-            List<Song> songs = songRepository.findAllById(songIds);
-            
-            // Sort to maintain vote count order
-            Map<UUID, Integer> orderMap = new HashMap<>();
-            for (int i = 0; i < songIds.size(); i++) {
-                orderMap.put(songIds.get(i), i);
-            }
-            songs.sort(Comparator.comparingInt(s -> orderMap.getOrDefault(s.getSongId(), Integer.MAX_VALUE)));
-            
-            for (Song song : songs) {
+        }
+
+        List<Song> songs = songRepository.findAllById(ids).stream()
+            .filter(sg -> sg.getDeletedAt() == null)
+            .filter(sg -> sg.getArtist() == null || !sg.getArtist().isDeleted())
+            .sorted(Comparator.comparingInt(sg -> order.getOrDefault(sg.getSongId(), Integer.MAX_VALUE)))
+            .collect(Collectors.toList());
+        for (Song song : songs) {
             Long totalPlays = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
             song.setPlayCount(totalPlays != null ? totalPlays : 0L);
         }
-
-            return songs;
-        }
+        return songs;
     }
 
-    // NOT CACHED - Private helper method
-    // Helper: Get jurisdiction + all children (for parent jurisdiction votes)
-    private List<UUID> getJurisdictionHierarchy(UUID jurisdictionId) {
-        String query = """
-            WITH RECURSIVE jurisdiction_hierarchy AS (
-                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
-                UNION ALL
-                SELECT j.jurisdiction_id FROM jurisdictions j
-                INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
-            )
-            SELECT jurisdiction_id FROM jurisdiction_hierarchy
-        """;
-        
-        Query q = entityManager.createNativeQuery(query);
-        q.setParameter("jurisdictionId", jurisdictionId);
-        
-        @SuppressWarnings("unchecked")
-        List<UUID> results = q.getResultList();
-        return results;
-    }
-
-    // NOT CACHED - Private helper method
-    // Helper: Get start date for interval
-    private LocalDate getIntervalStartDate(UUID intervalId) {
-        VotingInterval interval = votingIntervalRepository.findById(intervalId)
-            .orElseThrow(() -> new RuntimeException("Interval not found"));
-        
-        LocalDate today = LocalDate.now();
-        
-        switch (interval.getName()) {
-            case "Daily":
-                return today;  // PROD: reverted from today.minusDays(1) (was loosened for testing)
-            case "Weekly":
-                return today.with(DayOfWeek.MONDAY);
-            case "Monthly":
-                return today.withDayOfMonth(1);
-            case "Quarterly":
-                int currentQuarter = (today.getMonthValue() - 1) / 3;
-                return today.withMonth(currentQuarter * 3 + 1).withDayOfMonth(1);
-            case "Midterm":
-                int month = today.getMonthValue();
-                if (month >= 7) {
-                    return today.withMonth(7).withDayOfMonth(1);
-                } else {
-                    return today.withMonth(1).withDayOfMonth(1);
-                }
-            case "Annual":
-                return today.withDayOfYear(1);
-            default:
-                return today;
-        }
-    }
-
-    // CACHED: Live leaderboard rankings (1 min TTL via "leaderboards" cache)
-    // MOST EXPENSIVE QUERY in the entire application:
-    // - Recursive CTE for jurisdiction hierarchy
-    // - Multiple LEFT JOINs (votes + song_plays)
-    // - COUNT aggregations across millions of rows
-    // - Date range filtering
-    // - Fallback query doubles the work if <5 results
-    // Cache key includes all filter parameters since each combination produces different results
-    @Cacheable(value = "leaderboards", key = "'live-' + #targetType + '-' + #genreId + '-' + #jurisdictionId + '-' + #intervalId + '-' + #limit")
-    @SuppressWarnings("unchecked")
+    /**
+     * The leaderboards page: the race's live board (RaceStandingsService), in
+     * the row shape the page already reads. `votes` carries total points —
+     * the number the race is decided on — with the breakdown alongside.
+     */
     public List<LeaderboardDto> getLeaderboard(String targetType, UUID genreId, UUID jurisdictionId, UUID intervalId, int limit) {
-        LocalDate startDate = getIntervalStartDate(intervalId);
-        LocalDate endDate = LocalDate.now();
-        // Exclusive upper bound for song_plays.played_at (a timestamp column).
-        // The old queries wrapped it in DATE(sp.played_at), which defeats any
-        // index on played_at; a half-open range from startDate inclusive to
-        // endDate+1 exclusive is sargable and covers the same days.
-        LocalDate endExclusive = endDate.plusDays(1);
-        List<UUID> jurisdictionIds = getJurisdictionHierarchy(jurisdictionId);
+        RaceStandingsDto board = raceStandingsService.standings(
+            targetType, jurisdictionId, genreId, intervalId, limit, 0);
 
-        // SCORING NOTE: score = votes-in-interval + plays-in-window. The old
-        // implementation computed this with two LEFT JOINs on the same row set
-        // (votes AND song_plays), which cross-multiplies: an artist with
-        // 3 votes and 5 plays produced 15 joined rows, so COUNT(vote_id) = 15
-        // and COUNT(play_id) = 15 — score 30 instead of 8, skewing the whole
-        // ranking toward anyone with both. Votes and plays are now
-        // pre-aggregated in their own CTEs and joined one-row-per-target,
-        // which both fixes the inflation and removes the fanout cost.
-        if ("artist".equalsIgnoreCase(targetType)) {
-            String query = """
-            WITH RECURSIVE jurisdiction_hierarchy AS (
-                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
-                UNION ALL
-                SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
-            ),
-            vote_counts AS (
-                SELECT v.target_id, COUNT(*) AS vote_count
-                FROM votes v
-                WHERE v.target_type = 'artist' AND v.genre_id = :genreId
-                  AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId
-                  AND v.vote_date BETWEEN :startDate AND :endDate
-                  AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
-                GROUP BY v.target_id
-            ),
-            play_counts AS (
-                SELECT s.artist_id, COUNT(*) AS play_count
-                FROM song_plays sp
-                JOIN songs s ON s.song_id = sp.song_id
-                WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
-                  AND s.deleted_at IS NULL
-                  AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
-                GROUP BY s.artist_id
-            )
-            SELECT u.user_id, u.username,
-                   COALESCE(vc.vote_count, 0) + COALESCE(pc.play_count, 0) AS score,
-                   u.photo_url
-            FROM users u
-            JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
-            LEFT JOIN vote_counts vc ON vc.target_id = u.user_id
-            LEFT JOIN play_counts pc ON pc.artist_id = u.user_id
-            WHERE u.role = 'artist' AND u.genre_id = :genreId AND u.deleted_at IS NULL
-            ORDER BY score DESC, COALESCE(vc.vote_count, 0) DESC
-            LIMIT :limit
-            """;
-            Query q = entityManager.createNativeQuery(query);
-            q.setParameter("jurisdictionId", jurisdictionId);
-            q.setParameter("genreId", genreId);
-            q.setParameter("jurisdictionIds", jurisdictionIds);
-            q.setParameter("intervalId", intervalId);
-            q.setParameter("startDate", startDate);
-            q.setParameter("endDate", endDate);
-            q.setParameter("endExclusive", endExclusive);
-            q.setParameter("limit", limit);
-            List<Object[]> results = q.getResultList();
-
-            // Fallback if <5: Top by plays only. Excludes rows already
-            // returned by the main query — the old version re-selected the
-            // same artists, so anyone appearing in both showed up twice.
-            if (results.size() < 5 && !results.isEmpty()) {
-                List<UUID> excludeIds = new ArrayList<>();
-                for (Object[] row : results) excludeIds.add((UUID) row[0]);
-
-                String fallbackQuery = """
-                WITH RECURSIVE jurisdiction_hierarchy AS (
-                    SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
-                    UNION ALL
-                    SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
-                ),
-                play_counts AS (
-                    SELECT s.artist_id, COUNT(*) AS play_count
-                    FROM song_plays sp
-                    JOIN songs s ON s.song_id = sp.song_id
-                    WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
-                      AND s.deleted_at IS NULL
-                      AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
-                    GROUP BY s.artist_id
-                )
-                SELECT u.user_id, u.username, COALESCE(pc.play_count, 0) AS score, u.photo_url
-                FROM users u
-                JOIN jurisdiction_hierarchy jh ON u.jurisdiction_id = jh.jurisdiction_id
-                LEFT JOIN play_counts pc ON pc.artist_id = u.user_id
-                WHERE u.role = 'artist' AND u.genre_id = :genreId AND u.deleted_at IS NULL
-                  AND u.user_id NOT IN (:excludeIds)
-                ORDER BY score DESC
-                LIMIT :fallbackLimit
-                """;
-                Query fq = entityManager.createNativeQuery(fallbackQuery);
-                fq.setParameter("jurisdictionId", jurisdictionId);
-                fq.setParameter("genreId", genreId);
-                fq.setParameter("startDate", startDate);
-                fq.setParameter("endExclusive", endExclusive);
-                fq.setParameter("excludeIds", excludeIds);
-                fq.setParameter("fallbackLimit", 5 - results.size());
-                List<Object[]> fallback = fq.getResultList();
-                results.addAll(fallback);
-            }
-
-            List<LeaderboardDto> leaderboard = new ArrayList<>();
-            for (int i = 0; i < results.size(); i++) {
-                Object[] row = results.get(i);
-                leaderboard.add(LeaderboardDto.builder()
-                    .rank(i + 1)
-                    .targetId((UUID) row[0])  // user_id
-                    .name(row[1].toString())
-                    .votes(((Number) row[2]).longValue())
-                    .artwork(row[3] != null ? row[3].toString() : null)
-                    .build());
-            }
-            return leaderboard;
-        } else {  // song branch
-            String query = """
-            WITH RECURSIVE jurisdiction_hierarchy AS (
-                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
-                UNION ALL
-                SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
-            ),
-            vote_counts AS (
-                SELECT v.target_id, COUNT(*) AS vote_count
-                FROM votes v
-                WHERE v.target_type = 'song' AND v.genre_id = :genreId
-                  AND v.jurisdiction_id IN (:jurisdictionIds) AND v.interval_id = :intervalId
-                  AND v.vote_date BETWEEN :startDate AND :endDate
-                  AND NOT EXISTS (SELECT 1 FROM users dv WHERE dv.user_id = v.user_id AND dv.deleted_at IS NOT NULL)
-                GROUP BY v.target_id
-            ),
-            play_counts AS (
-                SELECT sp.song_id, COUNT(*) AS play_count
-                FROM song_plays sp
-                WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
-                  AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
-                GROUP BY sp.song_id
-            )
-            SELECT s.song_id, s.title,
-                   COALESCE(vc.vote_count, 0) + COALESCE(pc.play_count, 0) AS score,
-                   s.artwork_url, a.username AS artist, s.file_url
-            FROM songs s
-            INNER JOIN users a ON s.artist_id = a.user_id
-            JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
-            LEFT JOIN vote_counts vc ON vc.target_id = s.song_id
-            LEFT JOIN play_counts pc ON pc.song_id = s.song_id
-            WHERE s.genre_id = :genreId AND s.deleted_at IS NULL
-            ORDER BY score DESC, COALESCE(vc.vote_count, 0) DESC
-            LIMIT :limit
-            """;
-            Query q = entityManager.createNativeQuery(query);
-            q.setParameter("jurisdictionId", jurisdictionId);
-            q.setParameter("genreId", genreId);
-            q.setParameter("jurisdictionIds", jurisdictionIds);
-            q.setParameter("intervalId", intervalId);
-            q.setParameter("startDate", startDate);
-            q.setParameter("endDate", endDate);
-            q.setParameter("endExclusive", endExclusive);
-            q.setParameter("limit", limit);
-            List<Object[]> results = q.getResultList();
-
-            // Fallback if <5: Top by plays only, excluding already-returned songs
-            if (results.size() < 5 && !results.isEmpty()) {
-                List<UUID> excludeIds = new ArrayList<>();
-                for (Object[] row : results) excludeIds.add((UUID) row[0]);
-
-                String fallbackQuery = """
-                WITH RECURSIVE jurisdiction_hierarchy AS (
-                    SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
-                    UNION ALL
-                    SELECT j.jurisdiction_id FROM jurisdictions j INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
-                ),
-                play_counts AS (
-                    SELECT sp.song_id, COUNT(*) AS play_count
-                    FROM song_plays sp
-                    WHERE sp.played_at >= :startDate AND sp.played_at < :endExclusive
-                      AND NOT EXISTS (SELECT 1 FROM users dl WHERE dl.user_id = sp.user_id AND dl.deleted_at IS NOT NULL)
-                    GROUP BY sp.song_id
-                )
-                SELECT s.song_id, s.title, COALESCE(pc.play_count, 0) AS score,
-                       s.artwork_url, a.username AS artist, s.file_url
-                FROM songs s
-                INNER JOIN users a ON s.artist_id = a.user_id
-                JOIN jurisdiction_hierarchy jh ON a.jurisdiction_id = jh.jurisdiction_id
-                LEFT JOIN play_counts pc ON pc.song_id = s.song_id
-                WHERE s.genre_id = :genreId AND s.deleted_at IS NULL
-                  AND s.song_id NOT IN (:excludeIds)
-                ORDER BY score DESC
-                LIMIT :fallbackLimit
-                """;
-                Query fq = entityManager.createNativeQuery(fallbackQuery);
-                fq.setParameter("jurisdictionId", jurisdictionId);
-                fq.setParameter("genreId", genreId);
-                fq.setParameter("startDate", startDate);
-                fq.setParameter("endExclusive", endExclusive);
-                fq.setParameter("excludeIds", excludeIds);
-                fq.setParameter("fallbackLimit", 5 - results.size());
-                List<Object[]> fallback = fq.getResultList();
-                results.addAll(fallback);
-            }
-
-            List<LeaderboardDto> leaderboard = new ArrayList<>();
-            for (int i = 0; i < results.size(); i++) {
-                Object[] row = results.get(i);
-                leaderboard.add(LeaderboardDto.builder()
-                    .rank(i + 1)
-                    .targetId((UUID) row[0])  // song_id
-                    .name(row[1].toString())
-                    .votes(((Number) row[2]).longValue())
-                    .artwork(row[3] != null ? row[3].toString() : null)
-                    .artist(row[4] != null ? row[4].toString() : null)
-                    .fileUrl(row[5] != null ? row[5].toString() : null)
-                    .build());
-            }
-            return leaderboard;
+        boolean songs = "song".equals(board.getType());
+        List<LeaderboardDto> rows = new ArrayList<>();
+        for (RaceStandingsDto.Entry e : board.getEntries()) {
+            rows.add(LeaderboardDto.builder()
+                .rank(e.getRank())
+                .targetId(e.getTargetId())
+                .name(e.getName() != null ? e.getName() : "Unknown")
+                .votes(e.getTotalPoints())
+                .artwork(e.getArtworkUrl())
+                .artist(songs ? e.getArtistName() : null)
+                .fileUrl(songs ? e.getFileUrl() : null)
+                .artistId(e.getArtistId())
+                .totalPoints(e.getTotalPoints())
+                .voteCount(e.getVotes())
+                .plays(e.getPlays())
+                .likes(e.getLikes())
+                .build());
         }
+        return rows;
     }
 
 }

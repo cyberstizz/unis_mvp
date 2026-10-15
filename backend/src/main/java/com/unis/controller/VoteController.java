@@ -17,6 +17,7 @@ import com.unis.repository.GenreRepository;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.VotingIntervalRepository;
 import com.unis.service.AwardService;
+import com.unis.service.RaceClockService;
 import com.unis.service.VoteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -59,12 +60,13 @@ public class VoteController {
     @Autowired
     private SongRepository songRepository;
 
+    @Autowired
+    private RaceClockService raceClock;
+
     // POST /api/v1/vote/submit
     // ★ ironclad: every failure path returns structured JSON {code, message}
     //   with the correct status — the frontend surfaces `message` verbatim, so
     //   a vote can never fail without a clear explanation.
-    private static final java.time.ZoneId UNIS_ZONE = java.time.ZoneId.of("America/New_York");
-
     private ResponseEntity<Map<String, Object>> voteError(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status).body(Map.of("code", code, "message", message));
     }
@@ -132,12 +134,13 @@ public class VoteController {
                         + ". You can only vote in your home jurisdiction and its parent jurisdictions.");
             }
 
-            // ★ ironclad: the SERVER stamps the vote date in the platform
-            //   timezone. The client previously sent a UTC-derived date, which
-            //   rolled to "tomorrow" after ~8pm New York time — causing phantom
-            //   duplicate rejections — and let a malicious client fabricate any
-            //   date to bypass the one-vote-per-day rule entirely.
-            java.time.LocalDate voteDate = java.time.LocalDate.now(UNIS_ZONE);
+            // ★ ironclad: the SERVER stamps the vote date, on the VOTER's own
+            //   clock (their home jurisdiction's timezone — RaceClockService).
+            //   An 11:59 PM vote in New York counts for that New York day; at
+            //   12:01 AM it is the next day and the race opens again. The client
+            //   never supplies the date, so it can't be faked to dodge the
+            //   one-vote-per-period rule.
+            java.time.LocalDate voteDate = raceClock.todayForUser(authenticatedUserId);
 
             // Build Vote entity
             Vote vote = Vote.builder()
@@ -265,7 +268,9 @@ public class VoteController {
         @RequestParam UUID jurisdictionId,
         @RequestParam UUID genreId,
         @RequestParam(required = false) LocalDate date) {
-        LocalDate cronDate = date != null ? date : LocalDate.now();
+        // Defaults to yesterday on New York's clock. A period still running
+        // anywhere in the race is refused by AwardService.
+        LocalDate cronDate = date != null ? date : raceClock.today(RaceClockService.DEFAULT_ZONE).minusDays(1);
         awardService.computeForInterval(intervalId, jurisdictionId, genreId, cronDate);
         return ResponseEntity.ok("Computed for " + cronDate);
     }

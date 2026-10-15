@@ -1,8 +1,11 @@
 package com.unis.controller;
 
 import com.unis.dto.PeriodLeaderboardDto;
+import com.unis.dto.RaceStandingsDto;
 import com.unis.entity.Award;
 import com.unis.service.AwardService;
+import com.unis.service.RaceClockService;
+import com.unis.service.RaceStandingsService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +20,31 @@ public class AwardController {
 
     @Autowired
     private AwardService awardService;
+
+    @Autowired
+    private RaceStandingsService raceStandingsService;
+
+    @Autowired
+    private RaceClockService raceClock;
+
+    /**
+     * GET /api/v1/awards/standings
+     * The live board for one race, with the midnight rule applied: before
+     * anyone scores in a new period, the period that just ended is shown
+     * (final, or still closing in another timezone). See RaceStandingsDto
+     * for the state field. Public, read-only, cached for a minute.
+     */
+    @GetMapping("/standings")
+    public ResponseEntity<RaceStandingsDto> getStandings(
+            @RequestParam String type,
+            @RequestParam UUID jurisdictionId,
+            @RequestParam UUID genreId,
+            @RequestParam UUID intervalId,
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        return ResponseEntity.ok(
+            raceStandingsService.standings(type, jurisdictionId, genreId, intervalId, limit, offset));
+    }
 
     /**
      * GET /api/v1/awards/leaderboards
@@ -72,7 +100,8 @@ public class AwardController {
      */
     @GetMapping("/cron/manual")
     public ResponseEntity<String> manualCron(@RequestParam(required = false) String date) {
-        LocalDate cronDate = date != null ? LocalDate.parse(date) : LocalDate.now().minusDays(1);
+        LocalDate cronDate = date != null ? LocalDate.parse(date)
+            : raceClock.today(RaceClockService.DEFAULT_ZONE).minusDays(1);
         awardService.computeDailyAwardsForDate(cronDate);
         return ResponseEntity.ok("Daily awards computed for " + cronDate);
     }
@@ -87,7 +116,7 @@ public class AwardController {
             @RequestParam(required = false) UUID jurisdictionId,
             @RequestParam(required = false) UUID genreId,
             @RequestParam(required = false) LocalDate date) {
-        LocalDate cronDate = date != null ? date : LocalDate.now().minusDays(1);
+        LocalDate cronDate = date != null ? date : raceClock.today(RaceClockService.DEFAULT_ZONE).minusDays(1);
         awardService.computeForInterval(intervalId, jurisdictionId, genreId, cronDate);
         return ResponseEntity.ok("Awards computed for interval " + intervalId + " on " + cronDate);
     }

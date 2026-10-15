@@ -46,6 +46,14 @@ public class Jurisdiction {
     @Column
     private String path;
 
+    /**
+     * The real-world clock this jurisdiction runs on (IANA name, e.g.
+     * America/New_York). Read-only here: set in SQL, and new jurisdictions
+     * inherit their parent's automatically (sql/V2026_10e__race_clock.sql).
+     */
+    @Column(name = "timezone", insertable = false, updatable = false)
+    private String timezone;
+
     @Column(name = "voting_enabled")
     @Builder.Default
     private Boolean votingEnabled = false;

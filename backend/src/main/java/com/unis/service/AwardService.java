@@ -77,6 +77,12 @@ public class AwardService {
     @Autowired
     private EntityManager entityManager;
 
+    @Autowired
+    private RankingService rankingService;
+
+    @Autowired
+    private RaceClockService raceClock;
+
     private final CronMonitorService cronMonitorService;
 
     private static final java.time.ZoneId UNIS_ZONE = java.time.ZoneId.of("America/New_York");
@@ -85,8 +91,9 @@ public class AwardService {
     @Autowired
     private AwardService self;
 
-    @Value("${unis.auto-populate-awards:true}")
-    private boolean autoPopulateAwards;
+    // unis.auto-populate-awards is retired: no read path creates awards any
+    // more. Award rows come only from RaceCloseScheduler, after a period has
+    // ended for everyone in the race.
 
     // Constructor injection for CronMonitorService
     @Autowired
@@ -110,34 +117,10 @@ public class AwardService {
     );
 
     // =========================================================================
-    // VOTE WEIGHTS - Used for calculating weighted vote points
+    // RANKING FORMULA — vote weights, play/like weights and the tiebreaker
+    // order are defined once, in RankingService. Award winners, live
+    // standings, nominees and territory rank all use that one definition.
     // =========================================================================
-    private static final Map<String, Integer> VOTE_WEIGHTS = Map.of(
-        "Annual", 250,
-        "Midterm", 200,
-        "Quarterly", 60,
-        "Monthly", 25,
-        "Weekly", 20,
-        "Daily", 10
-    );
-
-    // =========================================================================
-    // ENGAGEMENT WEIGHTS - Plays and likes now score directly, they are no
-    // longer a zero-vote fallback. A candidate's total is:
-    //
-    //     total_points = weighted_vote_points
-    //                  + (plays * PLAY_WEIGHT)
-    //                  + (likes * LIKE_WEIGHT)
-    //
-    // Votes stay primary by weight (one daily vote = 10 plays) and by the
-    // tiebreaker order below total_points, but enough engagement can now beat
-    // a thin vote lead. Raw plays are counted deliberately, not distinct
-    // listeners: a superfan on repeat is meant to be worth more than a
-    // one-and-done listener. MediaService's 30-minute per-song cooldown is
-    // what bounds this.
-    // =========================================================================
-    private static final int PLAY_WEIGHT = 1;
-    private static final int LIKE_WEIGHT = 5;
 
     // =========================================================================
     // PUBLIC API METHODS
@@ -158,12 +141,10 @@ public class AwardService {
         LocalDate start = LocalDate.now(UNIS_ZONE).minusDays(30);
         LocalDate end = LocalDate.now(UNIS_ZONE);
         List<Award> awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
-        
-        if (awards.isEmpty() && autoPopulateAwards) {
-            self.computeAwardsForDate(end, intervalId, jurisdictionId, null);
-            awards = awardRepository.findTopByPeriod(jurisdictionId, intervalId, start, end);
-        }
-        
+
+        // PURE READ. This endpoint used to compute and SAVE awards when it found
+        // none — for a period still running, that froze a winner from partial
+        // data. Missing rows now just fall through to the unsaved display list.
         if (awards.isEmpty()) {
             awards = createFallbackAwards(type, jurisdictionId, intervalId, end);
         }
@@ -211,8 +192,18 @@ public class AwardService {
 
     /**
  * Get the full ranked leaderboard for a period, plus the saved winner Award.
- * Reuses getRankedCandidates so the ranking matches what the cron uses to
- * determine winners, including engagement points.
+ *
+ * PURE READ. Viewing a period never decides it. Before this change a request
+ * for a period still running (a bot, a stale screen, a hand-typed URL) saved
+ * that moment's leader as the winner, paid them the award points, and the real
+ * close job then skipped the slot because a winner already existed.
+ *
+ * status tells the client what it is looking at:
+ *   OPEN      the period is still running somewhere in this race — standings
+ *             only, no winner; closesAt / stillOpenIn say when and where
+ *   FINAL     decided — the winner is pinned first
+ *   PENDING   ended in the last two hours, results posting on the hourly job
+ *   NO_AWARD  ended long ago and no award was recorded for this category
  */
 @Transactional(readOnly = true)
 public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDate, LocalDate endDate,
@@ -221,41 +212,43 @@ public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDat
     log.info("getPeriodLeaderboard: type={}, range={}..{}, jurisdiction={}, genre={}, interval={}",
                 type, startDate, endDate, jurisdictionId, genreId, intervalId);
 
-    // 1. Fetch the saved winner Award (auto-populate if missing — same pattern as getPastAwards)
-    List<Award> awards = awardRepository.findByFilters(
-        type, jurisdictionId, genreId, intervalId, startDate, endDate);
+    java.time.Instant closesAt = raceClock.closesAt(jurisdictionId, endDate);
+    boolean closed = !raceClock.now().isBefore(closesAt);
 
-    if (awards.isEmpty() && autoPopulateAwards) {
-        log.info("No winner award found — triggering computation");
-        self.computeAndSaveAwardsInNewTransaction(endDate, intervalId, jurisdictionId, genreId);
-        awards = awardRepository.findByFilters(
-            type, jurisdictionId, genreId, intervalId, startDate, endDate);
-    }
-
+    // 1. The saved winner, if the close job has decided this period.
+    List<Award> awards = closed
+        ? awardRepository.findByFilters(type, jurisdictionId, genreId, intervalId, startDate, endDate)
+        : new ArrayList<>();
     Award winner = awards.isEmpty() ? null : awards.get(0);
     if (winner != null) {
         populateAwardEntities(awards);
     }
 
-    // 2. Compute the full ranked candidate list, live, using the exact query
-    //    the cron uses — total points, then the tiebreaker cascade. The
-    //    standings a user reads mid-period therefore predict the winner.
+    // 2. The ranked field, from the same formula the close job decides with.
     List<CandidateResult> candidates = getRankedCandidates(
-        type, jurisdictionId, genreId, startDate, endDate);
+        type, jurisdictionId, genreId, startDate, endDate, Math.max(limit, 1));
 
     // 3. A decided period always lists its winner first. The award was decided
-    //    on the data at the time; since then a voter may have left (their likes
-    //    go with them) and nudged the live numbers. The winner card and the
-    //    #1 row must never disagree.
+    //    on the data at the close; a voter leaving since then can nudge the
+    //    live numbers, and the winner card and the #1 row must never disagree.
     if (winner != null) {
         candidates = pinWinnerFirst(candidates, winner);
     }
 
-    // 4. Build response
+    String status;
+    if (!closed) {
+        status = "OPEN";
+    } else if (winner != null) {
+        status = "FINAL";
+    } else if (raceClock.now().isBefore(closesAt.plus(java.time.Duration.ofHours(2)))) {
+        status = "PENDING";
+    } else {
+        status = "NO_AWARD";
+    }
+
+    // 4. Build response. Only a recorded award marks a winner.
     int totalVotes = candidates.stream().mapToInt(c -> c.rawVoteCount).sum();
-    UUID winnerId = winner != null
-        ? winner.getTargetId()
-        : (candidates.isEmpty() ? null : candidates.get(0).targetId);
+    UUID winnerId = winner != null ? winner.getTargetId() : null;
 
     List<LeaderboardEntryDto> leaderboard = new ArrayList<>();
     int rank = 1;
@@ -264,10 +257,17 @@ public PeriodLeaderboardDto getPeriodLeaderboard(String type, LocalDate startDat
         leaderboard.add(hydrateLeaderboardEntry(c, type, rank++, isWinner, winner));
     }
 
+    List<String> stillOpenIn = closed ? List.of()
+        : raceClock.zonesStillOpen(jurisdictionId, endDate).stream()
+            .map(java.time.ZoneId::getId).collect(Collectors.toList());
+
     return PeriodLeaderboardDto.builder()
         .winner(winner)
         .leaderboard(leaderboard)
         .totalVotes(totalVotes)
+        .status(status)
+        .closesAt(closesAt.toString())
+        .stillOpenIn(stillOpenIn)
         .build();
 }
 
@@ -330,39 +330,49 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
 }
 
     // =========================================================================
-    // TRANSACTION BOUNDARY FIX
+    // CLOSING A PERIOD
     // =========================================================================
-    
-    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = false)
-    @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
-    public void computeAndSaveAwardsInNewTransaction(LocalDate awardDate, UUID intervalId, 
-                                                       UUID jurisdictionId, UUID genreId) {
-        System.out.println(">>> NEW TRANSACTION STARTED - readOnly=false <<<");
-        System.out.println("Computing awards for date: " + awardDate);
-        
-        computeAwardsInternal(awardDate, intervalId, jurisdictionId, genreId);
-        
-        System.out.println(">>> TRANSACTION WILL COMMIT NOW <<<");
-    }
 
-    // =========================================================================
-    // CORE AWARD COMPUTATION
-    // =========================================================================
+    /**
+     * Decide every award for one race's period and record it in the ledger,
+     * in one transaction — either both land or neither does. Called by
+     * RaceCloseScheduler once the period has ended for everyone in the race.
+     *
+     * @return how many award rows were created
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = false)
+    @CacheEvict(value = {"awards", "leaderboards", "nominees"}, allEntries = true)
+    public int closeRacePeriod(LocalDate periodEnd, UUID intervalId, UUID jurisdictionId) {
+        int created = computeAwardsInternal(periodEnd, intervalId, jurisdictionId, null);
+        entityManager.createNativeQuery(
+                "INSERT INTO race_period_closures "
+                + "(jurisdiction_id, interval_id, period_end, kind, awards_created) "
+                + "VALUES (:jurisdictionId, :intervalId, :periodEnd, 'CLOSED', :created) "
+                + "ON CONFLICT (jurisdiction_id, interval_id, period_end) DO NOTHING")
+            .setParameter("jurisdictionId", jurisdictionId)
+            .setParameter("intervalId", intervalId)
+            .setParameter("periodEnd", periodEnd)
+            .setParameter("created", created)
+            .executeUpdate();
+        return created;
+    }
 
     @Transactional(readOnly = false)
-    @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
+    @CacheEvict(value = {"awards", "leaderboards", "nominees"}, allEntries = true)
     public void computeAwardsForDate(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
-        System.out.println(">>> computeAwardsForDate called with @Transactional(readOnly=false)");
         computeAwardsInternal(awardDate, intervalId, jurisdictionId, genreId);
     }
 
-    private void computeAwardsInternal(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
+    /**
+     * @return how many award rows were created
+     */
+    private int computeAwardsInternal(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
         List<UUID> jurisdictions;
         if (jurisdictionId != null) {
             Jurisdiction jur = jurisdictionRepository.findById(jurisdictionId).orElse(null);
             if (jur == null || !Boolean.TRUE.equals(jur.getVotingEnabled())) {
-                System.out.println("Skipping non-voting-enabled jurisdiction: " + jurisdictionId);
-                return;
+                log.info("[Awards] skip jurisdiction={} reason=voting_not_enabled", jurisdictionId);
+                return 0;
             }
             jurisdictions = List.of(jurisdictionId);
         } else {
@@ -373,31 +383,40 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
 
         VotingInterval interval = votingIntervalRepository.findById(intervalId).orElse(null);
         if (interval == null) {
-            System.out.println("Interval not found: " + intervalId);
-            return;
+            log.warn("[Awards] skip reason=interval_not_found interval={}", intervalId);
+            return 0;
         }
 
-        LocalDate startDate = getIntervalStartDate(intervalId, awardDate);
-
-        System.out.println("Computing awards for " + interval.getName() + " from " + startDate + " to " + awardDate);
-        System.out.println("Jurisdictions to process: " + jurisdictions.size());
-        System.out.println("Genres to process: " + genres.size());
+        // The period's own window. A daily close for Oct 15 is Oct 15; a
+        // weekly close for Sunday Oct 18 is Monday Oct 12 – Sunday Oct 18.
+        LocalDate[] period = RaceClockService.periodContaining(interval.getName(), awardDate);
+        LocalDate startDate = period[0];
+        LocalDate endDate = period[1];
 
         int awardsCreated = 0;
-        
+
         for (UUID jurId : jurisdictions) {
+            // Every write path goes through here, so this is the one guard that
+            // keeps a winner from ever being decided while anyone in the race is
+            // still in that period.
+            if (!raceClock.isClosed(jurId, endDate)) {
+                log.warn("[Awards] refused jurisdiction={} interval={} period={}..{} reason=period_still_open closesAt={}",
+                    jurId, interval.getName(), startDate, endDate, raceClock.closesAt(jurId, endDate));
+                continue;
+            }
             for (UUID genId : genres) {
-                if (computeSingleWinnerAward("song", jurId, genId, intervalId, startDate, awardDate, interval)) {
+                if (computeSingleWinnerAward("song", jurId, genId, intervalId, startDate, endDate, interval)) {
                     awardsCreated++;
                 }
-                
-                if (computeSingleWinnerAward("artist", jurId, genId, intervalId, startDate, awardDate, interval)) {
+                if (computeSingleWinnerAward("artist", jurId, genId, intervalId, startDate, endDate, interval)) {
                     awardsCreated++;
                 }
             }
         }
-        
-        System.out.println(">>> Total awards created in this transaction: " + awardsCreated);
+
+        log.info("[Awards] computed interval={} period={}..{} jurisdictions={} created={}",
+            interval.getName(), startDate, endDate, jurisdictions.size(), awardsCreated);
+        return awardsCreated;
     }
 
     /**
@@ -473,250 +492,35 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     }
 
     // =========================================================================
-    // RANKED CANDIDATE AGGREGATION (VOTES + ENGAGEMENT, ONE PASS)
+    // RANKED CANDIDATES — the shared formula in RankingService
     // =========================================================================
 
-    /**
-     * Rank every eligible candidate for one category on total points.
-     *
-     * The candidate set is the POPULATION, not the vote list. The old query
-     * selected FROM votes, so an artist with 200 plays and no votes was never a
-     * candidate at all — they could only surface through a separate zero-vote
-     * fallback query that ran when nobody had voted. That is why one vote beat
-     * two hundred plays. Here the population is the driving table and votes,
-     * plays and likes are LEFT JOINed onto it.
-     *
-     *   total_points = weighted_vote_points
-     *                + plays * PLAY_WEIGHT
-     *                + likes * LIKE_WEIGHT
-     *
-     * Vote weights are unchanged: Annual 250, Midterm 200, Quarterly 60,
-     * Monthly 25, Weekly 20, Daily 10.
-     *
-     * Ordering is total → vote points → plays → likes → score → seniority.
-     * Vote points sitting directly under total is what keeps votes primary:
-     * when two candidates reach the same total, the one who got there on votes
-     * takes it.
-     *
-     * Eligibility is unchanged from the old pair of queries:
-     *  - votes are aggregated bidirectionally (this jurisdiction + all children
-     *    + all ancestors), so a vote cast at Harlem counts for a Downtown
-     *    Harlem artist and vice versa;
-     *  - the artist must live in this jurisdiction or below;
-     *  - a candidate qualifies for the genre either by their own genre_id or by
-     *    having received a vote in that genre — the same union the two old
-     *    queries produced between them, kept so nothing that used to be
-     *    eligible silently stops being eligible.
-     *
-     * Date bucketing deliberately still uses DATE(col) BETWEEN, matching the
-     * old queries exactly. Switching to half-open timestamp ranges would be
-     * faster and index-sargable, but it would also move which calendar day a
-     * play lands in. That is a separate decision, not something to change
-     * underneath a scoring rewrite.
-     */
-    @SuppressWarnings("unchecked")
     private List<CandidateResult> getRankedCandidates(String targetType, UUID jurisdictionId,
                                                        UUID genreId, LocalDate startDate,
                                                        LocalDate endDate) {
-        // Bidirectional jurisdiction set for vote aggregation
-        Set<UUID> allRelatedJurisdictions = new HashSet<>();
-        allRelatedJurisdictions.add(jurisdictionId);
-        allRelatedJurisdictions.addAll(getJurisdictionAndAllChildren(jurisdictionId));
-        allRelatedJurisdictions.addAll(getJurisdictionAncestors(jurisdictionId));
+        return getRankedCandidates(targetType, jurisdictionId, genreId, startDate, endDate, 50);
+    }
 
-        // Residency set for eligibility (this jurisdiction and below only)
-        List<UUID> thisAndChildren = getJurisdictionAndAllChildren(jurisdictionId);
+    private List<CandidateResult> getRankedCandidates(String targetType, UUID jurisdictionId,
+                                                       UUID genreId, LocalDate startDate,
+                                                       LocalDate endDate, int limit) {
+        List<RankingService.Candidate> ranked =
+            rankingService.rank(targetType, jurisdictionId, genreId, startDate, endDate, limit, 0);
 
-        // DELETION RULE: a race is judged as it stood when it closed.
-        //  - A removed song or deleted artist stays in races that closed before
-        //    the removal (past leaderboards don't lose their winner) and drops
-        //    out of races still open.
-        //  - Votes and plays from a deleted account count for races that closed
-        //    before the account was deleted, and stop counting in open ones —
-        //    so deleting and rejoining can't double a vote.
-        // closesAt is the first moment after this period (midnight New York time
-        // after endDate), in the server's clock, which is what deleted_at uses.
-        LocalDateTime closesAt = endDate.plusDays(1)
-            .atStartOfDay(UNIS_ZONE)
-            .withZoneSameInstant(java.time.ZoneId.systemDefault())
-            .toLocalDateTime();
-
-        System.out.println("Ranking " + targetType + " candidates for " + jurisdictionId +
-                          ": votes from " + allRelatedJurisdictions.size() + " jurisdictions, " +
-                          "residents of " + thisAndChildren.size());
-
-        String voteWeightCase = """
-                        SUM(CASE
-                            WHEN vi.name = 'Annual'    THEN 250
-                            WHEN vi.name = 'Midterm'   THEN 200
-                            WHEN vi.name = 'Quarterly' THEN 60
-                            WHEN vi.name = 'Monthly'   THEN 25
-                            WHEN vi.name = 'Weekly'    THEN 20
-                            WHEN vi.name = 'Daily'     THEN 10
-                            ELSE 0
-                        END)""";
-
-        String sql;
-
-        if ("song".equals(targetType)) {
-            sql = """
-                SELECT * FROM (
-                    SELECT
-                        s.song_id                          AS target_id,
-                        COALESCE(v.raw_vote_count, 0)      AS raw_vote_count,
-                        COALESCE(v.weighted_points, 0)     AS weighted_points,
-                        COALESCE(p.plays_count, 0)         AS plays_count,
-                        COALESCE(l.likes_count, 0)         AS likes_count,
-                        COALESCE(s.score, 0)               AS score,
-                        s.created_at                       AS seniority,
-                        (COALESCE(p.plays_count, 0) * :playWeight
-                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS engagement_points,
-                        (COALESCE(v.weighted_points, 0)
-                         + COALESCE(p.plays_count, 0) * :playWeight
-                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS total_points
-                    FROM songs s
-                    JOIN users artist ON s.artist_id = artist.user_id
-                    LEFT JOIN (
-                        SELECT
-                            v.target_id,
-                            COUNT(v.vote_id) AS raw_vote_count,
-                            __VOTE_WEIGHT_CASE__ AS weighted_points
-                        FROM votes v
-                        JOIN voting_intervals vi ON v.interval_id = vi.interval_id
-                        JOIN users voter ON voter.user_id = v.user_id
-                        WHERE v.target_type = 'song'
-                          AND (voter.deleted_at IS NULL OR voter.deleted_at >= :closesAt)
-                          AND v.genre_id = :genreId
-                          AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
-                          AND v.jurisdiction_id IN (:allRelatedJurisdictions)
-                        GROUP BY v.target_id
-                    ) v ON v.target_id = s.song_id
-                    LEFT JOIN (
-                        SELECT sp.song_id, COUNT(*) AS plays_count
-                        FROM song_plays sp
-                        LEFT JOIN users listener ON listener.user_id = sp.user_id
-                        WHERE sp.played_at IS NOT NULL
-                          AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-                          AND (listener.deleted_at IS NULL OR listener.deleted_at >= :closesAt)
-                        GROUP BY sp.song_id
-                    ) p ON p.song_id = s.song_id
-                    LEFT JOIN (
-                        SELECT l.media_id, COUNT(*) AS likes_count
-                        FROM likes l
-                        WHERE l.media_type = 'song'
-                          AND DATE(l.created_at) BETWEEN :startDate AND :endDate
-                        GROUP BY l.media_id
-                    ) l ON l.media_id = s.song_id
-                    WHERE (s.deleted_at IS NULL OR s.deleted_at >= :closesAt)
-                      AND (artist.deleted_at IS NULL OR artist.deleted_at >= :closesAt)
-                      AND artist.jurisdiction_id IN (:thisAndChildren)
-                      AND (s.genre_id = :genreId OR v.raw_vote_count IS NOT NULL)
-                ) c
-                ORDER BY total_points DESC, weighted_points DESC, plays_count DESC,
-                         likes_count DESC, score DESC, seniority ASC
-                LIMIT 50
-            """.replace("__VOTE_WEIGHT_CASE__", voteWeightCase);
-        } else {
-            sql = """
-                SELECT * FROM (
-                    SELECT
-                        u.user_id                          AS target_id,
-                        COALESCE(v.raw_vote_count, 0)      AS raw_vote_count,
-                        COALESCE(v.weighted_points, 0)     AS weighted_points,
-                        COALESCE(p.plays_count, 0)         AS plays_count,
-                        COALESCE(l.likes_count, 0)         AS likes_count,
-                        COALESCE(u.score, 0)               AS score,
-                        u.created_at                       AS seniority,
-                        (COALESCE(p.plays_count, 0) * :playWeight
-                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS engagement_points,
-                        (COALESCE(v.weighted_points, 0)
-                         + COALESCE(p.plays_count, 0) * :playWeight
-                         + COALESCE(l.likes_count, 0) * :likeWeight)        AS total_points
-                    FROM users u
-                    LEFT JOIN (
-                        SELECT
-                            v.target_id,
-                            COUNT(v.vote_id) AS raw_vote_count,
-                            __VOTE_WEIGHT_CASE__ AS weighted_points
-                        FROM votes v
-                        JOIN voting_intervals vi ON v.interval_id = vi.interval_id
-                        JOIN users voter ON voter.user_id = v.user_id
-                        WHERE v.target_type = 'artist'
-                          AND (voter.deleted_at IS NULL OR voter.deleted_at >= :closesAt)
-                          AND v.genre_id = :genreId
-                          AND DATE(v.vote_date) BETWEEN :startDate AND :endDate
-                          AND v.jurisdiction_id IN (:allRelatedJurisdictions)
-                        GROUP BY v.target_id
-                    ) v ON v.target_id = u.user_id
-                    LEFT JOIN (
-                        SELECT song.artist_id, COUNT(*) AS plays_count
-                        FROM song_plays sp
-                        JOIN songs song ON sp.song_id = song.song_id
-                        LEFT JOIN users listener ON listener.user_id = sp.user_id
-                        WHERE sp.played_at IS NOT NULL
-                          AND (song.deleted_at IS NULL OR song.deleted_at >= :closesAt)
-                          AND (listener.deleted_at IS NULL OR listener.deleted_at >= :closesAt)
-                          AND DATE(sp.played_at) BETWEEN :startDate AND :endDate
-                        GROUP BY song.artist_id
-                    ) p ON p.artist_id = u.user_id
-                    LEFT JOIN (
-                        SELECT song.artist_id, COUNT(*) AS likes_count
-                        FROM likes l
-                        JOIN songs song ON l.media_id = song.song_id
-                        WHERE l.media_type = 'song'
-                          AND (song.deleted_at IS NULL OR song.deleted_at >= :closesAt)
-                          AND DATE(l.created_at) BETWEEN :startDate AND :endDate
-                        GROUP BY song.artist_id
-                    ) l ON l.artist_id = u.user_id
-                    WHERE u.role = 'artist'
-                      AND (u.deleted_at IS NULL OR u.deleted_at >= :closesAt)
-                      AND u.jurisdiction_id IN (:thisAndChildren)
-                      AND (u.genre_id = :genreId OR v.raw_vote_count IS NOT NULL)
-                ) c
-                ORDER BY total_points DESC, weighted_points DESC, plays_count DESC,
-                         likes_count DESC, score DESC, seniority ASC
-                LIMIT 50
-            """.replace("__VOTE_WEIGHT_CASE__", voteWeightCase);
+        List<CandidateResult> candidates = new ArrayList<>(ranked.size());
+        for (RankingService.Candidate r : ranked) {
+            CandidateResult c = new CandidateResult();
+            c.targetId = r.targetId();
+            c.rawVoteCount = r.rawVoteCount();
+            c.weightedPoints = r.weightedPoints();
+            c.engagementPoints = r.engagementPoints();
+            c.totalPoints = r.totalPoints();
+            c.playsCount = r.playsCount();
+            c.likesCount = r.likesCount();
+            c.score = r.score();
+            c.seniority = r.seniority();
+            candidates.add(c);
         }
-
-        Query query = entityManager.createNativeQuery(sql);
-        query.setParameter("allRelatedJurisdictions", new ArrayList<>(allRelatedJurisdictions));
-        query.setParameter("thisAndChildren", thisAndChildren);
-        query.setParameter("genreId", genreId);
-        query.setParameter("startDate", startDate);
-        query.setParameter("endDate", endDate);
-        query.setParameter("playWeight", PLAY_WEIGHT);
-        query.setParameter("likeWeight", LIKE_WEIGHT);
-        query.setParameter("closesAt", closesAt);
-
-        List<Object[]> results = query.getResultList();
-
-        List<CandidateResult> candidates = new ArrayList<>();
-        for (Object[] row : results) {
-            CandidateResult candidate = new CandidateResult();
-            candidate.targetId         = (UUID) row[0];
-            candidate.rawVoteCount     = ((Number) row[1]).intValue();
-            candidate.weightedPoints   = ((Number) row[2]).intValue();
-            candidate.playsCount       = ((Number) row[3]).intValue();
-            candidate.likesCount       = ((Number) row[4]).intValue();
-            candidate.score            = ((Number) row[5]).intValue();
-            candidate.seniority        = row[6] != null
-                    ? ((java.sql.Timestamp) row[6]).toLocalDateTime()
-                    : LocalDateTime.now();
-            candidate.engagementPoints = ((Number) row[7]).intValue();
-            candidate.totalPoints      = ((Number) row[8]).intValue();
-            candidates.add(candidate);
-        }
-
-        System.out.println("Ranked " + candidates.size() + " candidate(s) for " + targetType);
-        if (!candidates.isEmpty()) {
-            CandidateResult top = candidates.get(0);
-            System.out.println("Leader: " + top.targetId + " — total " + top.totalPoints +
-                              " (" + top.weightedPoints + " vote pts from " + top.rawVoteCount +
-                              " votes, " + top.engagementPoints + " engagement pts from " +
-                              top.playsCount + " plays / " + top.likesCount + " likes)");
-        }
-
         return candidates;
     }
 
@@ -869,171 +673,10 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     }
 
     // =========================================================================
-    // SCHEDULED CRON JOBS (with CronMonitorService tracking)
+    // SCHEDULED CLOSING lives in scheduler/RaceCloseScheduler: one job at one
+    // minute past every hour closes each race at its own midnight. It replaced
+    // six crons that all fired on Eastern time.
     // =========================================================================
-
-    @Scheduled(cron = "0 1 0 * * ?", zone = "America/New_York")
-    @Transactional(readOnly = false)
-    public void computeDailyAwards() {
-        CronExecution exec = cronMonitorService.startExecution("DAILY_AWARDS");
-        try {
-            LocalDate yesterday = LocalDate.now(UNIS_ZONE).minusDays(1);
-            System.out.println("=== DAILY AWARD CRON: Computing for " + yesterday + " ===");
-
-            Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
-            if (dailyInterval.isEmpty()) {
-                System.out.println("ERROR: Daily interval not found!");
-                cronMonitorService.markFailed(exec, "Daily interval not found");
-                return;
-            }
-
-            long countBefore = awardRepository.count();
-            computeAwardsInternal(yesterday, dailyInterval.get().getIntervalId(), null, null);
-            songRepository.resetPlaysToday(LocalDate.now(UNIS_ZONE));
-            long countAfter = awardRepository.count();
-
-            int created = (int) (countAfter - countBefore);
-            cronMonitorService.markSuccess(exec, created);
-            System.out.println("=== DAILY AWARD CRON COMPLETE: " + created + " awards created ===");
-        } catch (Exception e) {
-            cronMonitorService.markFailed(exec, e.getMessage());
-            System.out.println("=== DAILY AWARD CRON FAILED: " + e.getMessage() + " ===");
-            throw e;
-        }
-    }
-
-    @Scheduled(cron = "0 1 0 * * MON", zone = "America/New_York")
-    @Transactional(readOnly = false)
-    public void computeWeeklyAwards() {
-        CronExecution exec = cronMonitorService.startExecution("WEEKLY_AWARDS");
-        try {
-            System.out.println("=== WEEKLY AWARD CRON ===");
-            Optional<VotingInterval> weekly = votingIntervalRepository.findByName("Weekly");
-            if (weekly.isEmpty()) {
-                cronMonitorService.markFailed(exec, "Weekly interval not found");
-                return;
-            }
-
-            long countBefore = awardRepository.count();
-            computeAwardsInternal(LocalDate.now(UNIS_ZONE).minusDays(1), weekly.get().getIntervalId(), null, null);
-            long countAfter = awardRepository.count();
-
-            cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
-            System.out.println("=== WEEKLY AWARD CRON COMPLETE ===");
-        } catch (Exception e) {
-            cronMonitorService.markFailed(exec, e.getMessage());
-            System.out.println("=== WEEKLY AWARD CRON FAILED: " + e.getMessage() + " ===");
-            throw e;
-        }
-    }
-
-    @Scheduled(cron = "0 1 0 1 * ?", zone = "America/New_York")
-    @Transactional(readOnly = false)
-    public void computeMonthlyAwards() {
-        CronExecution exec = cronMonitorService.startExecution("MONTHLY_AWARDS");
-        try {
-            System.out.println("=== MONTHLY AWARD CRON ===");
-            Optional<VotingInterval> monthly = votingIntervalRepository.findByName("Monthly");
-            if (monthly.isEmpty()) {
-                cronMonitorService.markFailed(exec, "Monthly interval not found");
-                return;
-            }
-
-            long countBefore = awardRepository.count();
-            computeAwardsInternal(LocalDate.now(UNIS_ZONE).minusDays(1), monthly.get().getIntervalId(), null, null);
-            long countAfter = awardRepository.count();
-
-            cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
-            System.out.println("=== MONTHLY AWARD CRON COMPLETE ===");
-        } catch (Exception e) {
-            cronMonitorService.markFailed(exec, e.getMessage());
-            System.out.println("=== MONTHLY AWARD CRON FAILED: " + e.getMessage() + " ===");
-            throw e;
-        }
-    }
-
-    @Scheduled(cron = "0 1 0 1 * ?", zone = "America/New_York")
-    @Transactional(readOnly = false)
-    public void computeQuarterlyAwards() {
-        LocalDate now = LocalDate.now(UNIS_ZONE);
-        int month = now.getMonthValue();
-        if (month == 1 || month == 4 || month == 7 || month == 10) {
-            CronExecution exec = cronMonitorService.startExecution("QUARTERLY_AWARDS");
-            try {
-                System.out.println("=== QUARTERLY AWARD CRON ===");
-                Optional<VotingInterval> quarterly = votingIntervalRepository.findByName("Quarterly");
-                if (quarterly.isEmpty()) {
-                    cronMonitorService.markFailed(exec, "Quarterly interval not found");
-                    return;
-                }
-
-                long countBefore = awardRepository.count();
-                computeAwardsInternal(now.minusDays(1), quarterly.get().getIntervalId(), null, null);
-                long countAfter = awardRepository.count();
-
-                cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
-                System.out.println("=== QUARTERLY AWARD CRON COMPLETE ===");
-            } catch (Exception e) {
-                cronMonitorService.markFailed(exec, e.getMessage());
-                System.out.println("=== QUARTERLY AWARD CRON FAILED: " + e.getMessage() + " ===");
-                throw e;
-            }
-        }
-    }
-
-    @Scheduled(cron = "0 1 0 1 * ?", zone = "America/New_York")
-    @Transactional(readOnly = false)
-    public void computeMidtermAwards() {
-        LocalDate now = LocalDate.now(UNIS_ZONE);
-        int month = now.getMonthValue();
-        if (month == 1 || month == 7) {
-            CronExecution exec = cronMonitorService.startExecution("MIDTERM_AWARDS");
-            try {
-                System.out.println("=== MIDTERM AWARD CRON ===");
-                Optional<VotingInterval> midterm = votingIntervalRepository.findByName("Midterm");
-                if (midterm.isEmpty()) {
-                    cronMonitorService.markFailed(exec, "Midterm interval not found");
-                    return;
-                }
-
-                long countBefore = awardRepository.count();
-                computeAwardsInternal(now.minusDays(1), midterm.get().getIntervalId(), null, null);
-                long countAfter = awardRepository.count();
-
-                cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
-                System.out.println("=== MIDTERM AWARD CRON COMPLETE ===");
-            } catch (Exception e) {
-                cronMonitorService.markFailed(exec, e.getMessage());
-                System.out.println("=== MIDTERM AWARD CRON FAILED: " + e.getMessage() + " ===");
-                throw e;
-            }
-        }
-    }
-
-    @Scheduled(cron = "0 1 0 1 1 ?", zone = "America/New_York")
-    @Transactional(readOnly = false)
-    public void computeAnnualAwards() {
-        CronExecution exec = cronMonitorService.startExecution("ANNUAL_AWARDS");
-        try {
-            System.out.println("=== ANNUAL AWARD CRON ===");
-            Optional<VotingInterval> annual = votingIntervalRepository.findByName("Annual");
-            if (annual.isEmpty()) {
-                cronMonitorService.markFailed(exec, "Annual interval not found");
-                return;
-            }
-
-            long countBefore = awardRepository.count();
-            computeAwardsInternal(LocalDate.now(UNIS_ZONE).minusDays(1), annual.get().getIntervalId(), null, null);
-            long countAfter = awardRepository.count();
-
-            cronMonitorService.markSuccess(exec, (int) (countAfter - countBefore));
-            System.out.println("=== ANNUAL AWARD CRON COMPLETE ===");
-        } catch (Exception e) {
-            cronMonitorService.markFailed(exec, e.getMessage());
-            System.out.println("=== ANNUAL AWARD CRON FAILED: " + e.getMessage() + " ===");
-            throw e;
-        }
-    }
 
     // =========================================================================
     // MANUAL COMPUTATION

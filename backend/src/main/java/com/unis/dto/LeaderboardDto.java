@@ -18,8 +18,9 @@ import java.util.UUID;
  * `title` — LeaderboardEntryDto uses `title`, and the two are not
  * interchangeable.
  *
- * Populated in VoteService.getLeaderboard() in two branches:
- *   artist rows -> rank, targetId, name, votes, artwork
+ * Populated in VoteService.getLeaderboard() from the race's live board
+ * (RaceStandingsService):
+ *   artist rows -> rank, targetId, name, votes, artwork, artistId
  *   song rows   -> the same, plus artist and fileUrl
  */
 @Data
@@ -34,6 +35,11 @@ public class LeaderboardDto {
     /** Username for artist rows, song title for song rows. */
     private String name;
 
+    /**
+     * The number the race is decided on: total points (weighted vote points +
+     * plays + 5 x likes — RankingService). Kept under this name because the
+     * leaderboards page reads it; the breakdown is in the fields below.
+     */
     private long votes;
 
     private String artwork;
@@ -49,13 +55,20 @@ public class LeaderboardDto {
     private String fileUrl;
 
     /**
-     * Owning artist for song rows, so a row can deep-link to the artist page.
-     *
-     * NOT POPULATED YET. VoteService's song query selects six columns
-     * (song_id, title, score, artwork_url, artist, file_url) and none of them
-     * is artist_id, so this always serializes as null today. To wire it: add
-     * `s.artist_id` to that SELECT and `.artistId((UUID) row[6])` to the
-     * builder alongside .fileUrl(...).
+     * The artist: the performing artist on song rows, the artist themself on
+     * artist rows, so a row can deep-link to the artist page.
      */
     private UUID artistId;
+
+    /** Same as votes: total points. */
+    private int totalPoints;
+
+    /** Votes received in this period (raw count, before interval weighting). */
+    private int voteCount;
+
+    /** Plays in this period, on the artist's calendar. */
+    private int plays;
+
+    /** Likes in this period, on the artist's calendar. */
+    private int likes;
 }
