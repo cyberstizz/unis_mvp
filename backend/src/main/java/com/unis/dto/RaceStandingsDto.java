@@ -27,7 +27,7 @@ public class RaceStandingsDto {
 
     private String type;              // "artist" | "song"
     private UUID jurisdictionId;
-    private UUID genreId;
+    private UUID genreId;             // null = all genres (Charts page)
     private UUID intervalId;
     private String interval;          // "Daily", "Weekly", ...
 
@@ -53,6 +53,9 @@ public class RaceStandingsDto {
     private int limit;
     private int offset;
 
+    /** How many entries the whole board has, for paging ("1–50 of 312"). */
+    private int total;
+
     private List<Entry> entries;
 
     @Data
@@ -72,6 +75,10 @@ public class RaceStandingsDto {
         private String artworkUrl;
         private String fileUrl;     // song rows only
 
+        /** Home jurisdiction (the song's own, else its artist's). The voting wizard starts from it. */
+        private UUID homeJurisdictionId;
+        private String homeJurisdictionName;
+
         private int totalPoints;
         private int votePoints;
         private int votes;
@@ -81,5 +88,14 @@ public class RaceStandingsDto {
 
         /** True only on the recorded award winner of a final period. */
         private boolean winner;
+
+        /** Where this entry placed in the period before the one shown. Null if it didn't chart. */
+        private Integer previousRank;
+
+        /** previousRank - rank: positive moved up, negative moved down. Null when there's nothing to compare. */
+        private Integer movement;
+
+        /** Scored in the shown period but not in the one before it. */
+        private boolean newEntry;
     }
 }

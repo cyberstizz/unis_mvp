@@ -29,21 +29,26 @@ public class AwardController {
 
     /**
      * GET /api/v1/awards/standings
-     * The live board for one race, with the midnight rule applied: before
-     * anyone scores in a new period, the period that just ended is shown
-     * (final, or still closing in another timezone). See RaceStandingsDto
-     * for the state field. Public, read-only, cached for a minute.
+     * The board for one race, with the midnight rule applied: before anyone
+     * scores in a new period, the period that just ended is shown (final, or
+     * still closing in another timezone). See RaceStandingsDto for the state
+     * field. Seen from the viewer's own day when signed in.
+     *
+     * genreId is optional: leave it out to rank across all genres (the
+     * Charts page). limit is capped at 100; page with offset. Public,
+     * read-only, cached for a minute.
      */
     @GetMapping("/standings")
     public ResponseEntity<RaceStandingsDto> getStandings(
             @RequestParam String type,
             @RequestParam UUID jurisdictionId,
-            @RequestParam UUID genreId,
+            @RequestParam(required = false) UUID genreId,
             @RequestParam UUID intervalId,
             @RequestParam(defaultValue = "20") int limit,
             @RequestParam(defaultValue = "0") int offset) {
-        return ResponseEntity.ok(
-            raceStandingsService.standings(type, jurisdictionId, genreId, intervalId, limit, offset));
+        return ResponseEntity.ok(raceStandingsService.standings(
+            type, jurisdictionId, genreId, intervalId, limit, offset,
+            raceClock.viewerDateForRace(jurisdictionId)));
     }
 
     /**

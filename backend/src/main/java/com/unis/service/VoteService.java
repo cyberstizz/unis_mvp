@@ -484,7 +484,8 @@ public class VoteService {
      */
     public List<LeaderboardDto> getLeaderboard(String targetType, UUID genreId, UUID jurisdictionId, UUID intervalId, int limit) {
         RaceStandingsDto board = raceStandingsService.standings(
-            targetType, jurisdictionId, genreId, intervalId, limit, 0);
+            targetType, jurisdictionId, genreId, intervalId, limit, 0,
+            raceClock.viewerDateForRace(jurisdictionId));
 
         boolean songs = "song".equals(board.getType());
         List<LeaderboardDto> rows = new ArrayList<>();

@@ -2,6 +2,7 @@ package com.unis.service;
 
 import com.unis.dto.RaceStandingsDto;
 import com.unis.entity.Award;
+import com.unis.entity.Jurisdiction;
 import com.unis.entity.Song;
 import com.unis.entity.User;
 import com.unis.entity.VotingInterval;
@@ -78,23 +79,47 @@ public class RaceStandingsService {
     }
 
     /**
-     * The board for a race, as anyone should see it right now. Viewer
-     * independent, so it caches for everyone (one minute).
+     * The board for a race as seen from a given day (RaceClockService
+     * .viewerDateForRace: the viewer's own day, or the race's newest day when
+     * signed out). Cached for a minute per day, so everyone on the same day
+     * shares it. A null genreId ranks across all genres (Charts page).
+     *
+     * Each entry carries where it placed in the period before the one shown,
+     * for the movement arrows; entries that scored now but not then are new.
      */
     @Transactional(readOnly = true)
     @Cacheable(value = "leaderboards",
         key = "'standings-' + #targetType + '-' + #jurisdictionId + '-' + #genreId + '-' "
-            + "+ #intervalId + '-' + #limit + '-' + #offset")
+            + "+ #intervalId + '-' + #limit + '-' + #offset + '-' + #viewDate")
     public RaceStandingsDto standings(String targetType, UUID jurisdictionId, UUID genreId,
-                                      UUID intervalId, int limit, int offset) {
+                                      UUID intervalId, int limit, int offset, LocalDate viewDate) {
         VotingInterval interval = votingIntervalRepository.findById(intervalId)
             .orElseThrow(() -> new IllegalArgumentException("Unknown interval: " + intervalId));
         String type = normalizeType(targetType);
         int lim = Math.min(Math.max(limit, 1), 100);
         int off = Math.max(offset, 0);
 
-        Resolved r = resolve(type, jurisdictionId, genreId, interval,
-            raceClock.newestLocalDate(jurisdictionId), lim, off);
+        Resolved r = resolve(type, jurisdictionId, genreId, interval, viewDate, lim, off);
+
+        // Movement: compare with the period before the one shown, but only if
+        // anything happened in it — arrows against a page of zeros mean nothing.
+        LocalDate[] before = RaceClockService.previousPeriod(interval.getName(), r.shown());
+        List<RankingService.Candidate> beforeTop = rankingService.rankForDisplay(
+            type, jurisdictionId, genreId, before[0], before[1], 1, 0);
+        boolean beforeScored = !beforeTop.isEmpty() && beforeTop.get(0).totalPoints() > 0;
+        Map<UUID, Integer> previousRanks = beforeScored
+            ? rankingService.positions(type, jurisdictionId, genreId, before[0], before[1],
+                r.candidates().stream().map(RankingService.Candidate::targetId).collect(Collectors.toList()))
+            : Map.of();
+
+        int total;
+        if (!r.candidates().isEmpty()) {
+            total = r.candidates().get(0).totalCount();
+        } else {
+            List<RankingService.Candidate> first = rankingService.rankForDisplay(
+                type, jurisdictionId, genreId, r.shown()[0], r.shown()[1], 1, 0);
+            total = first.isEmpty() ? 0 : first.get(0).totalCount();
+        }
 
         String closesAt = null;
         List<String> stillOpenIn = List.of();
@@ -122,7 +147,8 @@ public class RaceStandingsService {
             .raceTimezone(raceClock.zoneOf(jurisdictionId).getId())
             .limit(lim)
             .offset(off)
-            .entries(hydrate(type, r.candidates(), off, r.winnerId()))
+            .total(total)
+            .entries(hydrate(type, r.candidates(), off, r.winnerId(), previousRanks, beforeScored))
             .build();
     }
 
@@ -180,7 +206,8 @@ public class RaceStandingsService {
     }
 
     private List<RaceStandingsDto.Entry> hydrate(String type, List<RankingService.Candidate> candidates,
-                                                 int offset, UUID winnerId) {
+                                                 int offset, UUID winnerId,
+                                                 Map<UUID, Integer> previousRanks, boolean compare) {
         List<UUID> ids = candidates.stream().map(RankingService.Candidate::targetId).collect(Collectors.toList());
         Map<UUID, Song> songs = new HashMap<>();
         Map<UUID, User> artists = new HashMap<>();
@@ -205,6 +232,12 @@ public class RaceStandingsService {
                 .plays(c.playsCount())
                 .likes(c.likesCount())
                 .winner(c.targetId().equals(winnerId));
+            Integer previous = previousRanks.get(c.targetId());
+            if (previous != null) {
+                b.previousRank(previous).movement(previous - rank);
+            } else if (compare && c.totalPoints() > 0) {
+                b.newEntry(true);
+            }
             if ("song".equals(type)) {
                 Song s = songs.get(c.targetId());
                 if (s != null) {
@@ -214,6 +247,11 @@ public class RaceStandingsService {
                     if (s.getArtist() != null) {
                         b.artistName(s.getArtist().getUsername()).artistId(s.getArtist().getUserId());
                     }
+                    Jurisdiction home = s.getJurisdiction() != null ? s.getJurisdiction()
+                        : (s.getArtist() != null ? s.getArtist().getJurisdiction() : null);
+                    if (home != null) {
+                        b.homeJurisdictionId(home.getJurisdictionId()).homeJurisdictionName(home.getName());
+                    }
                 }
             } else {
                 User u = artists.get(c.targetId());
@@ -222,6 +260,10 @@ public class RaceStandingsService {
                      .artistName(u.getUsername())
                      .artistId(u.getUserId())
                      .artworkUrl(u.getPhotoUrl());
+                    if (u.getJurisdiction() != null) {
+                        b.homeJurisdictionId(u.getJurisdiction().getJurisdictionId())
+                         .homeJurisdictionName(u.getJurisdiction().getName());
+                    }
                 }
             }
             entries.add(b.build());

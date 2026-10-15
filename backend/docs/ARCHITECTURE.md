@@ -488,9 +488,9 @@ Profile gallery photos for artists and listeners.
 | GET | `/api/v1/vote/results` | Public | Filtered vote results |
 | GET | `/api/v1/vote/total/{targetType}/{targetId}` | Public | Total votes for target |
 | GET | `/api/v1/vote/votes/user/{userId}` | Public | Votes cast by user |
-| GET | `/api/v1/vote/nominees` | Public | Top nominees |
+| GET | `/api/v1/vote/nominees` | Public | Nominees in standings order for the viewer's own day (midnight rule applies) |
 | GET | `/api/v1/vote/check-eligibility` | Public | Eligibility check |
-| GET | `/api/v1/vote/leaderboards` | Public | Ranked leaderboard |
+| GET | `/api/v1/vote/leaderboards` | Public | The race's live board as rows; `votes` = total points |
 | POST | `/api/v1/vote/awards/compute` | Admin only (C2) | Trigger award computation |
 | GET | `/api/v1/vote/history` | Required (via Authentication) | Authenticated user's vote history |
 
@@ -498,7 +498,9 @@ Profile gallery photos for artists and listeners.
 
 **Note:** `getVoteHistory` already used `Authentication auth` parameter correctly — no change needed.
 
-**Remaining Refactor Flag:** Duplicate `computeDailyAwards` — remove from `VoteService` (M1).
+**Vote date:** stamped by the server on the voter's own clock (`RaceClockService.todayForUser`), never sent by the client.
+
+**M1 resolved:** the duplicate `computeDailyAwards` cron in `VoteService` is gone.
 
 ---
 
@@ -506,7 +508,9 @@ Profile gallery photos for artists and listeners.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/v1/awards/leaderboards` | Public | Live leaderboards |
+| GET | `/api/v1/awards/standings` | Public | Live board for one race with the midnight rule — `state` LIVE / PREVIOUS_FINAL / PREVIOUS_CLOSING (`RaceStandingsDto`) |
+| GET | `/api/v1/awards/leaderboards` | Public | Recent award rows (legacy). Pure read |
+| GET | `/api/v1/awards/period-leaderboard` | Public | Milestones: winner + ranked field for a period. Pure read; `status` OPEN / FINAL / PENDING / NO_AWARD |
 | GET | `/api/v1/awards/past` | Public | Past awards with filters |
 | GET | `/api/v1/awards/cron/manual` | Admin only (C2) | Manual daily trigger |
 | POST | `/api/v1/awards/compute` | Admin only (C2) | Compute awards for params |
@@ -515,6 +519,8 @@ Profile gallery photos for artists and listeners.
 | GET | `/api/v1/awards/artist/{artistId}` | Public | Paginated awards for artist |
 
 **C2 Fix:** All destructive/compute endpoints now require `ROLE_ADMIN`.
+
+**No read endpoint writes awards.** Award rows are created only by `RaceCloseScheduler`, and `AwardService.computeAwardsInternal` refuses any period that has not ended for everyone in the race — including the admin compute endpoints.
 
 ---
 
@@ -716,12 +722,42 @@ Profile gallery photos for artists and listeners.
 
 ## 7. Service Layer
 
-### `AwardService.java`
-**Purpose:** Computes, persists, and serves awards across all voting intervals, jurisdictions, and genres using weighted vote aggregation and a full tiebreaker cascade.
+### `RaceClockService.java`
+**Purpose:** The one place that decides what day it is. Every jurisdiction runs on its real-world clock (`jurisdictions.timezone`, IANA name; children inherit from parents — `sql/V2026_10e__race_clock.sql`).
 
-**Tiebreaker Cascade:** `WEIGHTED_VOTES` → `PLAYS` → `LIKES` → `SCORE` → `SENIORITY` → `FALLBACK`
+**Rules:**
+- A vote counts on the **voter's** own calendar day.
+- Plays and likes count on the **artist's** home calendar day.
+- A race closes when its period has ended for everyone who lives in the race's jurisdiction or inside it. Harlem closes at midnight New York time; the Unis-wide race waits for the last zone anyone on Unis lives in.
+
+**Key Methods:** `zoneOf`, `todayForUser`, `participantZones` (cached 10 min), `periodContaining` (Daily / Mon–Sun / month / quarter / Jan–Jun & Jul–Dec / year), `closesAt`, `isClosed`, `zonesStillOpen`, `latestClosedPeriodEnd`, `viewerDateForRace`.
+
+The JVM is pinned to UTC (`UnisApplication`); stored timestamps are UTC wall-clock time.
+
+---
+
+### `RankingService.java`
+**Purpose:** The one ranking formula — used by award winners, live boards, nominees, the leaderboards page, and (as set SQL) territory rank.
+
+`total points = weighted vote points + plays × 1 + likes × 5`, ordered by total → vote points → plays → likes → score → seniority → id.
 
 **Vote Weight Values:** Annual=250, Midterm=200, Quarterly=60, Monthly=25, Weekly=20, Daily=10
+
+**Whose votes count:** only voters who live in the race's jurisdiction or inside it. Local races are decided by local voters; Unis-wide by everyone. Plays and likes count everywhere the artist competes.
+
+`rank(...)` is uncached (used to decide winners). `rankForDisplay(...)` is the same query cached for one minute in `leaderboards`.
+
+---
+
+### `RaceStandingsService.java`
+**Purpose:** Live boards with the **midnight rule**: until anyone scores in a new period, show the period that just ended — final (winner pinned first) if it has ended for everyone, otherwise its live standings flagged as still closing. Applies to every interval.
+
+---
+
+### `AwardService.java`
+**Purpose:** Decides and serves awards across all voting intervals, jurisdictions, and genres. Ranking comes from `RankingService`.
+
+**Tiebreaker Cascade:** total points → vote points → plays → likes → score → seniority. Recorded as `VOTES` / `ENGAGEMENT` / `VOTE_POINTS` / `PLAYS` / `LIKES` / `SCORE` / `SENIORITY` / `NO_ACTIVITY` (`WEIGHTED_VOTES` and `FALLBACK` exist only on historical rows).
 
 **Award Point Values (added to winner score):** Annual=5000, Midterm=2500, Quarterly=500, Monthly=250, Weekly=100, Daily=50
 
@@ -729,20 +765,19 @@ Profile gallery photos for artists and listeners.
 
 | Method | Logic |
 |--------|-------|
-| `computeAwardsInternal(...)` | Core loop: all voting-enabled jurisdictions × all genres → `computeSingleWinnerAward` for song and artist |
-| `getCandidatesWithWeightedVotes(...)` | Native SQL. Bidirectional jurisdiction aggregation with interval weights. |
-| `getCandidatesByEngagement(...)` | Zero-vote fallback. Top 10 by plays → likes → score → seniority. |
-| `determineWinner(candidates)` | Walks tiebreaker cascade. Records method and tied count. |
-| `computeAndSaveAwardsInNewTransaction(...)` | `REQUIRES_NEW` — exists because `getPastAwards` is `readOnly=true`. Self-injected via `@Lazy`. |
+| `closeRacePeriod(periodEnd, interval, jurisdiction)` | `REQUIRES_NEW`. Decides every award for one race's period and writes the `race_period_closures` ledger row in the same transaction. Called by `RaceCloseScheduler`. |
+| `computeAwardsInternal(...)` | All genres × song and artist → `computeSingleWinnerAward`. Refuses any period still open for anyone in the race. |
+| `determineWinner(candidates)` | Walks the tiebreaker cascade. Records method and tied count. |
+| `getPeriodLeaderboard(...)` | Milestones. Pure read; returns `status`, `closesAt`, `stillOpenIn`. |
 | `createFallbackAwards(...)` | Display-only Award objects. **Never persisted.** |
-| `recomputeAllHistoricalAwards()` | Admin method. Recomputes Daily awards only for all distinct vote dates. |
+| `recomputeAllHistoricalAwards()` | Admin method. Recomputes Daily awards for all distinct vote dates. |
 
 **Business Logic:**
-- Jurisdiction aggregation bidirectional — votes from target + all descendants + ancestors; winners must reside in target or descendants only
-- Award deduplication: `existsAwardForCategory` checked before any computation
-- `autoPopulateAwards` flag (default `true`) gates on-demand computation from read requests
+- Winners must reside in the race jurisdiction or inside it; a song's home is its own jurisdiction, falling back to its artist's
+- One winner per slot: `existsAwardForCategory` before computing, and the `ux_awards_one_winner_per_slot` unique index
+- `unis.auto-populate-awards` is retired — no read path computes awards
 
-**Refactor Flags:** Extensive `System.out.println` — replace with SLF4J. `createFallbackAwards` calls `findAll()` — dangerous at scale.
+**Refactor Flags:** `createFallbackAwards` calls `findAll()` — dangerous at scale.
 
 ---
 
@@ -750,12 +785,9 @@ Profile gallery photos for artists and listeners.
 **Purpose:** Vote submission with jurisdiction eligibility enforcement, duplicate prevention, leaderboard and nominee queries.
 
 **Key Business Logic:**
-- One vote per `(userId, targetType, genreId, jurisdictionId, intervalId, voteDate)` — `targetId` excluded so user cannot switch vote on same day
+- One vote per race per period — race = (targetType, genre, jurisdiction, interval); period = the interval's calendar window on the **voter's** clock
 - Eligibility relies on materialized `path` string — missing path throws exception
-- `getIntervalStartDate` for Daily returns yesterday — testing convenience, must revert before production
-- Leaderboard composite score = `COUNT(votes) + COUNT(plays)` — equal weight
-
-**Refactor Flag:** Duplicate `computeDailyAwards` — remove from `VoteService`. Leaderboard fallback appends without deduplication.
+- `getNominees` and `getLeaderboard` use `RaceStandingsService` (same formula as award winners, midnight rule)
 
 ---
 
@@ -867,16 +899,10 @@ All tasks share a **2-thread pool**.
 
 | Service | Method | Schedule | What It Does |
 |---------|--------|----------|--------------|
-| `AwardService` | `computeDailyAwards()` | `0 1 0 * * ?` — daily 00:01 | Computes daily awards for yesterday. Resets `plays_today`. |
-| `AwardService` | `computeWeeklyAwards()` | `0 1 0 * * MON` — Mondays 00:01 | Weekly awards. |
-| `AwardService` | `computeMonthlyAwards()` | `0 1 0 1 * ?` — 1st of month 00:01 | Monthly awards. |
-| `AwardService` | `computeQuarterlyAwards()` | `0 1 0 1 * ?` — 1st of month 00:01 | Self-filters to months 1/4/7/10. |
-| `AwardService` | `computeMidtermAwards()` | `0 1 0 1 * ?` — 1st of month 00:01 | Self-filters to months 1/7. |
-| `AwardService` | `computeAnnualAwards()` | `0 1 0 1 1 ?` — Jan 1st 00:01 | Annual awards. |
-| `VoteService` | `computeDailyAwards()` | `0 0 0 * * ?` — daily 00:00 | **Duplicate — remove.** Fires 1 min before AwardService version, produces conflicting records. |
+| `RaceCloseScheduler` | `closeFinishedPeriods()` | `0 1 * * * *` UTC — one minute past every hour | For every voting-enabled jurisdiction × interval, closes each period that has ended for everyone in the race (its own midnight), oldest first, catching up anything missed (14 per race per run). First sight of a race records a BASELINE instead of deciding past periods. Logs to `cron_executions` as DAILY_AWARDS / WEEKLY_AWARDS / ... only when it closed something. Then refreshes territory ranks for jurisdictions whose day ended, and resets `plays_today` in the New York midnight hour. |
 | `ScoreUpdateService` | `monthlyAgeBonuses()` | `0 0 0 1 * ?` — 1st of month 00:00 | +1 to every user with `monthsOld > 0`. Full table scan. |
 
-**Risk:** On the 1st of each month, 4 jobs fire within the same minute with only 2 threads — at least 2 will queue.
+Territory ranks are no longer a separate 00:30 job — `RaceCloseScheduler` refreshes each jurisdiction right after its own day ends (`TerritoryRankService.refreshFor`).
 
 ---
 
@@ -1142,9 +1168,9 @@ Stateless utility. Generates `USERNAME-XXXXX` format codes using `SecureRandom`.
 
 | # | Issue | Location | Action |
 |---|-------|----------|--------|
-| M1 | Duplicate `computeDailyAwards` fires at 00:00 and 00:01 — conflicting Award records | `VoteService` | Remove from `VoteService`. |
+| M1 | ~~Duplicate `computeDailyAwards`~~ | `VoteService` | **Resolved** — removed; awards come only from `RaceCloseScheduler`. |
 | M2 | `deleteFile` never called — orphaned files accumulate | `MediaService`, `UserService` | Call `fileStorageService.deleteFile(oldUrl)` on delete and artwork replacement. |
-| M3 | `getIntervalStartDate` Daily returns yesterday | `VoteService` | Revert to `LocalDate.now()` before launch. |
+| M3 | ~~`getIntervalStartDate` Daily returns yesterday~~ | `VoteService` | **Resolved** — periods come from `RaceClockService.periodContaining` on the voter's clock. |
 | M4 | `SupporterRepository.findByListenerId` returns bare type not `Optional` | `SupporterRepository` | Change return type. |
 | M5 | `PlaylistTrack` must declare `@Table(name = "playlist_items")` | `PlaylistTrack` entity | Confirm annotation present. |
 | M6 | No cascade delete for `Referral` records | `ReferralRepository` | Add `deleteByReferrerUserId` and `deleteByReferredUserId`. |
