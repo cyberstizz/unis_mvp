@@ -8,6 +8,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -18,6 +20,10 @@ public class EmailService {
 
     @Value("${resend.from.email:noreply@charleslambjr.com}")
     private String fromEmail;
+
+    /** Display name for emails sent with send(): inboxes show "Unis" instead of the bare address. */
+    @Value("${resend.from.name:Unis}")
+    private String fromName;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private static final ObjectMapper mapper = new ObjectMapper();
@@ -80,6 +86,73 @@ public class EmailService {
         } catch (Exception e) {
             long ms = (System.nanoTime() - startNs) / 1_000_000;
             System.err.println("[Email] action=send status=error to=" + normalizedEmail
+                + " durationMs=" + ms + " err=" + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * A full send for emails people subscribe to (the Sunday email): sender
+     * name ("Unis &lt;noreply@…&gt;"), a plain-text part next to the HTML, extra
+     * headers (List-Unsubscribe), and a Resend tag for filtering in the
+     * Resend dashboard. Retries once, after a second, when Resend says to
+     * slow down (HTTP 429).
+     *
+     * Never throws -- failure is logged and returned as false.
+     */
+    public boolean send(String toEmail, String subject, String html, String text,
+                        Map<String, String> headers, String tag) {
+        if (!isConfigured()) {
+            System.out.println("[Email] action=send status=skip reason=not_configured to=" + toEmail);
+            return false;
+        }
+        if (toEmail == null || toEmail.isBlank()) {
+            System.out.println("[Email] action=send status=skip reason=no_recipient");
+            return false;
+        }
+
+        String normalizedEmail = toEmail.trim().toLowerCase();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("from", (fromName == null || fromName.isBlank()) ? fromEmail : fromName + " <" + fromEmail + ">");
+        payload.put("to", List.of(normalizedEmail));
+        payload.put("subject", subject);
+        payload.put("html", html);
+        if (text != null && !text.isBlank()) payload.put("text", text);
+        if (headers != null && !headers.isEmpty()) payload.put("headers", headers);
+        if (tag != null && !tag.isBlank()) payload.put("tags", List.of(Map.of("name", "category", "value", tag)));
+
+        long startNs = System.nanoTime();
+        try {
+            String jsonPayload = mapper.writeValueAsString(payload);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.resend.com/emails"))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + resendApiKey)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 429) {
+                Thread.sleep(1000);
+                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            }
+            long ms = (System.nanoTime() - startNs) / 1_000_000;
+            int code = response.statusCode();
+            if (code >= 200 && code < 300) {
+                System.out.println("[Email] action=send status=ok tag=" + tag + " to=" + normalizedEmail
+                    + " httpStatus=" + code + " durationMs=" + ms);
+                return true;
+            }
+            System.err.println("[Email] action=send status=fail tag=" + tag + " to=" + normalizedEmail
+                + " httpStatus=" + code + " durationMs=" + ms + " body=" + response.body());
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("[Email] action=send status=interrupted to=" + normalizedEmail);
+            return false;
+        } catch (Exception e) {
+            long ms = (System.nanoTime() - startNs) / 1_000_000;
+            System.err.println("[Email] action=send status=error tag=" + tag + " to=" + normalizedEmail
                 + " durationMs=" + ms + " err=" + e.getMessage());
             return false;
         }

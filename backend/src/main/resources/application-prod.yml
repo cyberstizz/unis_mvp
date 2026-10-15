@@ -29,16 +29,21 @@ resend:
   api:
     key: ${RESEND_API_KEY}
   from:
-    email: noreply@charleslambjr.com
+    email: ${RESEND_FROM_EMAIL:noreply@charleslambjr.com}
+    name: ${RESEND_FROM_NAME:Unis}
 
 unis:
   auto-populate-awards: true
   app-base-url: ${UNIS_APP_BASE_URL:http://localhost:5173}
   api-base-url: ${UNIS_API_BASE_URL:http://localhost:8080}
+  media-base-url: ${UNIS_MEDIA_BASE_URL:https://cdn.unismusic.com}
   digest:
     enabled: ${UNIS_DIGEST_ENABLED:true}
     cron: "0 0 13 * * SUN"
-    daily-limit: 90
+    daily-limit: ${UNIS_DIGEST_DAILY_LIMIT:90}
+    throttle-ms: 150
+  mail:
+    postal-address: ${UNIS_MAIL_POSTAL_ADDRESS:}
 
 logging:
   level:

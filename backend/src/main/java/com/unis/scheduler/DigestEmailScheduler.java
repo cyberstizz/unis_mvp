@@ -1,58 +1,77 @@
 package com.unis.scheduler;
 
-import com.unis.entity.User;
-import com.unis.repository.UserRepository;
+import com.unis.entity.CronExecution;
+import com.unis.repository.CronExecutionRepository;
 import com.unis.service.EmailService;
+import com.unis.service.digest.WeeklyDigest;
+import com.unis.service.digest.WeeklyDigestRenderer;
+import com.unis.service.digest.WeeklyDigestService;
+import com.unis.service.digest.WeeklyDigestService.Recipient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
- * DigestEmailScheduler -- sends the daily digest to opted-in users.
+ * DigestEmailScheduler -- sends the Sunday email ("Sunday on Unis").
  *
- * Targeting is DB-driven (not the provider's scheduler): we query users where
- * email_notifications = true AND deleted_at IS NULL, render each email from
- * our own data, and hand it to EmailService.sendTransactional. The provider
- * (currently Resend) is just a pipe -- moving to SES changes only EmailService.
+ * Who gets it: everyone with email notifications on, a confirmed email, and
+ * an active account. Each reader's email is built from the live standings
+ * (WeeklyDigestService) and drawn by WeeklyDigestRenderer; Resend is just
+ * the pipe (EmailService.send).
  *
- * Free-tier guard: Resend's free plan allows ~100 emails/day, 3,000/month,
- * SHARED with password-reset sends. daily-limit defaults to 90 to leave
- * headroom for resets. Once opt-ins approach that, upgrade Resend's paid tier
- * or move to Amazon SES and raise the cap.
+ * When: Sunday 13:00 UTC by default -- 9 AM in New York in summer, 8 AM in
+ * winter -- so the email lands on the last day of the week, while votes can
+ * still change who wins.
  *
- * Cron defaults to 13:00 UTC (~8-9am ET). Requires @EnableScheduling on the
- * application class.
+ * Safety:
+ *   - unis.digest.enabled=false turns it off (UNIS_DIGEST_ENABLED in Railway).
+ *   - Never sends twice in a day: if a run already started in the last 20
+ *     hours (a redeploy at 13:00, a second instance), this run skips.
+ *   - daily-limit caps sends per run. Resend's free plan allows 100 emails a
+ *     day, shared with password-reset and verification emails, so the default
+ *     of 90 leaves room for those. On a paid Resend plan, raise it
+ *     (UNIS_DIGEST_DAILY_LIMIT).
+ *   - throttle-ms between sends keeps well under Resend's rate limit.
+ *
+ * Each run is logged to cron_executions as WEEKLY_DIGEST (awards_created holds
+ * the number of emails sent), so it shows in the admin cron history.
  */
 @Component
 public class DigestEmailScheduler {
 
-    private final UserRepository userRepository;
+    static final String JOB_NAME = "WEEKLY_DIGEST";
+    static final String TAG = "weekly_digest";
+
+    private final WeeklyDigestService digestService;
     private final EmailService emailService;
+    private final CronExecutionRepository cronExecutionRepository;
 
     private final boolean enabled;
     private final int dailyLimit;
-    private final String appBaseUrl;
-    private final String apiBaseUrl;
+    private final long throttleMs;
 
     public DigestEmailScheduler(
-            UserRepository userRepository,
+            WeeklyDigestService digestService,
             EmailService emailService,
+            CronExecutionRepository cronExecutionRepository,
             @Value("${unis.digest.enabled:true}") boolean enabled,
             @Value("${unis.digest.daily-limit:90}") int dailyLimit,
-            @Value("${unis.app-base-url:http://localhost:5173}") String appBaseUrl,
-            @Value("${unis.api-base-url:http://localhost:8080}") String apiBaseUrl) {
-        this.userRepository = userRepository;
+            @Value("${unis.digest.throttle-ms:150}") long throttleMs) {
+        this.digestService = digestService;
         this.emailService = emailService;
+        this.cronExecutionRepository = cronExecutionRepository;
         this.enabled = enabled;
         this.dailyLimit = dailyLimit;
-        this.appBaseUrl = appBaseUrl;
-        this.apiBaseUrl = apiBaseUrl;
+        this.throttleMs = throttleMs;
     }
 
     @Scheduled(cron = "${unis.digest.cron:0 0 13 * * SUN}", zone = "UTC")
-    public void sendDailyDigest() {
+    public void sendWeeklyDigest() {
         long startNs = System.nanoTime();
 
         if (!enabled) {
@@ -63,71 +82,70 @@ public class DigestEmailScheduler {
             System.out.println("[Digest] action=run status=skip reason=email_not_configured");
             return;
         }
-
-        List<User> targets;
-        try {
-            targets = userRepository.findByEmailNotificationsTrueAndDeletedAtIsNull();
-        } catch (Exception e) {
-            System.err.println("[Digest] action=run status=error phase=query err=" + e.getMessage());
+        Optional<CronExecution> last = cronExecutionRepository.findTopByJobNameOrderByStartedAtDesc(JOB_NAME);
+        if (last.isPresent() && !"FAILED".equals(last.get().getStatus())
+                && last.get().getStartedAt().isAfter(LocalDateTime.now().minusHours(20))) {
+            System.out.println("[Digest] action=run status=skip reason=already_ran startedAt=" + last.get().getStartedAt());
             return;
         }
 
+        CronExecution exec = cronExecutionRepository.save(new CronExecution(JOB_NAME));
+
+        List<Recipient> targets;
+        try {
+            targets = digestService.recipients();
+        } catch (Exception e) {
+            System.err.println("[Digest] action=run status=error phase=query err=" + e.getMessage());
+            exec.markFailed("recipient query: " + e.getMessage());
+            cronExecutionRepository.save(exec);
+            return;
+        }
+
+        WeeklyDigestService.Run run = digestService.newRun();
         int total = targets.size();
         int attempted = 0, sent = 0, failed = 0, skipped = 0;
 
-        for (User u : targets) {
+        for (Recipient r : targets) {
             if (attempted >= dailyLimit) {
                 skipped = total - attempted;
                 System.out.println("[Digest] action=run note=daily_limit_reached limit=" + dailyLimit
                     + " remaining=" + skipped);
                 break;
             }
-            if (u.getEmail() == null || u.getEmail().isBlank()) {
-                failed++;
-                continue;
-            }
             attempted++;
-            String html = buildDigestHtml(u);
-            boolean ok = emailService.sendTransactional(
-                u.getEmail(),
-                "Your UNIS daily digest",
-                html
-            );
-            if (ok) sent++; else failed++;
+            try {
+                WeeklyDigest digest = digestService.build(r, run);
+                WeeklyDigestRenderer.Rendered email = WeeklyDigestRenderer.render(digest);
+                boolean ok = emailService.send(r.email(), email.subject(), email.html(), email.text(),
+                    Map.of("List-Unsubscribe", "<" + digestService.unsubscribeUrl(r) + ">"), TAG);
+                if (ok) sent++; else failed++;
+            } catch (Exception e) {
+                failed++;
+                System.err.println("[Digest] action=build status=error user=" + r.userId() + " err=" + e.getMessage());
+            }
+            if (throttleMs > 0) {
+                try {
+                    Thread.sleep(throttleMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
         }
 
         long ms = (System.nanoTime() - startNs) / 1_000_000;
         System.out.println("[Digest] action=run status=ok totalTargets=" + total
             + " attempted=" + attempted + " sent=" + sent + " failed=" + failed
             + " skipped=" + skipped + " durationMs=" + ms);
-    }
 
-    // -------------------------------------------------------------------------
-    // Minimal working digest. Enrich with real data (jurisdiction standings,
-    // new winners, supported-artist movement) once those queries are defined --
-    // that's a product decision, so this ships as a functional skeleton.
-    // -------------------------------------------------------------------------
-    private String buildDigestHtml(User u) {
-        String name = esc(u.getUsername() == null ? "there" : u.getUsername());
-        int score = u.getScore() == null ? 0 : u.getScore();
-        String unsubscribeUrl = apiBaseUrl + "/api/v1/users/unsubscribe?token=" + u.getUnsubscribeToken();
-
-        return "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;color:#111114;\">"
-            + "<h1 style=\"color:#163387;font-size:22px;margin:0 0 4px;\">UNIS</h1>"
-            + "<p style=\"font-size:15px;line-height:1.5;\">Hey " + name + ",</p>"
-            + "<p style=\"font-size:15px;line-height:1.5;\">Here's where you stand today. Your score is "
-            + "<strong>" + score + "</strong>. Cast a vote to move the Harlem leaderboard.</p>"
-            + "<p style=\"margin:24px 0;\"><a href=\"" + appBaseUrl + "\" "
-            + "style=\"background:#163387;color:#fff;text-decoration:none;padding:12px 20px;"
-            + "border-radius:8px;font-size:14px;display:inline-block;\">Open UNIS</a></p>"
-            + "<hr style=\"border:none;border-top:1px solid #e4e4e8;margin:24px 0;\"/>"
-            + "<p style=\"font-size:12px;color:#888;line-height:1.5;\">You're getting this because email "
-            + "notifications are on. <a href=\"" + unsubscribeUrl + "\" style=\"color:#888;\">Unsubscribe</a>."
-            + "</p></div>";
-    }
-
-    private String esc(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+        if (failed > 0 && sent == 0 && attempted > 0) {
+            exec.markFailed("no emails sent; " + failed + " failed");
+        } else {
+            exec.markSuccess(sent);
+            if (failed > 0 || skipped > 0) {
+                exec.setErrorMessage(failed + " failed, " + skipped + " over the daily limit");
+            }
+        }
+        cronExecutionRepository.save(exec);
     }
 }
