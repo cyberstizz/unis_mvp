@@ -11,5 +11,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class LoginRequest {
     private String email;
+    @lombok.ToString.Exclude   // never print a password in logs
     private String password;
 }

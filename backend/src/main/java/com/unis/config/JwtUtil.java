@@ -61,10 +61,67 @@ public class JwtUtil {
 
     // Generate token with user details
     public String generateToken(String email, String userId, String role) {
+        return generateToken(email, userId, role, false);
+    }
+
+    /**
+     * mfaVerified marks a session that passed two-factor sign-in. Staff
+     * permissions only apply to tokens carrying it (JwtRequestFilter); a staff
+     * account's token without it works like a regular user's.
+     */
+    public String generateToken(String email, String userId, String role, boolean mfaVerified) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("userId", userId);
         claims.put("role", role);
+        if (mfaVerified) claims.put("mfa", true);
         return createToken(claims, email);
+    }
+
+    /** True when the token passed two-factor sign-in. */
+    public boolean isMfaVerified(String token) {
+        return Boolean.TRUE.equals(extractClaim(token, c -> c.get("mfa", Boolean.class)));
+    }
+
+    // ── Two-factor "code needed" pass ────────────────────────────────────────
+    // Issued after a staff account's password is right, exchanged for a real
+    // session once the 6-digit code is right. Signed with a DIFFERENT key
+    // (derived from the main one), so it fails signature checks everywhere a
+    // real session is accepted — it can't be used for anything else.
+
+    private static final long MFA_PENDING_MS = 10 * 60 * 1000L;
+
+    private SecretKey getMfaPendingKey() {
+        try {
+            byte[] derived = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(("unis-mfa-pending:" + secret).getBytes(StandardCharsets.UTF_8));
+            return Keys.hmacShaKeyFor(derived);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    public String generateMfaPendingToken(String email, String userId) {
+        return Jwts.builder()
+                .claim("userId", userId)
+                .claim("purpose", "mfa")
+                .subject(email)
+                .issuedAt(new Date(System.currentTimeMillis()))
+                .expiration(new Date(System.currentTimeMillis() + MFA_PENDING_MS))
+                .signWith(getMfaPendingKey())
+                .compact();
+    }
+
+    /** The account a "code needed" pass belongs to: {email, userId}. Throws when invalid or expired. */
+    public String[] parseMfaPendingToken(String token) {
+        Claims claims = Jwts.parser()
+                .verifyWith(getMfaPendingKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+        if (!"mfa".equals(claims.get("purpose", String.class))) {
+            throw new io.jsonwebtoken.JwtException("Not a two-factor pass");
+        }
+        return new String[] { claims.getSubject(), claims.get("userId", String.class) };
     }
 
     // Create token with claims and subject

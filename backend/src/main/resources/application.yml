@@ -56,7 +56,8 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/unis
     username: unis_user
-    password: "$ucce$$7"
+    # Local development only. Set LOCAL_DB_PASSWORD on your machine; never commit a real one.
+    password: ${LOCAL_DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -82,7 +83,10 @@ spring:
       max-request-size: 50MB
 
   jwt:
-    secret: unis-super-secret-key-change-this-in-production-should-be-at-least-256-bits-long
+    # No default on purpose: a secret written here is public (it was, in the
+    # repo history), and anyone holding it can sign their own login tokens,
+    # admin ones included. The app refuses to start without JWT_SECRET.
+    secret: ${JWT_SECRET}
     expiration: 86400000
 
 logging:

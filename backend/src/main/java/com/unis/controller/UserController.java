@@ -124,6 +124,10 @@ public class UserController {
     // POST /api/v1/users/register
     @PostMapping("/register")
     public ResponseEntity<RegisterResponse> register(@RequestBody UserDto dto) {   // ★ return type changed
+        if (dto.getPassword() == null || dto.getPassword().length() < 8) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                HttpStatus.BAD_REQUEST, "Password must be at least 8 characters.");
+        }
         User user = User.builder()
             .username(dto.getUsername())
             .email(dto.getEmail())
@@ -375,12 +379,15 @@ public class UserController {
         return ResponseEntity.ok(artists);
     }
 
-    // TEMP endpoint for CreateAccountWizard photo upload (anonymous allowed)
+    // CreateAccountWizard photo upload (anonymous allowed — the account doesn't
+    // exist yet). Because anyone can call it, it only takes images of 10 MB or
+    // less, and RateLimitFilter caps it per IP.
     @PatchMapping("/profile/photo")
     public ResponseEntity<Map<String, String>> uploadSignupPhoto(
             HttpServletRequest request,
             @RequestParam("photo") MultipartFile file) throws IOException {
 
+        com.unis.service.UploadValidator.require(file, com.unis.service.UploadValidator.Kind.IMAGE, 10L * 1024 * 1024);
         String photoUrl = fileStorageService.storeFile(file);
 
         Map<String, String> response = new HashMap<>();

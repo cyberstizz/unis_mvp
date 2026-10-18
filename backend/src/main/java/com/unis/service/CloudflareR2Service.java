@@ -51,12 +51,16 @@ public class CloudflareR2Service implements FileStorageService  {
     }
 
     public String uploadFile(MultipartFile file, String folder) throws IOException {
-        String fileName = folder + "/" + UUID.randomUUID() + "-" + file.getOriginalFilename();
-        
+        // The file's real type comes from its contents, never from the uploader:
+        // a random name, the matching extension and content type. Anything that
+        // isn't an image, audio or video file is refused (see UploadValidator).
+        UploadValidator.Detected detected = UploadValidator.detect(file);
+        String fileName = folder + "/" + UUID.randomUUID() + "." + detected.extension();
+
         PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                 .bucket(bucketName)
                 .key(fileName)
-                .contentType(file.getContentType())
+                .contentType(detected.contentType())
                 .build();
 
         s3Client.putObject(putObjectRequest, RequestBody.fromBytes(file.getBytes()));
@@ -139,7 +143,6 @@ public class CloudflareR2Service implements FileStorageService  {
 
     @Override
     public String storeFile(MultipartFile file) {
-            System.out.println(" USING CLOUDFLARE R2 SERVICE");
         try {
             return uploadFile(file, "uploads"); 
         } catch (IOException e) {

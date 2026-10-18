@@ -33,6 +33,7 @@ public class User {
     // who had a user id (they're in every profile URL). Server code reads the
     // field through the getter as before.
     @com.fasterxml.jackson.annotation.JsonIgnore
+    @lombok.ToString.Exclude
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 

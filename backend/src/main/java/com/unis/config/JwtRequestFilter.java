@@ -1,13 +1,15 @@
 package com.unis.config;
 
 import io.jsonwebtoken.ExpiredJwtException;
-import io.jsonwebtoken.MalformedJwtException;
-import io.jsonwebtoken.security.SignatureException;
+import io.jsonwebtoken.JwtException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -20,6 +22,8 @@ import java.io.IOException;
 
 @Component
 public class JwtRequestFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtRequestFilter.class);
 
     @Autowired
     private UserDetailsService userDetailsService;
@@ -40,29 +44,40 @@ public class JwtRequestFilter extends OncePerRequestFilter {
             jwt = authorizationHeader.substring(7);
             try {
                 username = jwtUtil.extractUsername(jwt);
-            } catch (IllegalArgumentException e) {
-                System.out.println("Unable to get JWT Token");
             } catch (ExpiredJwtException e) {
-                System.out.println("JWT Token has expired");
-            } catch (MalformedJwtException e) {
-                System.out.println("Malformed JWT Token");
-            } catch (SignatureException e) {
-                System.out.println("Invalid JWT signature");
+                // Normal: the app refreshes the session. Not worth a log line.
+            } catch (JwtException | IllegalArgumentException e) {
+                // Forged, truncated or wrong-key token: treat the request as signed out.
+                log.debug("[Auth] rejected token: {}", e.getClass().getSimpleName());
             }
         }
 
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
 
-            UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
+            UserDetails userDetails;
+            try {
+                userDetails = this.userDetailsService.loadUserByUsername(username);
+            } catch (UsernameNotFoundException e) {
+                // Deleted or suspended since the token was issued: signed out.
+                // (Before, this escaped as a 500 whose message included the email.)
+                chain.doFilter(request, response);
+                return;
+            }
 
             if (jwtUtil.validateToken(jwt, userDetails)) {
 
                 // C6 FIX: Extract userId from JWT claims and store as credentials
                 // so downstream controllers can access it via SecurityUtils.getAuthenticatedUserId()
                 String userId = jwtUtil.extractClaim(jwt, claims -> claims.get("userId", String.class));
+                // Staff permissions only for sessions that passed two-factor
+                // sign-in. A staff account's token without it (issued before
+                // 2FA, or before the role was granted) acts as a regular user.
+                var authorities = jwtUtil.isMfaVerified(jwt)
+                        ? userDetails.getAuthorities()
+                        : java.util.List.<org.springframework.security.core.GrantedAuthority>of();
                 UsernamePasswordAuthenticationToken usernamePasswordAuthenticationToken =
                         new UsernamePasswordAuthenticationToken(
-                                userDetails, userId, userDetails.getAuthorities());
+                                userDetails, userId, authorities);
                                 usernamePasswordAuthenticationToken
                         .setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(usernamePasswordAuthenticationToken);

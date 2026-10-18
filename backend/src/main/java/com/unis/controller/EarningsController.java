@@ -106,7 +106,10 @@ public class EarningsController {
     public ResponseEntity<?> getEarnings(
             @PathVariable UUID artistId,
             @RequestParam(defaultValue = "30") int days) {
-        List<Map<String, Object>> history = earningsService.getDailyHistory(artistId, days);
+        if (!isSelfOrAdmin(artistId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "You can only see your own earnings"));
+        }
+        List<Map<String, Object>> history = earningsService.getDailyHistory(artistId, Math.min(Math.max(days, 1), 366));
         return ResponseEntity.ok(history);
     }
 
@@ -118,7 +121,28 @@ public class EarningsController {
     public ResponseEntity<?> getEarningsBreakdown(
             @PathVariable UUID artistId,
             @RequestParam(defaultValue = "30") int days) {
+        if (!isSelfOrAdmin(artistId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "You can only see your own earnings"));
+        }
         Map<String, Object> summary = earningsService.getEarningsSummary(artistId);
         return ResponseEntity.ok(summary);
+    }
+
+    /**
+     * Earnings are private: the artist themselves or an admin. These two
+     * endpoints used to answer for any artist ID to anyone signed in.
+     */
+    private static boolean isSelfOrAdmin(UUID artistId) {
+        UUID me;
+        try {
+            me = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            return false;
+        }
+        if (me.equals(artistId)) return true;
+        org.springframework.security.core.Authentication auth =
+            org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream()
+            .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
     }
 }

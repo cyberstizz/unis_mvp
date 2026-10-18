@@ -39,8 +39,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws")
-                // Lock these down to your real origins in prod.
-                .setAllowedOriginPatterns(frontendUrl, "http://localhost:*", "https://*.netlify.app")
+                // Unis's own sites only (see SecurityConfig CORS for why not *.netlify.app).
+                .setAllowedOriginPatterns(frontendUrl,
+                        "https://www.unismusic.com", "https://unismusic.com",
+                        "https://unisprototypetwo.netlify.app", "https://*--unisprototypetwo.netlify.app",
+                        "http://localhost:*")
                 .withSockJS();
     }
 

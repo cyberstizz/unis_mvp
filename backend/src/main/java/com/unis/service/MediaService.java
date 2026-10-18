@@ -401,9 +401,17 @@ public class MediaService {
     public Video addVideo(String videoJson, MultipartFile file, MultipartFile artwork) {
         try {
             VideoUploadRequest req = objectMapper.readValue(videoJson, VideoUploadRequest.class);
-            
-            User artist = userRepository.findById(req.getArtistId())
-                    .orElseThrow(() -> new IllegalArgumentException("Artist not found: " + req.getArtistId()));
+
+            // The uploader is whoever is signed in. The artistId in the request
+            // used to be trusted, so any account could post a video under any
+            // artist's name. It's now ignored, and only artists can upload.
+            UUID uploaderId = SecurityUtils.getAuthenticatedUserId();
+            User artist = userRepository.findById(uploaderId)
+                    .orElseThrow(() -> new IllegalArgumentException("Account not found"));
+            if (artist.getRole() != User.Role.artist || artist.getDeletedAt() != null) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.FORBIDDEN, "Only artists can upload videos.");
+            }
 
             Genre genre = null;
             if (req.getGenreId() != null) {

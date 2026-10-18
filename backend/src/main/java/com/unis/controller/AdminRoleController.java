@@ -19,6 +19,9 @@ public class AdminRoleController {
     @Autowired
     private AdminUserService adminUserService;
 
+    @Autowired
+    private com.unis.service.mfa.AdminMfaService adminMfaService;
+
     /**
      * GET /api/v1/admin/roles
      * List all admin role holders
@@ -74,5 +77,22 @@ public class AdminRoleController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("error", e.getMessage()));
         }
+    }
+
+    /**
+     * DELETE /api/v1/admin/roles/users/{userId}/mfa
+     * Removes a staff member's two-factor setup (lost phone and no recovery
+     * codes). They set it up again at their next sign-in. Super admins only
+     * (every /admin/roles route is). You can't reset your own this way.
+     */
+    @DeleteMapping("/users/{userId}/mfa")
+    public ResponseEntity<?> resetMfa(@PathVariable UUID userId) {
+        UUID me = SecurityUtils.getAuthenticatedUserId();
+        if (me.equals(userId)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", "Ask another super admin, or use the reset SQL in V2026_10f__admin_mfa.sql."));
+        }
+        adminMfaService.reset(userId);
+        return ResponseEntity.ok(Map.of("message", "Two-factor sign-in reset. They'll set it up again at their next sign-in."));
     }
 }

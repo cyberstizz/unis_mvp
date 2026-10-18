@@ -49,8 +49,39 @@ public class AuthController {
     @Autowired 
     private EmailVerificationService emailVerificationService;  
 
+    @Autowired
+    private com.unis.config.RateLimiter rateLimiter;
+
+    @Autowired
+    private com.unis.repository.AdminRoleRepository adminRoleRepository;
+
+    @Autowired
+    private com.unis.service.mfa.AdminMfaService adminMfaService;
+
+    /**
+     * Pre-launch gate on the server. While true, only accounts with an admin
+     * role can sign in, so the "Coming soon" page can't be bypassed by calling
+     * the API directly. Railway variable UNIS_PRELAUNCH: "true" until launch
+     * day, then "false".
+     */
+    @org.springframework.beans.factory.annotation.Value("${unis.prelaunch:false}")
+    private boolean prelaunch;
+
+    /** Per-email limit, on top of RateLimitFilter's per-IP limit. False = refuse. */
+    private boolean allowForEmail(String bucket, String email, int limit, java.time.Duration window) {
+        if (email == null) return true;
+        String key = bucket + "|email:" + email.trim().toLowerCase();
+        return rateLimiter.hit(key, limit, window).allowed();
+    }
+
    @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest loginRequest) {
+        // Password guessing against one account from many IPs: 10 tries per
+        // 15 minutes per email, whatever the IP.
+        if (!allowForEmail("login", loginRequest.getEmail(), 10, java.time.Duration.ofMinutes(15))) {
+            String msg = "Too many sign-in attempts for this account. Please wait 15 minutes and try again.";
+            return ResponseEntity.status(429).body(Map.of("error", msg, "message", msg));
+        }
         try {
             Authentication authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(loginRequest.getEmail(), loginRequest.getPassword())
@@ -66,6 +97,33 @@ public class AuthController {
                 body.put("message", "Please verify your email to activate your account. Check your inbox for the link.");
                 return ResponseEntity.status(403).body(body);
             }
+            if (prelaunch && adminRoleRepository.findByUserId(user.getUserId()).isEmpty()) {
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("prelaunch", true);
+                body.put("message", "Unis isn't open yet. You'll get an email the day it launches.");
+                return ResponseEntity.status(403).body(body);
+            }
+            // Staff accounts (moderator, admin, super admin) need their
+            // authenticator code too. The password only earns a short-lived
+            // "code needed" pass; /mfa/verify or /mfa/setup/confirm turn it
+            // into a real session.
+            if (adminMfaService.isStaff(user.getUserId())) {
+                if (!adminMfaService.isConfigured()) {
+                    String msg = "Admin sign-in is unavailable: UNIS_MFA_KEY isn't set on the server.";
+                    return ResponseEntity.status(503).body(Map.of("error", msg, "message", msg));
+                }
+                boolean setUp = adminMfaService.status(user.getUserId())
+                        == com.unis.service.mfa.AdminMfaService.Status.ENABLED;
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("mfaRequired", true);
+                body.put("setupRequired", !setUp);
+                body.put("mfaToken", jwtUtil.generateMfaPendingToken(user.getEmail(), user.getUserId().toString()));
+                body.put("message", setUp
+                        ? "Enter the 6-digit code from your authenticator app."
+                        : "Set up two-factor sign-in to continue.");
+                return ResponseEntity.ok(body);
+            }
+
             String token = jwtUtil.generateToken(user.getEmail(), user.getUserId().toString(), user.getRole().toString());
 
             return ResponseEntity.ok(new AuthResponse(token));
@@ -103,8 +161,12 @@ public class AuthController {
             }
 
             return ResponseEntity.status(401).body("Invalid email or password");
+        } catch (org.springframework.security.core.AuthenticationException e) {
+            // Suspended or deleted account, or any other sign-in refusal.
+            return ResponseEntity.status(401).body("Invalid email or password");
         } catch (Exception e) {
-            return ResponseEntity.status(500).body("Login failed: " + e.getMessage());
+            org.slf4j.LoggerFactory.getLogger(AuthController.class).error("[Auth] login error", e);
+            return ResponseEntity.status(500).body("Login failed. Please try again.");
         }
     }
 
@@ -151,7 +213,11 @@ public class AuthController {
             return ResponseEntity.badRequest().body(Map.of("error", "Email is required"));
         }
 
-        passwordResetService.requestPasswordReset(email);
+        // Max 3 reset emails per address per hour. Still answer 200 either way,
+        // so this can't be used to find out which emails have accounts.
+        if (allowForEmail("forgot", email, 3, java.time.Duration.ofHours(1))) {
+            passwordResetService.requestPasswordReset(email);
+        }
 
         // Always return success — prevents email enumeration
         return ResponseEntity.ok(Map.of(
@@ -212,7 +278,95 @@ public class AuthController {
         if (email == null || email.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Email is required"));
         }
-        emailVerificationService.resend(email);
+        if (allowForEmail("resend-verify", email, 3, java.time.Duration.ofHours(1))) {
+            emailVerificationService.resend(email);
+        }
         return ResponseEntity.ok(Map.of("message", "If an unverified account exists for this email, a new link has been sent."));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // TWO-FACTOR SIGN-IN (staff accounts)
+    // Each call takes the "code needed" pass from /login as mfaToken.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** POST /api/auth/mfa/setup  {mfaToken} → {manualKey, otpauthUri} for the QR code. */
+    @PostMapping("/mfa/setup")
+    public ResponseEntity<?> mfaSetup(@RequestBody Map<String, String> request) {
+        String[] who = mfaPass(request.get("mfaToken"));
+        if (who == null) return mfaPassExpired();
+        try {
+            var setup = adminMfaService.beginSetup(java.util.UUID.fromString(who[1]), who[0]);
+            return ResponseEntity.ok(Map.of("manualKey", setup.manualKey(), "otpauthUri", setup.otpauthUri()));
+        } catch (com.unis.service.mfa.AdminMfaService.MfaException e) {
+            return mfaError(400, e.getMessage());
+        }
+    }
+
+    /**
+     * POST /api/auth/mfa/setup/confirm  {mfaToken, code}
+     * → {token, recoveryCodes}: 2FA is on, here's the session and the ten
+     * one-time recovery codes (shown only this once).
+     */
+    @PostMapping("/mfa/setup/confirm")
+    public ResponseEntity<?> mfaSetupConfirm(@RequestBody Map<String, String> request) {
+        String[] who = mfaPass(request.get("mfaToken"));
+        if (who == null) return mfaPassExpired();
+        java.util.UUID userId = java.util.UUID.fromString(who[1]);
+        try {
+            java.util.List<String> codes = adminMfaService.confirmSetup(userId, request.get("code"));
+            return ResponseEntity.ok(Map.of("token", fullSession(userId), "recoveryCodes", codes));
+        } catch (com.unis.service.mfa.AdminMfaService.MfaException e) {
+            return mfaError(400, e.getMessage());
+        }
+    }
+
+    /** POST /api/auth/mfa/verify  {mfaToken, code} → {token, recoveryCodesLeft}. code = 6 digits or a recovery code. */
+    @PostMapping("/mfa/verify")
+    public ResponseEntity<?> mfaVerify(@RequestBody Map<String, String> request) {
+        String[] who = mfaPass(request.get("mfaToken"));
+        if (who == null) return mfaPassExpired();
+        java.util.UUID userId = java.util.UUID.fromString(who[1]);
+        try {
+            if (!adminMfaService.verify(userId, request.get("code"))) {
+                return mfaError(401, "That code didn't work. Use the newest code in your app, or a recovery code.");
+            }
+            return ResponseEntity.ok(Map.of(
+                "token", fullSession(userId),
+                "recoveryCodesLeft", adminMfaService.recoveryCodesLeft(userId)));
+        } catch (com.unis.service.mfa.AdminMfaService.MfaException e) {
+            return mfaError(429, e.getMessage());
+        }
+    }
+
+    /** The {email, userId} inside a valid "code needed" pass, or null. */
+    private String[] mfaPass(String mfaToken) {
+        if (mfaToken == null || mfaToken.isBlank()) return null;
+        try {
+            return jwtUtil.parseMfaPendingToken(mfaToken);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** A real session for a staff account that just passed 2FA. Re-checks the account is still active. */
+    private String fullSession(java.util.UUID userId) {
+        User user;
+        try {
+            user = userService.getProfile(userId);
+        } catch (RuntimeException e) {
+            user = null;
+        }
+        if (user == null || user.getDeletedAt() != null) {
+            throw new com.unis.service.mfa.AdminMfaService.MfaException("This account can't sign in.");
+        }
+        return jwtUtil.generateToken(user.getEmail(), user.getUserId().toString(), user.getRole().toString(), true);
+    }
+
+    private ResponseEntity<?> mfaPassExpired() {
+        return mfaError(401, "Your sign-in timed out. Enter your email and password again.");
+    }
+
+    private ResponseEntity<?> mfaError(int status, String msg) {
+        return ResponseEntity.status(status).body(Map.of("error", msg, "message", msg));
     }
 }

@@ -27,10 +27,8 @@ public class LocalFileStorageService implements FileStorageService {
                 Files.createDirectories(uploadPath);
             }
 
-            String originalFilename = file.getOriginalFilename();
-            String extension = (originalFilename != null && originalFilename.contains("."))
-                    ? originalFilename.substring(originalFilename.lastIndexOf("."))
-                    : "";
+            // Same rule as R2: the type comes from the file's contents (UploadValidator).
+            String extension = "." + UploadValidator.detect(file).extension();
 
             String fileName = UUID.randomUUID() + "-" + System.currentTimeMillis() + extension;
             Path targetLocation = uploadPath.resolve(fileName);

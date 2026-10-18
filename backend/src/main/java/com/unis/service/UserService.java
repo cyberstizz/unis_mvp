@@ -541,6 +541,9 @@ public class UserService {
         if (!passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
             throw new RuntimeException("Old password incorrect");
         }
+        if (newPassword == null || newPassword.length() < 8) {
+            throw new RuntimeException("New password must be at least 8 characters");
+        }
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         return userRepository.save(user);
     }

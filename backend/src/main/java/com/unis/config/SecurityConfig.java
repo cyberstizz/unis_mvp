@@ -25,6 +25,9 @@ public class SecurityConfig {
     @Autowired
     private JwtRequestFilter jwtRequestFilter;
 
+    @Autowired
+    private RateLimiter rateLimiter;
+
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
@@ -38,15 +41,20 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.addAllowedOriginPattern("http://localhost:5173");
-        configuration.addAllowedOriginPattern("https://unisprototypetwo.netlify.app");
+        // Only Unis's own sites. "https://*.netlify.app" used to be here, which
+        // let ANY site hosted on Netlify (anyone can make one for free) call
+        // this API from a visitor's browser. Netlify deploy previews of the
+        // Unis site itself are named <something>--unisprototypetwo.netlify.app,
+        // so they're allowed by the second pattern.
         configuration.addAllowedOriginPattern("https://www.unismusic.com");
         configuration.addAllowedOriginPattern("https://unismusic.com");
+        configuration.addAllowedOriginPattern("https://unisprototypetwo.netlify.app");
+        configuration.addAllowedOriginPattern("https://*--unisprototypetwo.netlify.app");
+        // Local development.
+        configuration.addAllowedOriginPattern("http://localhost:5173");
         configuration.addAllowedOriginPattern("http://localhost:3000");
         configuration.addAllowedOriginPattern("http://127.0.0.1:5173");
         configuration.addAllowedOriginPattern("http://127.0.0.1:3000");
-        configuration.addAllowedOriginPattern("http://192.168.*.*");
-        configuration.addAllowedOriginPattern("https://*.netlify.app");
         configuration.setAllowCredentials(true);
         configuration.addAllowedHeader("*");
         configuration.addAllowedMethod("*");
@@ -250,7 +258,9 @@ public class SecurityConfig {
             .httpBasic(basic -> basic.disable())
             .formLogin(form -> form.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class)
+            // After the JWT filter, so per-account limits know who is signed in.
+            .addFilterAfter(new RateLimitFilter(rateLimiter), JwtRequestFilter.class);
 
         return http.build();
     }
