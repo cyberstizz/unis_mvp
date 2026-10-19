@@ -131,6 +131,8 @@ public class SecurityConfig {
                 // Public endpoints (no auth required)
                 .requestMatchers(HttpMethod.POST, "/api/v1/dmca/submit").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/activity/track").permitAll()
+                // Browsers report Content-Security-Policy violations here (CspReportController)
+                .requestMatchers(HttpMethod.POST, "/api/csp-report").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/forgot-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/forgot-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/reset-password").permitAll()
@@ -183,6 +185,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/jurisdictions/by-location").permitAll()
                 .requestMatchers("/api/v1/users/validate-referral/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/unsubscribe").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/users/unsubscribe").permitAll()
                 .requestMatchers("/api/v1/users/check-email").permitAll()
                 .requestMatchers("/api/v1/users/check-username").permitAll()
                 .requestMatchers("/api/v1/users/*/default-song").permitAll()
@@ -251,6 +254,8 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/error/**").permitAll()
                 .requestMatchers("/ws/**").permitAll()
+                // AWS Security Agent domain check (404 unless UNIS_SECURITY_AGENT_TOKEN is set)
+                .requestMatchers(HttpMethod.GET, "/.well-known/aws/securityagent-domain-verification.json").permitAll()
                 .anyRequest().authenticated()
             )
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -258,6 +263,13 @@ public class SecurityConfig {
             .httpBasic(basic -> basic.disable())
             .formLogin(form -> form.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            // Not signed in (no token, expired, or signed out) → 401. Spring's
+            // default here is 403, which the web and mobile apps read as
+            // "signed in but not allowed", so they kept a dead token. 403 now
+            // only means a signed-in user lacks permission.
+            .exceptionHandling(ex -> ex.authenticationEntryPoint(
+                    new org.springframework.security.web.authentication.HttpStatusEntryPoint(
+                            org.springframework.http.HttpStatus.UNAUTHORIZED)))
             .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class)
             // After the JWT filter, so per-account limits know who is signed in.
             .addFilterAfter(new RateLimitFilter(rateLimiter), JwtRequestFilter.class);

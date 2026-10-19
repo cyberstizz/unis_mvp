@@ -22,6 +22,9 @@ public class AdminRoleController {
     @Autowired
     private com.unis.service.mfa.AdminMfaService adminMfaService;
 
+    @Autowired
+    private com.unis.service.SessionService sessionService;
+
     /**
      * GET /api/v1/admin/roles
      * List all admin role holders
@@ -93,6 +96,9 @@ public class AdminRoleController {
                     .body(Map.of("error", "Ask another super admin, or use the reset SQL in V2026_10f__admin_mfa.sql."));
         }
         adminMfaService.reset(userId);
-        return ResponseEntity.ok(Map.of("message", "Two-factor sign-in reset. They'll set it up again at their next sign-in."));
+        // A reset usually means a lost or stolen phone: end their current
+        // sessions too, so they must sign in (and set up 2FA) again.
+        sessionService.endAllSessions(userId);
+        return ResponseEntity.ok(Map.of("message", "Two-factor sign-in reset and their sessions ended. They'll set it up again at their next sign-in."));
     }
 }

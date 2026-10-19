@@ -1,5 +1,7 @@
 package com.unis.config;
 
+import com.unis.service.SessionService;
+import io.jsonwebtoken.Claims;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -14,7 +16,8 @@ import java.util.List;
 /**
  * Authenticates the STOMP CONNECT frame the same way JwtRequestFilter
  * authenticates REST requests: read "Authorization: Bearer <jwt>", validate via
- * JwtUtil, and bind the userId claim as the session Principal.
+ * JwtUtil, refuse ended sessions (SessionService), and bind the userId claim
+ * as the session Principal.
  *
  * Because the Principal's name is the userId, SimpMessagingTemplate
  * .convertAndSendToUser(userId, "/queue/messages", ...) routes only to that
@@ -28,9 +31,11 @@ import java.util.List;
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
     private final JwtUtil jwtUtil;
+    private final SessionService sessionService;
 
-    public StompAuthChannelInterceptor(JwtUtil jwtUtil) {
+    public StompAuthChannelInterceptor(JwtUtil jwtUtil, SessionService sessionService) {
         this.jwtUtil = jwtUtil;
+        this.sessionService = sessionService;
     }
 
     @Override
@@ -50,9 +55,15 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
                 throw new IllegalArgumentException("Invalid or expired token.");
             }
 
-            String userId = jwtUtil.extractClaim(token, claims -> claims.get("userId", String.class));
+            Claims claims = jwtUtil.parseClaims(token);
+            String userId = claims.get("userId", String.class);
             if (userId == null || userId.isBlank()) {
                 throw new IllegalArgumentException("Token missing userId claim.");
+            }
+            // Same rule as JwtRequestFilter: a signed-out token, or one from
+            // before a password change, can't open a live connection either.
+            if (sessionService.isEnded(userId, claims.get("sv", Integer.class), claims.getId())) {
+                throw new IllegalArgumentException("Session has ended.");
             }
 
             // Principal name == userId → drives convertAndSendToUser routing.

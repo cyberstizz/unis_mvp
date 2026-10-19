@@ -117,7 +117,10 @@ public class DigestEmailScheduler {
                 WeeklyDigest digest = digestService.build(r, run);
                 WeeklyDigestRenderer.Rendered email = WeeklyDigestRenderer.render(digest);
                 boolean ok = emailService.send(r.email(), email.subject(), email.html(), email.text(),
-                    Map.of("List-Unsubscribe", "<" + digestService.unsubscribeUrl(r) + ">"), TAG);
+                    Map.of("List-Unsubscribe", "<" + digestService.unsubscribeUrl(r) + ">",
+                           // RFC 8058: lets Gmail/Yahoo/Apple Mail show their own
+                           // "Unsubscribe" button, which POSTs to the link above.
+                           "List-Unsubscribe-Post", "List-Unsubscribe=One-Click"), TAG);
                 if (ok) sent++; else failed++;
             } catch (Exception e) {
                 failed++;

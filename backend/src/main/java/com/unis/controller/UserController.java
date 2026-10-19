@@ -71,6 +71,10 @@ public class UserController {
 
     @Autowired private SignupUploadService signupUploadService;
 
+    @Autowired private com.unis.service.SessionService sessionService;
+
+    @Autowired private com.unis.config.JwtUtil jwtUtil;
+
 
     private static final Logger log = LoggerFactory.getLogger(UserController.class);
 
@@ -245,7 +249,20 @@ public class UserController {
                 .body("You can only update your own profile");
         }
         User updated = userService.updatePassword(userId, dto.getOldPassword(), dto.getNewPassword());
-        return ResponseEntity.ok(updated);
+
+        // A new password signs the account out everywhere (a stolen session
+        // dies with the old password). This device gets a fresh session so the
+        // person isn't bounced to the sign-in page; the apps store "token".
+        sessionService.endAllSessions(userId);
+        boolean staffSession = SecurityContextHolder.getContext().getAuthentication() != null
+                && !SecurityContextHolder.getContext().getAuthentication().getAuthorities().isEmpty();
+        String token = jwtUtil.generateToken(updated.getEmail(), userId.toString(),
+                updated.getRole().toString(), staffSession);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("message", "Password changed. You've been signed out on your other devices.");
+        body.put("token", token);
+        return ResponseEntity.ok(body);
     }
 
     // PATCH /api/v1/users/{userId}/preferences (AccountSettings toggles)
@@ -285,18 +302,72 @@ public class UserController {
         }
     }
 
-    // GET /api/v1/users/unsubscribe?token=... (one-click email unsubscribe)
-    // PUBLIC: clicked from an email with no session. Security is the unguessable
-    // token. MUST be permitAll in SecurityConfig.
+    // ── Email unsubscribe ────────────────────────────────────────────────────
+    // PUBLIC: reached from an email with no session; the unguessable token is
+    // the authorization. Both routes are permitAll in SecurityConfig.
+    //
+    // GET  /api/v1/users/unsubscribe?token=...  → a page with an "Unsubscribe"
+    //      button. It changes nothing: email security scanners (Outlook,
+    //      Gmail, company filters) open every link in a message, and a GET that
+    //      unsubscribed would sign people out of emails they never opened.
+    // POST /api/v1/users/unsubscribe?token=...  → actually unsubscribes. Sent
+    //      by that button, and by Gmail/Yahoo/Apple Mail's own "Unsubscribe"
+    //      button (RFC 8058 one-click: body "List-Unsubscribe=One-Click").
     @GetMapping("/unsubscribe")
+    public ResponseEntity<String> unsubscribePage(@RequestParam("token") UUID token) {
+        // The form posts back to this same address (token included); nothing
+        // from the request is written into the page.
+        String body = unsubscribeHtml(
+            "Unsubscribe from Unis emails?",
+            "You'll stop getting the Sunday email and other Unis updates. You can turn them back on any time in Settings.",
+            "<form method=\"post\">"
+                + "<input type=\"hidden\" name=\"List-Unsubscribe\" value=\"One-Click\">"
+                + "<button type=\"submit\">Unsubscribe</button>"
+                + "</form>");
+        return htmlPage(body);
+    }
+
+    @PostMapping("/unsubscribe")
     public ResponseEntity<String> unsubscribe(@RequestParam("token") UUID token) {
         boolean ok = userService.unsubscribeByToken(token);
-        String msg = ok
-            ? "You've been unsubscribed from UNIS emails."
-            : "This unsubscribe link is invalid or already used.";
-        String body = "<html><body style=\"font-family:sans-serif;text-align:center;padding:48px;\">"
-            + "<h2 style=\"color:#163387;\">UNIS</h2><p>" + msg + "</p></body></html>";
-        return ResponseEntity.ok().header("Content-Type", "text/html").body(body);
+        String body = ok
+            ? unsubscribeHtml("You're unsubscribed",
+                "You won't get Unis emails anymore. Changed your mind? Turn them back on in Settings.", "")
+            : unsubscribeHtml("This link doesn't work",
+                "This unsubscribe link is invalid. You can turn emails off in Settings instead.", "");
+        return htmlPage(body);
+    }
+
+    private static ResponseEntity<String> htmlPage(String body) {
+        return ResponseEntity.ok()
+            .header("Content-Type", "text/html; charset=UTF-8")
+            // A plain page: no scripts at all, the form may only post back here,
+            // and no other site may frame it.
+            .header("Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+            .header("Cache-Control", "no-store")
+            .header("Referrer-Policy", "no-referrer")
+            .body(body);
+    }
+
+    private static String unsubscribeHtml(String title, String text, String action) {
+        return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            + "<meta name=\"robots\" content=\"noindex\">"
+            + "<title>Unis email settings</title>"
+            + "<style>"
+            + "body{margin:0;background:#0b0d12;color:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}"
+            + "main{max-width:440px;margin:0 auto;padding:64px 24px;text-align:center;}"
+            + ".mark{font-weight:800;letter-spacing:.18em;font-size:14px;color:#6b8aff;margin:0 0 28px;}"
+            + "h1{font-size:22px;margin:0 0 12px;}"
+            + "p{color:#9aa3b2;font-size:15px;line-height:1.5;margin:0 0 28px;}"
+            + "button{font:inherit;font-weight:700;font-size:15px;color:#fff;background:#2952cc;border:0;border-radius:10px;padding:13px 28px;cursor:pointer;}"
+            + "</style></head><body><main>"
+            + "<p class=\"mark\">UNIS</p>"
+            + "<h1>" + title + "</h1>"
+            + "<p>" + text + "</p>"
+            + action
+            + "</main></body></html>";
     }
 
     // GET /api/v1/users/artist/{id} (page 10 artist page)
@@ -351,6 +422,7 @@ public class UserController {
 
         try {
             userService.deleteAccount(userId, forfeitBalance);
+            sessionService.endAllSessions(userId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Account deleted successfully");

@@ -84,6 +84,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // ── Public forms ──
         new Rule("dmca",           "POST", "/api/v1/dmca/submit",                   10, HOUR,    Key.IP),
         new Rule("activity",       "POST", "/api/v1/activity/track",               120, MINUTE,  Key.IP),
+        new Rule("csp-report",     "POST", "/api/csp-report",                       30, MINUTE,  Key.IP),
 
         // ── General ceiling for everything else (a busy shared Wi-Fi stays well under this) ──
         new Rule("api",            null,   "/api/**",                              600, MINUTE,  Key.IP)

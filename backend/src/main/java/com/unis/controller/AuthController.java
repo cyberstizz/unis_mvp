@@ -58,6 +58,9 @@ public class AuthController {
     @Autowired
     private com.unis.service.mfa.AdminMfaService adminMfaService;
 
+    @Autowired
+    private com.unis.service.SessionService sessionService;
+
     /**
      * Pre-launch gate on the server. While true, only accounts with an admin
      * role can sign in, so the "Coming soon" page can't be bypassed by calling
@@ -192,14 +195,27 @@ public class AuthController {
         return 250;
     }
 
+    /**
+     * POST /api/auth/logout — ends this device's session for real: the token
+     * is refused from now on, even though it hasn't expired. Other devices
+     * stay signed in. Always answers 200, so a stale or broken token can't
+     * stop the app from finishing its own sign-out.
+     */
     @PostMapping("/logout")
     public ResponseEntity<?> logout(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            return ResponseEntity.badRequest().body("No token provided");
+            return ResponseEntity.ok(Map.of("message", "Signed out"));
         }
-
-        // NOTE: Later add logic to invalidate the token (e.g., token blacklist)
-        return ResponseEntity.ok("Logout successful");
+        try {
+            io.jsonwebtoken.Claims claims = jwtUtil.parseClaims(authHeader.substring(7));
+            String userId = claims.get("userId", String.class);
+            sessionService.signOut(claims.getId(),
+                    userId == null ? null : java.util.UUID.fromString(userId),
+                    claims.getExpiration() == null ? null : claims.getExpiration().toInstant());
+        } catch (io.jsonwebtoken.JwtException | IllegalArgumentException e) {
+            // Expired, forged or unreadable: nothing left to end.
+        }
+        return ResponseEntity.ok(Map.of("message", "Signed out"));
     }
 
     /**

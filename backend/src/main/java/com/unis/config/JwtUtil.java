@@ -4,6 +4,8 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 
 import io.jsonwebtoken.security.Keys;
+import com.unis.service.SessionService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
@@ -13,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Function;
 
 @Component
@@ -23,6 +26,11 @@ public class JwtUtil {
 
     @Value("${spring.jwt.expiration}")
     private Long expiration;
+
+    // Stamps each new token with the account's current session version, so
+    // ending all sessions (password change etc.) can refuse older tokens.
+    @Autowired
+    private SessionService sessionService;
 
     // Generate secret key from string
     private SecretKey getSigningKey() {
@@ -43,6 +51,14 @@ public class JwtUtil {
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
         final Claims claims = extractAllClaims(token);
         return claimsResolver.apply(claims);
+    }
+
+    /**
+     * All claims of a valid sign-in token. Throws when the token is forged,
+     * truncated, signed with another key, or expired.
+     */
+    public Claims parseClaims(String token) {
+        return extractAllClaims(token);
     }
 
     // Extract all claims
@@ -74,6 +90,9 @@ public class JwtUtil {
         claims.put("userId", userId);
         claims.put("role", role);
         if (mfaVerified) claims.put("mfa", true);
+        // Session version: see SessionService. Older tokens are refused once
+        // the account's sessions are ended.
+        claims.put("sv", sessionService.versionForNewToken(UUID.fromString(userId)));
         return createToken(claims, email);
     }
 
@@ -129,6 +148,9 @@ public class JwtUtil {
         return Jwts.builder()
                 .setClaims(claims)
                 .setSubject(subject)
+                // Random ID ("jti"): lets one device's token be signed out
+                // without touching the person's other devices.
+                .setId(UUID.randomUUID().toString())
                 .setIssuedAt(new Date(System.currentTimeMillis()))
                 .setExpiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getSigningKey())

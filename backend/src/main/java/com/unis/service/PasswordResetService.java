@@ -30,6 +30,9 @@ public class PasswordResetService {
     @Autowired
     private EmailService emailService;
 
+    @Autowired
+    private SessionService sessionService;
+
     @Value("${app.frontend.url:https://unismusic.com}")
     private String frontendBaseUrl;
 
@@ -96,6 +99,10 @@ public class PasswordResetService {
         // Mark token as used
         resetToken.setUsedAt(LocalDateTime.now());
         passwordResetTokenRepository.save(resetToken);
+
+        // Sign out every device: whoever had the old password (or a session
+        // made with it) is out. The person signs in again with the new one.
+        sessionService.endAllSessions(user.getUserId());
     }
 
     /**
