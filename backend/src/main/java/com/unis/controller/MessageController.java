@@ -1,6 +1,7 @@
 package com.unis.controller;
 
 import com.unis.dto.ConversationView;
+import com.unis.dto.MessageSettingsView;
 import com.unis.dto.MessageView;
 import com.unis.service.MessagingService;
 import com.unis.util.SecurityUtils;
@@ -77,14 +78,56 @@ public class MessageController {
 
     // ─────────────────────────────────────────────────────────────
     // INBOX
-    // GET /api/v1/conversations
+    // GET /api/v1/conversations?lane=chats|requests|filtered
+    // No lane = every row you can see (the mobile build's shape).
     // ─────────────────────────────────────────────────────────────
     @GetMapping("/conversations")
-    public ResponseEntity<?> inbox() {
+    public ResponseEntity<?> inbox(@RequestParam(required = false) String lane) {
         try {
             UUID userId = SecurityUtils.getAuthenticatedUserId();
-            List<ConversationView> conversations = messagingService.listConversations(userId);
+            List<ConversationView> conversations = messagingService.listConversations(userId, lane);
             return ResponseEntity.ok(conversations);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // COUNTS (sidebar badge + Requests pill)
+    // GET /api/v1/conversations/summary
+    //   → { unread, unreadThreads, requests, filtered }
+    // ─────────────────────────────────────────────────────────────
+    @GetMapping("/conversations/summary")
+    public ResponseEntity<?> summary() {
+        try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
+            return ResponseEntity.ok(messagingService.summary(userId));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // REQUESTS
+    // POST /api/v1/conversations/{conversationId}/accept   → ConversationView
+    // POST /api/v1/conversations/{conversationId}/decline  (silent delete)
+    // ─────────────────────────────────────────────────────────────
+    @PostMapping("/conversations/{conversationId}/accept")
+    public ResponseEntity<?> accept(@PathVariable UUID conversationId) {
+        try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
+            return ResponseEntity.ok(messagingService.acceptRequest(userId, conversationId));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/conversations/{conversationId}/decline")
+    public ResponseEntity<?> decline(@PathVariable UUID conversationId) {
+        try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
+            messagingService.declineRequest(userId, conversationId);
+            return ResponseEntity.ok(Map.of("success", true));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -173,7 +216,52 @@ public class MessageController {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // PRIVACY TOGGLE ("receive messages from anyone")
+    // REACT (one per person per message; same emoji again removes it)
+    // POST /api/v1/messages/{messageId}/reaction  Body: { emoji }
+    //   → [ { userId, emoji } ]
+    // ─────────────────────────────────────────────────────────────
+    @PostMapping("/messages/{messageId}/reaction")
+    public ResponseEntity<?> react(@PathVariable UUID messageId, @RequestBody Map<String, String> body) {
+        try {
+            UUID me = SecurityUtils.getAuthenticatedUserId();
+            List<MessageView.Reaction> reactions = messagingService.react(me, messageId, body.get("emoji"));
+            return ResponseEntity.ok(reactions);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // MESSAGE SETTINGS
+    // GET /api/v1/messages/settings
+    // PUT /api/v1/messages/settings  Body (any subset): { messagePrivacy,
+    //     supportersSkipRequests, showActivityStatus, sendReadReceipts, filterSpamRequests }
+    // ─────────────────────────────────────────────────────────────
+    @GetMapping("/messages/settings")
+    public ResponseEntity<?> settings() {
+        try {
+            UUID me = SecurityUtils.getAuthenticatedUserId();
+            MessageSettingsView view = messagingService.getSettings(me);
+            return ResponseEntity.ok(view);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/messages/settings")
+    public ResponseEntity<?> updateSettings(@RequestBody Map<String, Object> body) {
+        try {
+            UUID me = SecurityUtils.getAuthenticatedUserId();
+            MessageSettingsView view = messagingService.updateSettings(me, body);
+            return ResponseEntity.ok(view);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // LEGACY PRIVACY TOGGLE ("receive messages from anyone") — mobile build.
+    // true → Everyone, false → People you know. The web uses /messages/settings.
     // PUT /api/v1/messages/privacy  Body: { allowMessagesFromAnyone: true|false }
     // ─────────────────────────────────────────────────────────────
     @PutMapping("/messages/privacy")

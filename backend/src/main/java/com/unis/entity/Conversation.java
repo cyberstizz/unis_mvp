@@ -49,4 +49,32 @@ public class Conversation {
     @Column(name = "created_at", nullable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    // ── Lanes (sql/V2026_10f__messaging_lanes.sql) ─────────────────────────
+
+    /** Who started the conversation. Decides which side sees it as a request. */
+    @Column(name = "initiated_by")
+    private UUID initiatedBy;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    @Builder.Default
+    private ConversationStatus status = ConversationStatus.ACCEPTED;
+
+    /** True when it began in the recipient's Requests (counts toward the daily limit). */
+    @Column(name = "started_as_request", nullable = false)
+    @Builder.Default
+    private Boolean startedAsRequest = false;
+
+    @Column(name = "accepted_at")
+    private LocalDateTime acceptedAt;
+
+    /** Recipient deleted the request. Hidden from them; the sender is never told. */
+    @Column(name = "declined_at")
+    private LocalDateTime declinedAt;
+
+    /** Request caught by the recipient's spam filter — shown under Filtered, not Requests. */
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean filtered = false;
 }

@@ -33,4 +33,13 @@ public interface MessageRepository extends JpaRepository<Message, UUID> {
     int markOtherPartyRead(@Param("conversationId") UUID conversationId,
                            @Param("viewerId") UUID viewerId,
                            @Param("now") LocalDateTime now);
+
+    // One-message rule for requests: has this person already written in this thread?
+    long countByConversationIdAndSenderId(UUID conversationId, UUID senderId);
+
+    // Spam filter: how many times this sender has sent this exact text since `since`.
+    long countBySenderIdAndBodyAndCreatedAtAfter(UUID senderId, String body, LocalDateTime since);
+
+    // Inbox row: the latest message ("You:" prefix and the Seen face).
+    Message findFirstByConversationIdOrderByCreatedAtDesc(UUID conversationId);
 }

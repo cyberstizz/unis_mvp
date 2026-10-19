@@ -147,9 +147,44 @@ public class User {
     @Column(name = "theme_preference", length = 20)
     private String themePreference = "blue";
 
+    /**
+     * Legacy single switch, still read by the mobile build. Kept in step with
+     * messagePrivacy (EVERYONE ⇔ true) by MessagingService.
+     */
     @Builder.Default
     @Column(name = "allow_messages_from_anyone", nullable = false)
     private Boolean allowMessagesFromAnyone = true;
+
+    // -----------------------------------------------------------------------
+    // Message settings (sql/V2026_10f__messaging_lanes.sql). Private: shown
+    // only to the account itself and staff (UserPrivacyJacksonConfig).
+    // -----------------------------------------------------------------------
+
+    /** Who can start a new conversation with this user. */
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "message_privacy", nullable = false, length = 20)
+    private MessagePrivacy messagePrivacy = MessagePrivacy.EVERYONE;
+
+    /** People who support this user skip Requests and land in the inbox. */
+    @Builder.Default
+    @Column(name = "supporters_skip_requests", nullable = false)
+    private Boolean supportersSkipRequests = true;
+
+    /** Mutual: off hides your Active now and hides everyone else's from you. */
+    @Builder.Default
+    @Column(name = "show_activity_status", nullable = false)
+    private Boolean showActivityStatus = true;
+
+    /** Mutual: off sends no Seen marks and shows you none. */
+    @Builder.Default
+    @Column(name = "send_read_receipts", nullable = false)
+    private Boolean sendReadReceipts = true;
+
+    /** Bulk / low-quality requests go to Filtered instead of Requests. */
+    @Builder.Default
+    @Column(name = "filter_spam_requests", nullable = false)
+    private Boolean filterSpamRequests = true;
 
     // -----------------------------------------------------------------------
     // Metrics (sql/V2026_10d__metrics.sql). Never serialized: this entity is

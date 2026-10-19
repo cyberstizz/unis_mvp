@@ -38,4 +38,7 @@ public interface SupportPaymentRepository extends JpaRepository<SupportPayment, 
     @Query("SELECT COUNT(DISTINCT s.supporterId) FROM SupportPayment s " +
            "WHERE s.artistId = :artistId AND s.status = 'completed'")
     long countDistinctSupporters(@Param("artistId") UUID artistId);
+
+    // A completed tip from supporter to artist counts as supporting them (messaging lanes).
+    boolean existsBySupporterIdAndArtistIdAndStatus(UUID supporterId, UUID artistId, String status);
 }

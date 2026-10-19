@@ -2,6 +2,7 @@ package com.unis.service;
 
 import com.unis.dto.MessageView;
 import com.unis.entity.Conversation;
+import com.unis.entity.ConversationStatus;
 import com.unis.entity.Message;
 import com.unis.entity.Supporter;
 import com.unis.repository.ConversationRepository;
@@ -93,14 +94,26 @@ public class ArtistBroadcastService {
         UUID one = artistId.compareTo(listenerId) <= 0 ? artistId : listenerId;
         UUID two = artistId.compareTo(listenerId) <= 0 ? listenerId : artistId;
 
+        // Broadcasts are always ACCEPTED: supporters opted in by supporting, so
+        // these never sit in Requests. A request waiting between the two is
+        // accepted by the broadcast, the same as a reply would.
         Conversation convo = conversationRepository
                 .findByParticipantOneAndParticipantTwo(one, two)
                 .orElseGet(() -> conversationRepository.save(Conversation.builder()
                         .participantOne(one)
                         .participantTwo(two)
+                        .initiatedBy(artistId)
+                        .status(ConversationStatus.ACCEPTED)
+                        .acceptedAt(LocalDateTime.now())
                         .createdAt(LocalDateTime.now())
                         .lastMessageAt(LocalDateTime.now())
                         .build()));
+        if (convo.getStatus() != ConversationStatus.ACCEPTED || convo.getDeclinedAt() != null) {
+            convo.setStatus(ConversationStatus.ACCEPTED);
+            convo.setAcceptedAt(LocalDateTime.now());
+            convo.setDeclinedAt(null);
+            convo.setFiltered(false);
+        }
 
         LocalDateTime now = LocalDateTime.now();
         Message m = messageRepository.save(Message.builder()

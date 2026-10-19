@@ -27,6 +27,10 @@ public interface SupporterRepository extends JpaRepository<Supporter, UUID> {
     // Check if listener supports artist (for validation)
     boolean existsByListenerAndArtist(User listener, User artist);
 
+    // Same check by ids — messaging uses it to put supporters in the inbox.
+    @Query("SELECT COUNT(s) > 0 FROM Supporter s WHERE s.listener.userId = :listenerId AND s.artist.userId = :artistId")
+    boolean supports(@Param("listenerId") UUID listenerId, @Param("artistId") UUID artistId);
+
     @Modifying
     @Query("DELETE FROM Supporter s WHERE s.artist.userId = :artistId")
     void deleteByArtistUserId(@Param("artistId") UUID artistId);
