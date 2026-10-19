@@ -324,6 +324,9 @@ public class VoteController {
                 .nomineeImage(nomineeImage)
                 .voteDate(vote.getVoteDate())
                 .interval(intervalName)
+                .jurisdictionId(vote.getJurisdiction() != null
+                    ? vote.getJurisdiction().getJurisdictionId()
+                    : null)
                 .build();
 
             history.add(dto);

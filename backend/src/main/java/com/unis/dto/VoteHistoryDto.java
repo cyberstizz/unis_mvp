@@ -20,4 +20,5 @@ public class VoteHistoryDto {
     private String nomineeImage;    // Artwork URL or Photo URL
     private LocalDate voteDate;
     private String interval;        // "day", "week", "month", "quarter", "midterm", "year"
+    private UUID jurisdictionId;    // the race's jurisdiction (feed marks "Your vote" per place)
 }

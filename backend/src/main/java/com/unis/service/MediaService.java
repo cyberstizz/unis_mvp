@@ -1073,6 +1073,46 @@ public class MediaService {
         return results;
     }
 
+    /**
+     * Newest song from each artist the viewer follows, released in the last
+     * {@code days} days, newest first. Feeds the feed's "New from artists you
+     * follow" row (Oct 2026). Deleted songs never show; no fallback content —
+     * an empty list simply hides the row.
+     */
+    public List<Song> getNewFromFollowedArtists(UUID followerId, int days, int limit) {
+        int safeDays = Math.max(1, Math.min(days, 30));
+        int safeLimit = Math.max(1, Math.min(limit, 30));
+
+        String query = """
+            SELECT * FROM (
+                SELECT DISTINCT ON (s.artist_id) s.*
+                FROM songs s
+                INNER JOIN follows f ON f.followed_id = s.artist_id
+                WHERE f.follower_id = :followerId
+                  AND s.deleted_at IS NULL
+                  AND s.created_at >= :since
+                ORDER BY s.artist_id, s.created_at DESC
+            ) latest
+            ORDER BY latest.created_at DESC
+            LIMIT :limit
+            """;
+
+        Query q = entityManager.createNativeQuery(query, Song.class);
+        q.setParameter("followerId", followerId);
+        q.setParameter("since", LocalDateTime.now().minusDays(safeDays));
+        q.setParameter("limit", safeLimit);
+
+        @SuppressWarnings("unchecked")
+        List<Song> results = q.getResultList();
+
+        results.forEach(song -> {
+            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
+            song.setPlayCount(playCount != null ? playCount : 0L);
+        });
+
+        return results;
+    }
+
     // ========== LIKES SERVICE METHODS (NEW) ==========
 
     /**

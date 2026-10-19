@@ -465,6 +465,24 @@ public class MediaController {
         }
     }
 
+    // GET /api/v1/media/following/new?days=7&limit=12
+    // Newest song per followed artist from the last `days` days (feed row).
+    // Signed-in only — covered by SecurityConfig's anyRequest().authenticated().
+    @GetMapping("/following/new")
+    public ResponseEntity<?> getNewFromFollowing(
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(defaultValue = "12") int limit) {
+        try {
+            UUID followerId = SecurityUtils.getAuthenticatedUserId();
+            List<Song> songs = mediaService.getNewFromFollowedArtists(followerId, days, limit);
+            return ResponseEntity.ok(songs);
+        } catch (RuntimeException e) {
+            log.error("Following drops query failed:", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Could not load new songs from artists you follow"));
+        }
+    }
+
     @GetMapping("/new")
     public ResponseEntity<List<Song>> getNewMedia(
             @RequestParam UUID jurisdictionId,
