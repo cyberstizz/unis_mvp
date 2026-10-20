@@ -33,11 +33,13 @@ public class DownloadService {
     @Value("${stripe.secret.key}")
     private String stripeSecretKey;
 
-    // Platform fee percentage — 10%. Adjust as needed.
-    private static final double PLATFORM_FEE_PERCENT = 0.10;
+    // Unis's cut: 10%, or Stripe's card fee + 1¢ when that's higher, so Unis
+    // never loses money on a sale (see PlatformFees for the table).
+    private static final double PLATFORM_FEE_PERCENT = PlatformFees.DEFAULT_PERCENT;
 
-    // Minimum price in cents ($1.99) to cover Stripe processing fees
-    private static final int MINIMUM_PRICE_CENTS = 199;
+    // Minimum price in cents ($0.94): 5¢ under the iTunes Store's 99¢ tier, so a
+    // song can always be cheapest on Unis. The fee gate keeps Unis whole at it.
+    private static final int MINIMUM_PRICE_CENTS = PlatformFees.MIN_SONG_PRICE_CENTS;
 
     public DownloadService(SongRepository songRepository,
                            PurchaseRepository purchaseRepository,
@@ -91,7 +93,7 @@ public class DownloadService {
     // CREATE PURCHASE INTENT (Stripe Direct Charge)
     //
     // Money goes straight to artist's connected Stripe account.
-    // Unis takes application_fee (your 10% cut).
+    // Unis takes application_fee (10%, or Stripe's card fee + 1¢ if higher).
     // Returns client_secret for Stripe.js on the frontend.
     // ═══════════════════════════════════════════════════════════
 
@@ -128,7 +130,9 @@ public class DownloadService {
         }
 
         int priceInCents = song.getDownloadPrice();
-        int platformFee = (int) Math.round(priceInCents * PLATFORM_FEE_PERCENT);
+        // Break-even gate: never below Stripe's card fee + 1¢ (songs priced
+        // before the $0.94 minimum existed are covered the same way).
+        int platformFee = PlatformFees.feeCents(priceInCents, PLATFORM_FEE_PERCENT);
 
         try {
             PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()

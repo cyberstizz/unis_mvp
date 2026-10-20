@@ -144,6 +144,22 @@ public class MediaService {
                 genre = genreRepository.findById(req.getGenreId()).orElse(null);
             }
 
+            // Download settings — also checked before any file is stored. Same
+            // rules as DownloadService.updateDownloadSettings.
+            String downloadPolicy = req.getDownloadPolicy() == null || req.getDownloadPolicy().isBlank()
+                    ? "free" : req.getDownloadPolicy().trim();
+            if (!java.util.List.of("free", "paid", "unavailable").contains(downloadPolicy)) {
+                throw new IllegalArgumentException("Download policy must be free, paid, or unavailable");
+            }
+            Integer downloadPrice = null;
+            if ("paid".equals(downloadPolicy)) {
+                downloadPrice = req.getDownloadPrice();
+                if (downloadPrice == null || downloadPrice < PlatformFees.MIN_SONG_PRICE_CENTS) {
+                    throw new IllegalArgumentException("Paid downloads require a minimum price of $"
+                            + String.format("%.2f", PlatformFees.MIN_SONG_PRICE_CENTS / 100.0));
+                }
+            }
+
             // Discovery tags — checked BEFORE any file is stored, so a rejected
             // upload never leaves orphaned audio or artwork in R2.
             Discovery discovery = resolveDiscovery(genre,
@@ -189,6 +205,8 @@ public class MediaService {
             song.setLyrics(req.getLyrics());
             song.setPlaysToday(0);
             song.setLastPlayResetDate(LocalDate.now());
+            song.setDownloadPolicy(downloadPolicy);
+            song.setDownloadPrice(downloadPrice);
             discovery.applyTo(song);
 
 

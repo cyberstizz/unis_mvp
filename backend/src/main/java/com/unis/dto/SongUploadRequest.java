@@ -29,4 +29,10 @@ public class SongUploadRequest {
     private UUID primaryMoodId;
     private UUID secondaryMoodId;
     private String language;
+
+    // Download settings chosen in the upload wizard. Before these existed the
+    // keys were silently ignored and every upload was saved as a free download.
+    // downloadPrice is in cents. Missing = free.
+    private String downloadPolicy;   // "free" | "paid" | "unavailable"
+    private Integer downloadPrice;
 }

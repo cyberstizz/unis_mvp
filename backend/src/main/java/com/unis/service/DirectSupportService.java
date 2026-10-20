@@ -38,19 +38,15 @@ public class DirectSupportService {
     @Value("${stripe.secret.key}")
     private String stripeSecretKey;
 
-    // Unis cut on direct support. Kept at 10% to match song purchases for
-    // consistency. Lower this (even to 0.0) to make direct support more
-    // artist-friendly than the competition — it only changes the fee, nothing
-    // downstream depends on the value.
-    private static final double PLATFORM_FEE_PERCENT = 0.10;
+    // Unis cut on direct support: 10%, matching song purchases, or Stripe's
+    // card fee + 1¢ when that's higher (PlatformFees). On a destination charge
+    // Stripe bills its card fee to Unis, so without the gate a $1 tip would
+    // cost Unis 23¢. Setting this to 0.0 makes every tip exactly break-even
+    // + 1¢ for Unis.
+    private static final double PLATFORM_FEE_PERCENT = PlatformFees.DEFAULT_PERCENT;
 
     // Minimum support amount in cents ($1.00) so name-your-price stays low.
-    // NOTE: on very small amounts the 10% application fee may not fully cover
-    // Stripe's per-transaction processing (~2.9% + $0.30), which on a
-    // destination charge is billed to the platform account. If you want the
-    // platform to never run negative on tiny tips, either raise this floor or
-    // set on_behalf_of on the PaymentIntent so processing fees come out of the
-    // connected account instead.
+    // At $1.00 the gate takes 34¢ (Stripe's 33¢ + 1¢); the artist gets 66¢.
     private static final int MINIMUM_SUPPORT_CENTS = 100;
 
     // Hard ceiling to blunt fat-finger / fraud ($2,000). Adjust as needed.
@@ -100,7 +96,7 @@ public class DirectSupportService {
 
         String cleanNote = sanitizeNote(note);
         String cleanSource = (source != null && source.equalsIgnoreCase("dm")) ? "dm" : "profile";
-        int platformFee = (int) Math.round(amountCents * PLATFORM_FEE_PERCENT);
+        int platformFee = PlatformFees.feeCents(amountCents, PLATFORM_FEE_PERCENT);
 
         try {
             PaymentIntentCreateParams.Builder params = PaymentIntentCreateParams.builder()

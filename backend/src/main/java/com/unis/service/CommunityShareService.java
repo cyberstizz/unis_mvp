@@ -23,8 +23,8 @@ import java.util.*;
  * month (Admin → Community Share). The close:
  *
  *   1. Adds up what Unis actually received for the month: ad income, other
- *      income (sponsors, Unis Plus, anything else) and Unis's fees on song
- *      sales and support.
+ *      income (sponsors, Unis Plus, anything else) and what Unis kept from
+ *      its fees on song sales and support after Stripe's card fees.
  *   2. Divides it by counted listening. A counted play is one the player
  *      already counts (15 seconds / 25% rule, 30-minute cooldown). Only
  *      signed-in listeners count; plays of your own songs don't; and each
@@ -153,7 +153,8 @@ public class CommunityShareService {
      * @param month       a month that has fully ended (Harlem time)
      * @param adIncome    AdSense / AdMob money received for that month, in dollars
      * @param otherIncome sponsors, Unis Plus and anything else, in dollars
-     * @param feeIncome   Unis's fees on song sales and support, in dollars
+     * @param feeIncome   what Unis kept from its fees on song sales and support
+     *                    after Stripe's card fees, in dollars
      *                    (null = use {@link #suggestedFeeIncome})
      */
     public Plan plan(YearMonth month, BigDecimal adIncome, BigDecimal otherIncome, BigDecimal feeIncome) {
@@ -259,19 +260,30 @@ public class CommunityShareService {
     }
 
     /**
-     * Unis's fees on completed song sales and support during the month, as a
-     * starting suggestion for the close form (the admin can change it, for
-     * example to subtract Stripe's fees).
+     * What Unis actually kept from its fees on completed song sales and support
+     * during the month, after Stripe's card fee on each payment: the starting
+     * suggestion for the close form (the admin can change it).
+     *
+     * Only this margin is shared. Sharing the whole fee would hand out money
+     * that went to Stripe: on a $0.94 song Unis's fee is 34¢ but it keeps 1¢,
+     * and 32% of 34¢ would turn every small sale into a loss. The card fee is
+     * worked out the same way as PlatformFees.stripeCardFeeCents (2.9% rounded
+     * up + 30¢). Payments made before the fee gate could be below Stripe's fee;
+     * they count against the total, which never goes below zero.
      */
     public BigDecimal suggestedFeeIncome(YearMonth month) {
         LocalDateTime[] range = serverRange(month);
         Long cents = jdbc.queryForObject("""
-                SELECT COALESCE((SELECT SUM(platform_fee) FROM purchases
-                                  WHERE status = 'completed' AND created_at >= ? AND created_at < ?), 0)
-                     + COALESCE((SELECT SUM(platform_fee) FROM support_payments
-                                  WHERE status = 'completed' AND created_at >= ? AND created_at < ?), 0)
+                SELECT GREATEST(
+                         COALESCE((SELECT SUM(platform_fee - ((amount * ? + 999) / 1000 + ?)) FROM purchases
+                                    WHERE status = 'completed' AND created_at >= ? AND created_at < ?), 0)
+                       + COALESCE((SELECT SUM(platform_fee - ((amount * ? + 999) / 1000 + ?)) FROM support_payments
+                                    WHERE status = 'completed' AND created_at >= ? AND created_at < ?), 0),
+                       0)
                 """, Long.class,
+                PlatformFees.STRIPE_PERCENT_PER_THOUSAND, PlatformFees.STRIPE_FIXED_CENTS,
                 Timestamp.valueOf(range[0]), Timestamp.valueOf(range[1]),
+                PlatformFees.STRIPE_PERCENT_PER_THOUSAND, PlatformFees.STRIPE_FIXED_CENTS,
                 Timestamp.valueOf(range[0]), Timestamp.valueOf(range[1]));
         return BigDecimal.valueOf(cents == null ? 0 : cents, 2);
     }
