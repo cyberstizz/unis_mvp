@@ -98,6 +98,9 @@ public class SecurityConfig {
                 // (closing a month, adjusting a balance).
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/earnings/**").hasRole("SUPER_ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/earnings/tax-report").hasRole("SUPER_ADMIN")
+                // Local sponsors: admins review and approve; rejecting refunds
+                // the sponsor's card, so super admins only.
+                .requestMatchers(HttpMethod.POST, "/api/v1/admin/sponsors/*/reject").hasRole("SUPER_ADMIN")
 
                 // Everything else under /admin needs at least ADMIN. This catch-all
                 // must come AFTER the specific rules above: Spring uses the first
@@ -106,6 +109,19 @@ public class SecurityConfig {
                 // and let admins (not just super admins) manage roles, read the
                 // audit log and delete accounts through the API.
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+
+                // ===== UNIS PLUS & LOCAL SPONSORS =====
+                // Stripe can't sign in; every delivery is checked by its
+                // Stripe-Signature instead (StripeWebhookController).
+                .requestMatchers(HttpMethod.POST, "/api/v1/stripe/webhook").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/plus/status").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/plus/checkout").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/plus/portal").authenticated()
+                // Shop owners arrive from a QR code without an account.
+                .requestMatchers(HttpMethod.GET, "/api/v1/sponsors/options").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/sponsors/checkout").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/sponsors/serve").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/sponsors/*/go").permitAll()
 
                 // ===== PLAYLIST — ADMIN =====
                 .requestMatchers(HttpMethod.POST, "/api/v1/playlists/official").hasRole("ADMIN")

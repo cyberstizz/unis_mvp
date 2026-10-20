@@ -43,7 +43,8 @@ public class EarningsService {
     /** Smallest payout Stripe Connect sends (StripeConnectService uses the same $50). */
     public static final BigDecimal PAYOUT_THRESHOLD = new BigDecimal("50.00");
 
-    private static final List<String> STREAMS = List.of("supporter", "referral_1", "referral_2", "referral_3", "adjustment");
+    private static final List<String> STREAMS = List.of("supporter", "referral_1", "referral_2", "referral_3", "adjustment",
+            "plus_artist");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // EARNINGS SUMMARY
@@ -70,8 +71,10 @@ public class EarningsService {
         BigDecimal referralLast = last.get("referral_1").add(last.get("referral_2")).add(last.get("referral_3"));
         BigDecimal supporterLifetime = lifetime.get("supporter");
         BigDecimal adjustmentsLifetime = lifetime.get("adjustment");
-        BigDecimal totalLifetime = referralLifetime.add(supporterLifetime).add(adjustmentsLifetime);
-        BigDecimal totalLast = referralLast.add(last.get("supporter")).add(last.get("adjustment"));
+        BigDecimal plusLifetime = lifetime.get("plus_artist");
+        BigDecimal totalLifetime = referralLifetime.add(supporterLifetime).add(adjustmentsLifetime).add(plusLifetime);
+        BigDecimal totalLast = referralLast.add(last.get("supporter")).add(last.get("adjustment"))
+                .add(last.get("plus_artist"));
 
         BigDecimal available = getAvailableBalance(userId);
         BigDecimal paidOut = ledgerPayouts(userId, "completed");
@@ -100,6 +103,10 @@ public class EarningsService {
                 "lastMonth", money(last.get("supporter")),
                 "thisMonth", money(BigDecimal.ZERO)));
         summary.put("adjustments", Map.of("lifetime", money(adjustmentsLifetime)));
+        // Artists: their 60% share of Unis Plus fees from subscribers who played them.
+        summary.put("plusEarnings", Map.of(
+                "lifetime", money(plusLifetime),
+                "lastMonth", money(last.get("plus_artist"))));
         summary.put("totalEarnings", Map.of(
                 "lifetime", money(totalLifetime),
                 "lastMonth", money(totalLast),
@@ -159,7 +166,7 @@ public class EarningsService {
     /**
      * The last {@code months} months, oldest first, including the current one
      * (which shows 0 until it's closed). Each entry:
-     * {month, date, closed, referralEarnings, supporterEarnings, adjustments, total}.
+     * {month, date, closed, referralEarnings, supporterEarnings, plusEarnings, adjustments, total}.
      */
     public List<Map<String, Object>> getMonthlyHistory(UUID userId, int months) {
         int n = Math.max(1, Math.min(months, 24));
@@ -190,14 +197,16 @@ public class EarningsService {
                     .add(s.getOrDefault("referral_3", BigDecimal.ZERO));
             BigDecimal supporter = s.getOrDefault("supporter", BigDecimal.ZERO);
             BigDecimal adjustments = s.getOrDefault("adjustment", BigDecimal.ZERO);
+            BigDecimal plus = s.getOrDefault("plus_artist", BigDecimal.ZERO);
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("month", ym.toString());
             entry.put("date", ym.atDay(1).toString());
             entry.put("closed", closed.contains(ym));
             entry.put("referralEarnings", money(referral));
             entry.put("supporterEarnings", money(supporter));
+            entry.put("plusEarnings", money(plus));
             entry.put("adjustments", money(adjustments));
-            entry.put("total", money(referral.add(supporter).add(adjustments)));
+            entry.put("total", money(referral.add(supporter).add(plus).add(adjustments)));
             result.add(entry);
         }
         return result;

@@ -81,6 +81,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
         new Rule("purchase",       "POST", "/api/v1/songs/*/purchase",              20, HOUR,    Key.ACCOUNT),
         new Rule("payout",         "POST", "/api/v1/stripe/payout",                  5, HOUR,    Key.ACCOUNT),
 
+        // ── Unis Plus and local sponsors (each checkout is a Stripe call; logos are uploads) ──
+        new Rule("plus-checkout",  "POST", "/api/v1/plus/checkout",                 10, HOUR,    Key.ACCOUNT),
+        new Rule("plus-portal",    "POST", "/api/v1/plus/portal",                   20, HOUR,    Key.ACCOUNT),
+        new Rule("sponsor-buy",    "POST", "/api/v1/sponsors/checkout",             10, HOUR,    Key.IP),
+        new Rule("sponsor-serve",  "GET",  "/api/v1/sponsors/serve",               120, MINUTE,  Key.IP),
+        new Rule("sponsor-tap",    "GET",  "/api/v1/sponsors/*/go",                 60, MINUTE,  Key.IP),
+
         // ── Public forms ──
         new Rule("dmca",           "POST", "/api/v1/dmca/submit",                   10, HOUR,    Key.IP),
         new Rule("activity",       "POST", "/api/v1/activity/track",               120, MINUTE,  Key.IP),

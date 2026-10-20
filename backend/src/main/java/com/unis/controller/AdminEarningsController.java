@@ -54,6 +54,7 @@ public class AdminEarningsController {
 
     // GET /api/v1/admin/earnings/preview?month=2026-11&adIncome=120.50&otherIncome=0&feeIncome=4.10
     // feeIncome left out = the suggested amount (Unis's fees on that month's sales and support).
+    // otherIncome left out = local sponsors paid that month, after Stripe's card fee.
     @GetMapping("/preview")
     public ResponseEntity<?> preview(@RequestParam String month,
                                      @RequestParam(required = false) String adIncome,
@@ -65,6 +66,7 @@ public class AdminEarningsController {
                     .plan(ym, amount(adIncome), amount(otherIncome), amount(feeIncome))
                     .summary());
             body.put("suggestedFeeIncome", communityShareService.suggestedFeeIncome(ym));
+            body.put("suggestedOtherIncome", communityShareService.suggestedOtherIncome(ym));
             body.put("alreadyClosed", communityShareService.isClosed(ym));
             return ResponseEntity.ok(body);
         } catch (DateTimeParseException e) {

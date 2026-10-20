@@ -29,6 +29,11 @@ import java.util.Map;
  *     1099-MISC (other income); filed for $2,000 or more in a year.
  *   • Song sales and direct support — card payments to the artist.
  *     Form 1099-K; filed for more than $20,000 AND more than 200 payments.
+ *   • Unis Plus — an artist's 60% share of subscribers' fees, by plays. It is
+ *     credited to the same balance and paid out the same way, but because it
+ *     is paid for the use of their music it may be royalties (1099-MISC box 2,
+ *     filed for $10 or more) rather than other income. The report shows it
+ *     separately and flags anyone credited $10 or more, for the tax advisor.
  *
  * Stripe's tool counts transfers to a connected account into 1099-K totals by
  * default, so each year the Community Share amounts from this report are moved
@@ -47,6 +52,7 @@ public class TaxReportService {
     public static final BigDecimal MISC_THRESHOLD = new BigDecimal("2000.00");
     public static final BigDecimal K_GROSS_THRESHOLD = new BigDecimal("20000.00");
     public static final int K_COUNT_THRESHOLD = 200;
+    public static final BigDecimal ROYALTY_THRESHOLD = new BigDecimal("10.00");
 
     private final JdbcTemplate jdbc;
 
@@ -66,7 +72,8 @@ public class TaxReportService {
                 SELECT user_id,
                        SUM(CASE WHEN stream = 'supporter' THEN amount ELSE 0 END) AS supporter,
                        SUM(CASE WHEN stream LIKE 'referral%' THEN amount ELSE 0 END) AS referral,
-                       SUM(CASE WHEN stream = 'adjustment' THEN amount ELSE 0 END) AS adjustment
+                       SUM(CASE WHEN stream = 'adjustment' THEN amount ELSE 0 END) AS adjustment,
+                       SUM(CASE WHEN stream = 'plus_artist' THEN amount ELSE 0 END) AS plus
                 FROM earnings_ledger
                 WHERE period_month >= ? AND period_month < ?
                 GROUP BY user_id
@@ -93,6 +100,7 @@ public class TaxReportService {
                    COALESCE(cr.supporter, 0)  AS cr_supporter,
                    COALESCE(cr.referral, 0)   AS cr_referral,
                    COALESCE(cr.adjustment, 0) AS cr_adjustment,
+                   COALESCE(cr.plus, 0)       AS cr_plus,
                    COALESCE(sa.n, 0)          AS sales_n,
                    COALESCE(sa.gross, 0)      AS sales_gross_cents,
                    COALESCE(sa.fees, 0)       AS sales_fee_cents,
@@ -120,8 +128,8 @@ public class TaxReportService {
         java.sql.Date monthTo = java.sql.Date.valueOf(LocalDate.of(year + 1, 1, 1));
 
         List<Map<String, Object>> rows = new ArrayList<>();
-        BigDecimal[] totals = { BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO };
-        int[] counts = { 0, 0 };
+        BigDecimal[] totals = { BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO };
+        int[] counts = { 0, 0, 0 };
 
         jdbc.query(REPORT_SQL, rs -> {
             BigDecimal csPaid = money(rs.getBigDecimal("cs_paid"));
@@ -136,6 +144,8 @@ public class TaxReportService {
 
             boolean misc = csPaid.compareTo(MISC_THRESHOLD) >= 0;
             boolean k = paymentsGross.compareTo(K_GROSS_THRESHOLD) > 0 && paymentsN > K_COUNT_THRESHOLD;
+            BigDecimal plusCredited = money(rs.getBigDecimal("cr_plus"));
+            boolean royalties = plusCredited.compareTo(ROYALTY_THRESHOLD) >= 0;
 
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("userId", rs.getObject("user_id"));
@@ -148,6 +158,7 @@ public class TaxReportService {
             m.put("supporterCredited", money(rs.getBigDecimal("cr_supporter")));
             m.put("referralCredited", money(rs.getBigDecimal("cr_referral")));
             m.put("adjustmentsCredited", money(rs.getBigDecimal("cr_adjustment")));
+            m.put("plusCredited", plusCredited);
             m.put("salesCount", salesN);
             m.put("salesGross", salesGross);
             m.put("salesToArtist", salesGross.subtract(salesFees));
@@ -158,6 +169,7 @@ public class TaxReportService {
             m.put("paymentsCount", paymentsN);
             m.put("form1099Misc", misc);
             m.put("form1099K", k);
+            m.put("plusRoyaltiesCheck", royalties);
             rows.add(m);
 
             totals[0] = totals[0].add(csPaid);
@@ -165,6 +177,8 @@ public class TaxReportService {
             totals[2] = totals[2].add(supportGross);
             if (misc) counts[0]++;
             if (k) counts[1]++;
+            totals[3] = totals[3].add(plusCredited);
+            if (royalties) counts[2]++;
         }, from, to, monthFrom, monthTo, from, to, from, to);
 
         Map<String, Object> summary = new LinkedHashMap<>();
@@ -174,6 +188,9 @@ public class TaxReportService {
         summary.put("supportGross", totals[2]);
         summary.put("needs1099Misc", counts[0]);
         summary.put("needs1099K", counts[1]);
+        summary.put("plusCredited", totals[3]);
+        summary.put("plusRoyaltiesCheck", counts[2]);
+        summary.put("royaltyThreshold", ROYALTY_THRESHOLD);
         summary.put("miscThreshold", MISC_THRESHOLD);
         summary.put("kGrossThreshold", K_GROSS_THRESHOLD);
         summary.put("kCountThreshold", K_COUNT_THRESHOLD);

@@ -23,8 +23,9 @@ import java.util.*;
  * month (Admin → Community Share). The close:
  *
  *   1. Adds up what Unis actually received for the month: ad income, other
- *      income (sponsors, Unis Plus, anything else) and what Unis kept from
- *      its fees on song sales and support after Stripe's card fees.
+ *      income (local sponsors are suggested automatically; add anything
+ *      else), what Unis kept from its fees on song sales and support after
+ *      Stripe's card fees, and Unis's 40% of Unis Plus (below).
  *   2. Divides it by counted listening. A counted play is one the player
  *      already counts (15 seconds / 25% rule, 30-minute cooldown). Only
  *      signed-in listeners count; plays of your own songs don't; and each
@@ -40,6 +41,12 @@ import java.util.*;
  * Nothing here looks at ads or ad views. That is the point: Google's AdSense
  * and AdMob rules forbid paying anyone because ads were viewed, so the money
  * follows listening, and ad income is just one of the things that fund it.
+ *
+ * Unis Plus is settled in the same close, before the pot is divided: 60% of
+ * each subscriber's payment (after Stripe's card and Billing fees) goes to
+ * the artists that subscriber played that month, by counted plays (same
+ * rules and daily cap), or to their supported artist if they played no one.
+ * Ineligible artists' parts stay with Unis. Unis's part joins the pot.
  *
  * Results are written to earnings_ledger (one row per earner, per listener,
  * per level) and community_share_closes (one row per month). Balances and
@@ -57,6 +64,9 @@ public class CommunityShareService {
     public static final BigDecimal LEVEL2_RATE    = new BigDecimal("0.05");
     public static final BigDecimal LEVEL3_RATE    = new BigDecimal("0.02");
 
+    /** Unis Plus: the artists' share of each subscriber's fee, after Stripe's fees. */
+    public static final BigDecimal PLUS_ARTIST_RATE = new BigDecimal("0.60");
+
     /** Counted plays per listener per day that count toward the share (about 2.5 hours of music). */
     public static final int DAILY_PLAY_CAP = 50;
 
@@ -67,9 +77,11 @@ public class CommunityShareService {
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("10000000");
 
     private final JdbcTemplate jdbc;
+    private final SponsorService sponsors;
 
-    public CommunityShareService(JdbcTemplate jdbc) {
+    public CommunityShareService(JdbcTemplate jdbc, SponsorService sponsors) {
         this.jdbc = jdbc;
+        this.sponsors = sponsors;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -92,7 +104,10 @@ public class CommunityShareService {
             BigDecimal paidToCommunity,
             BigDecimal keptByUnis,
             Map<String, BigDecimal> byStream,
-            List<Entry> entries) {
+            List<Entry> entries,
+            BigDecimal plusIncome,
+            BigDecimal plusToArtists,
+            List<String> plusInvoiceIds) {
 
         /** For the admin preview: the totals, without thousands of rows. */
         public Map<String, Object> summary() {
@@ -107,6 +122,10 @@ public class CommunityShareService {
             m.put("earners", earners);
             m.put("paidToCommunity", paidToCommunity.setScale(2, RoundingMode.HALF_UP));
             m.put("keptByUnis", keptByUnis.setScale(2, RoundingMode.HALF_UP));
+            m.put("plusIncome", plusIncome.setScale(2, RoundingMode.HALF_UP));
+            m.put("plusToArtists", plusToArtists.setScale(2, RoundingMode.HALF_UP));
+            m.put("plusToPot", plusIncome.subtract(plusToArtists).setScale(2, RoundingMode.HALF_UP));
+            m.put("plusPayments", plusInvoiceIds.size());
             Map<String, BigDecimal> streams = new LinkedHashMap<>();
             byStream.forEach((k, v) -> streams.put(k, v.setScale(2, RoundingMode.HALF_UP)));
             m.put("byStream", streams);
@@ -115,6 +134,44 @@ public class CommunityShareService {
     }
 
     private record Weight(UUID listenerId, UUID supportedArtistId, BigDecimal weight) {}
+
+    private record PlusPayment(String invoiceId, UUID userId, UUID supportedArtistId, BigDecimal net) {}
+
+    private record ArtistWeight(UUID listenerId, UUID artistId, BigDecimal weight) {}
+
+    /** What Unis Plus adds to a close: artist entries, the money, and the invoices it settles. */
+    private record PlusResult(List<Entry> entries, BigDecimal income, BigDecimal toArtists, List<String> invoiceIds) {}
+
+    // Unis Plus subscribers' counted plays per artist in the month, with the
+    // same rules as WEIGHT_SQL (own songs don't count; 50 a day). Only
+    // subscribers with an unsettled payment are read.
+    private static final String PLUS_WEIGHT_SQL = """
+            WITH subs AS (
+                SELECT DISTINCT user_id FROM plus_payments
+                WHERE status = 'paid' AND settled_close_id IS NULL AND paid_at < ?
+            ),
+            plays AS (
+                SELECT sp.user_id, s.artist_id,
+                       CAST((sp.played_at AT TIME ZONE CAST(? AS text)) AT TIME ZONE 'America/New_York' AS date) AS d
+                FROM song_plays sp
+                JOIN subs ON subs.user_id = sp.user_id
+                JOIN songs s ON s.song_id = sp.song_id
+                WHERE sp.played_at >= ? AND sp.played_at < ?
+                  AND s.artist_id IS DISTINCT FROM sp.user_id
+            ),
+            grp AS (
+                SELECT user_id, artist_id, d, CAST(COUNT(*) AS numeric) AS n
+                FROM plays GROUP BY user_id, artist_id, d
+            ),
+            day_tot AS (
+                SELECT user_id, d, SUM(n) AS tot FROM grp GROUP BY user_id, d
+            )
+            SELECT g.user_id, g.artist_id,
+                   SUM(CASE WHEN t.tot > CAST(? AS numeric) THEN g.n * CAST(? AS numeric) / t.tot ELSE g.n END) AS weight
+            FROM grp g
+            JOIN day_tot t ON t.user_id = g.user_id AND t.d = g.d
+            GROUP BY g.user_id, g.artist_id
+            """;
 
     private record Chain(UUID level1, UUID level2, UUID level3) {}
 
@@ -152,7 +209,8 @@ public class CommunityShareService {
      *
      * @param month       a month that has fully ended (Harlem time)
      * @param adIncome    AdSense / AdMob money received for that month, in dollars
-     * @param otherIncome sponsors, Unis Plus and anything else, in dollars
+     * @param otherIncome sponsors and anything else, in dollars
+     *                    (null = local sponsors paid that month, after card fees)
      * @param feeIncome   what Unis kept from its fees on song sales and support
      *                    after Stripe's card fees, in dollars
      *                    (null = use {@link #suggestedFeeIncome})
@@ -163,11 +221,17 @@ public class CommunityShareService {
             throw new IllegalArgumentException("A month can only be closed after it has ended.");
         }
         BigDecimal ad = money(adIncome, "Ad income");
-        BigDecimal other = money(otherIncome, "Other income");
+        BigDecimal other = otherIncome == null ? sponsors.suggestedIncome(month) : money(otherIncome, "Other income");
         BigDecimal fee = feeIncome == null ? suggestedFeeIncome(month) : money(feeIncome, "Fee income");
-        BigDecimal total = ad.add(other).add(fee);
 
         LocalDateTime[] range = serverRange(month);
+        Set<UUID> canEarn = loadEarners();
+
+        // Unis Plus first: the artists' 60%, then Unis's part joins the pot.
+        PlusResult plus = planPlus(range, canEarn);
+        BigDecimal plusToPot = plus.income().subtract(plus.toArtists());
+        BigDecimal total = ad.add(other).add(fee).add(plusToPot);
+
         List<Weight> weights = jdbc.query(WEIGHT_SQL, (rs, i) -> new Weight(
                 rs.getObject("user_id", UUID.class),
                 rs.getObject("supported_artist_id", UUID.class),
@@ -178,7 +242,6 @@ public class CommunityShareService {
         BigDecimal allPlays = BigDecimal.ZERO;
         for (Weight w : weights) allPlays = allPlays.add(w.weight());
 
-        Set<UUID> canEarn = loadEarners();
         Map<UUID, Chain> chains = loadChains();
 
         // Each listener's part of the month's revenue.
@@ -224,9 +287,84 @@ public class CommunityShareService {
             earners.add(en.earnerId());
             paid = paid.add(en.amount());
         }
+        for (Entry en : plus.entries()) earners.add(en.earnerId());
 
+        List<Entry> all = new ArrayList<>(entries);
+        all.addAll(plus.entries());
         return new Plan(month, ad, other, fee, total, allPlays, listenerPart.size(), earners.size(),
-                paid, total.subtract(paid), byStream, entries);
+                paid, total.subtract(paid), byStream, all, plus.income(), plus.toArtists(), plus.invoiceIds());
+    }
+
+    /**
+     * Unis Plus for a close: every paid, unsettled payment made before the
+     * month ended. 60% of each (after Stripe's fees) is split across the
+     * artists that subscriber played this month, by counted plays; if they
+     * played no one it goes to the artist they supported when they paid.
+     * Parts for artists who can't be paid stay with Unis.
+     */
+    private PlusResult planPlus(LocalDateTime[] range, Set<UUID> canEarn) {
+        Timestamp end = Timestamp.valueOf(range[1]);
+        List<PlusPayment> payments = jdbc.query("""
+                SELECT invoice_id, user_id, supported_artist_id, net_amount FROM plus_payments
+                WHERE status = 'paid' AND settled_close_id IS NULL AND paid_at < ?
+                ORDER BY paid_at
+                """, (rs, i) -> new PlusPayment(
+                        rs.getString("invoice_id"),
+                        rs.getObject("user_id", UUID.class),
+                        rs.getObject("supported_artist_id", UUID.class),
+                        BigDecimal.valueOf(rs.getInt("net_amount"), 2)), end);
+        if (payments.isEmpty()) {
+            return new PlusResult(List.of(), BigDecimal.ZERO, BigDecimal.ZERO, List.of());
+        }
+
+        Map<UUID, BigDecimal> netByUser = new LinkedHashMap<>();
+        Map<UUID, UUID> fallbackArtist = new HashMap<>();
+        List<String> invoices = new ArrayList<>();
+        BigDecimal income = BigDecimal.ZERO;
+        for (PlusPayment p : payments) {
+            netByUser.merge(p.userId(), p.net(), BigDecimal::add);
+            if (p.supportedArtistId() != null) fallbackArtist.put(p.userId(), p.supportedArtistId());
+            invoices.add(p.invoiceId());
+            income = income.add(p.net());
+        }
+
+        Map<UUID, List<ArtistWeight>> weights = new HashMap<>();
+        jdbc.query(PLUS_WEIGHT_SQL, rs -> {
+            ArtistWeight w = new ArtistWeight(rs.getObject("user_id", UUID.class),
+                    rs.getObject("artist_id", UUID.class), rs.getBigDecimal("weight"));
+            weights.computeIfAbsent(w.listenerId(), k -> new ArrayList<>()).add(w);
+        }, end, ZoneId.systemDefault().getId(), Timestamp.valueOf(range[0]), end, DAILY_PLAY_CAP, DAILY_PLAY_CAP);
+
+        List<Entry> entries = new ArrayList<>();
+        BigDecimal toArtists = BigDecimal.ZERO;
+        for (Map.Entry<UUID, BigDecimal> e : netByUser.entrySet()) {
+            UUID subscriber = e.getKey();
+            BigDecimal pool = e.getValue().multiply(PLUS_ARTIST_RATE);
+            List<ArtistWeight> ws = weights.getOrDefault(subscriber, List.of());
+            BigDecimal totalWeight = BigDecimal.ZERO;
+            for (ArtistWeight w : ws) totalWeight = totalWeight.add(w.weight());
+
+            if (totalWeight.signum() > 0) {
+                for (ArtistWeight w : ws) {
+                    UUID artist = w.artistId();
+                    if (artist == null || artist.equals(subscriber) || !canEarn.contains(artist)) continue;
+                    BigDecimal amount = cents6(pool.multiply(w.weight()).divide(totalWeight, 12, RoundingMode.DOWN));
+                    if (amount.signum() <= 0) continue;
+                    entries.add(new Entry(artist, "plus_artist", subscriber, w.weight(), amount));
+                    toArtists = toArtists.add(amount);
+                }
+            } else {
+                UUID artist = fallbackArtist.get(subscriber);
+                if (artist != null && !artist.equals(subscriber) && canEarn.contains(artist)) {
+                    BigDecimal amount = cents6(pool);
+                    if (amount.signum() > 0) {
+                        entries.add(new Entry(artist, "plus_artist", subscriber, BigDecimal.ZERO, amount));
+                        toArtists = toArtists.add(amount);
+                    }
+                }
+            }
+        }
+        return new PlusResult(entries, income, toArtists, invoices);
     }
 
     private static void addReferral(List<Entry> entries, Set<UUID> canEarn, UUID earner, UUID listener,
@@ -257,6 +395,11 @@ public class CommunityShareService {
                     rs.getObject("l3", UUID.class)));
         });
         return chains;
+    }
+
+    /** Local sponsors paid during the month, after Stripe's card fee: the starting "other income". */
+    public BigDecimal suggestedOtherIncome(YearMonth month) {
+        return sponsors.suggestedIncome(month);
     }
 
     /**
@@ -309,13 +452,15 @@ public class CommunityShareService {
         UUID closeId = jdbc.queryForObject("""
                 INSERT INTO community_share_closes
                     (period_month, ad_income, other_income, fee_income, total_revenue, counted_plays,
-                     listeners, earners, paid_to_community, kept_by_unis, note, closed_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     listeners, earners, paid_to_community, kept_by_unis, note, closed_by,
+                     plus_income, plus_to_artists)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING close_id
                 """, UUID.class,
                 Date.valueOf(period), plan.adIncome(), plan.otherIncome(), plan.feeIncome(), plan.totalRevenue(),
                 plan.countedPlays().setScale(2, RoundingMode.HALF_UP), plan.listeners(), plan.earners(),
-                plan.paidToCommunity(), plan.keptByUnis(), blankToNull(note), adminId);
+                plan.paidToCommunity(), plan.keptByUnis(), blankToNull(note), adminId,
+                plan.plusIncome(), plan.plusToArtists());
 
         List<Object[]> rows = new ArrayList<>(plan.entries().size());
         for (Entry e : plan.entries()) {
@@ -328,6 +473,14 @@ public class CommunityShareService {
                     (user_id, period_month, stream, source_user_id, counted_plays, amount, close_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, rows);
+
+        // The Unis Plus payments this close paid out, so the next close skips them.
+        if (!plan.plusInvoiceIds().isEmpty()) {
+            List<Object[]> settled = new ArrayList<>();
+            for (String invoice : plan.plusInvoiceIds()) settled.add(new Object[] { closeId, invoice });
+            jdbc.batchUpdate("UPDATE plus_payments SET settled_close_id = ? WHERE invoice_id = ? AND settled_close_id IS NULL",
+                    settled);
+        }
 
         log.info("[CommunityShare] action=close month={} revenue={} plays={} listeners={} earners={} paid={} kept={} by={}",
                 month, plan.totalRevenue(), plan.countedPlays().setScale(0, RoundingMode.HALF_UP),
@@ -348,7 +501,7 @@ public class CommunityShareService {
         return jdbc.query("""
                 SELECT c.close_id, c.period_month, c.ad_income, c.other_income, c.fee_income, c.total_revenue,
                        c.counted_plays, c.listeners, c.earners, c.paid_to_community, c.kept_by_unis, c.note,
-                       c.closed_at, u.username AS closed_by
+                       c.closed_at, u.username AS closed_by, c.plus_income, c.plus_to_artists
                 FROM community_share_closes c
                 LEFT JOIN users u ON u.user_id = c.closed_by
                 ORDER BY c.period_month DESC
@@ -365,6 +518,8 @@ public class CommunityShareService {
             m.put("earners", rs.getInt("earners"));
             m.put("paidToCommunity", rs.getBigDecimal("paid_to_community").setScale(2, RoundingMode.HALF_UP));
             m.put("keptByUnis", rs.getBigDecimal("kept_by_unis").setScale(2, RoundingMode.HALF_UP));
+            m.put("plusIncome", rs.getBigDecimal("plus_income").setScale(2, RoundingMode.HALF_UP));
+            m.put("plusToArtists", rs.getBigDecimal("plus_to_artists").setScale(2, RoundingMode.HALF_UP));
             m.put("note", rs.getString("note"));
             m.put("closedAt", rs.getTimestamp("closed_at").toLocalDateTime().toString());
             m.put("closedBy", rs.getString("closed_by"));
