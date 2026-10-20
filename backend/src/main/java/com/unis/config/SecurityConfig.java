@@ -97,6 +97,7 @@ public class SecurityConfig {
                 // Community Share: anyone admin can look; only super admins move money
                 // (closing a month, adjusting a balance).
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/earnings/**").hasRole("SUPER_ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/v1/admin/earnings/tax-report").hasRole("SUPER_ADMIN")
 
                 // Everything else under /admin needs at least ADMIN. This catch-all
                 // must come AFTER the specific rules above: Spring uses the first

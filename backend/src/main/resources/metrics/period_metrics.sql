@@ -46,12 +46,17 @@ anon AS (
     SELECT * FROM anonymous_plays WHERE played_at >= :mstart AND played_at < :mend
 ),
 -- Payments made in the period by accounts that count (any status).
+-- card_fee is Stripe's card fee on the payment (2.9% rounded up + 30¢, the same
+-- sum as PlatformFees.stripeCardFeeCents). Unis pays it out of its platform
+-- fee, so what Unis actually keeps from a payment is platform_fee - card_fee.
 pay_all AS (
-    SELECT 'download' AS kind, p.buyer_id AS payer_id, p.artist_id, p.amount, p.platform_fee, p.status
+    SELECT 'download' AS kind, p.buyer_id AS payer_id, p.artist_id, p.amount, p.platform_fee, p.status,
+           (p.amount * 29 + 999) / 1000 + 30 AS card_fee
     FROM purchases p JOIN users u ON u.user_id = p.buyer_id
     WHERE p.created_at >= :mstart AND p.created_at < :mend AND u.exclude_from_metrics = FALSE
     UNION ALL
-    SELECT 'support', s.supporter_id, s.artist_id, s.amount, s.platform_fee, s.status
+    SELECT 'support', s.supporter_id, s.artist_id, s.amount, s.platform_fee, s.status,
+           (s.amount * 29 + 999) / 1000 + 30
     FROM support_payments s JOIN users u ON u.user_id = s.supporter_id
     WHERE s.created_at >= :mstart AND s.created_at < :mend AND u.exclude_from_metrics = FALSE
 ),
@@ -137,15 +142,18 @@ prev_artists AS (
       AND CAST((a.created_at AT TIME ZONE :dbtz AT TIME ZONE 'America/New_York') AS DATE) BETWEEN :prev_first AND :prev_last
 ),
 fees AS (SELECT COALESCE(SUM(platform_fee), 0) AS cents FROM pay),
+-- Stripe's card fees on those payments, and what Unis kept after paying them.
+card_fees AS (SELECT COALESCE(SUM(card_fee), 0) AS cents FROM pay),
+fee_margin AS (SELECT COALESCE(SUM(platform_fee - card_fee), 0) AS cents FROM pay),
 -- What Unis kept of its ad and other income after paying the Community Share
 -- (the share is funded by all income, fees included, so this can dip below
 -- zero in a month with almost no ad income; net revenue below still adds up).
 ad_unis AS (SELECT ad_cents + other_cents - paid_cents AS cents FROM cs),
--- Fees follow the payer's area. Community Share income isn't tied to one
--- area, so it's reported under "none".
+-- Fees (after card fees) follow the payer's area. Community Share income
+-- isn't tied to one area, so it's reported under "none".
 area_rev AS (
     SELECT area, SUM(cents) AS cents FROM (
-        SELECT payer_area AS area, platform_fee AS cents FROM payer_info WHERE payer_band <> '13-17'
+        SELECT payer_area AS area, platform_fee - card_fee AS cents FROM payer_info WHERE payer_band <> '13-17'
         UNION ALL
         SELECT CAST(NULL AS uuid), cents FROM ad_unis
     ) x GROUP BY area
@@ -277,6 +285,7 @@ SELECT k AS metric_key, st AS segment_type, sv AS segment_value, v AS value FROM
     UNION ALL SELECT 'gpv_cents', 'all', 'all', COALESCE(SUM(amount), 0) FROM pay
     UNION ALL SELECT 'gpv_cents', 'kind', kind, COALESCE(SUM(amount), 0) FROM pay GROUP BY kind
     UNION ALL SELECT 'platform_fee_cents', 'all', 'all', cents FROM fees
+    UNION ALL SELECT 'card_fees_cents', 'all', 'all', cents FROM card_fees
     UNION ALL SELECT 'payments', 'all', 'all', COUNT(*) FROM pay
     UNION ALL SELECT 'payments_made', 'all', 'all', COUNT(*) FROM pay_all
     UNION ALL SELECT 'payments_made_cents', 'all', 'all', COALESCE(SUM(amount), 0) FROM pay_all
@@ -291,7 +300,7 @@ SELECT k AS metric_key, st AS segment_type, sv AS segment_value, v AS value FROM
     UNION ALL SELECT 'ad_unis_share_cents', 'all', 'all', cents FROM ad_unis
     UNION ALL SELECT 'ad_artist_share_cents', 'all', 'all', artist_cents FROM cs_streams
     UNION ALL SELECT 'ad_referrer_share_cents', 'all', 'all', referrer_cents FROM cs_streams
-    UNION ALL SELECT 'net_revenue_cents', 'all', 'all', (SELECT cents FROM fees) + (SELECT cents FROM ad_unis)
+    UNION ALL SELECT 'net_revenue_cents', 'all', 'all', (SELECT cents FROM fee_margin) + (SELECT cents FROM ad_unis)
     UNION ALL SELECT 'net_revenue_cents', 'area', COALESCE(area::text, 'none'), cents FROM area_rev
     UNION ALL SELECT 'artist_earnings_cents', 'all', 'all',
               COALESCE((SELECT SUM(amount - COALESCE(platform_fee, 0)) FROM pay), 0)

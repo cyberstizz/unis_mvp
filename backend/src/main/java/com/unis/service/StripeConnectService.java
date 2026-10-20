@@ -21,6 +21,9 @@ import java.util.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Service
 @Transactional
@@ -35,6 +38,11 @@ public class StripeConnectService {
     @Autowired
     private EarningsService earningsService;
 
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    private static final Logger log = LoggerFactory.getLogger(StripeConnectService.class);
+
     @Value("${stripe.secret.key}")
     private String stripeSecretKey;
 
@@ -45,6 +53,13 @@ public class StripeConnectService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final BigDecimal PAYOUT_THRESHOLD = new BigDecimal("50.00");
+
+    // Everyone's Stripe balance (song sales, support, Community Share
+    // withdrawals) goes to their bank once a month, on this day. Stripe charges
+    // Unis $2 for each account it pays out to in a month plus a fee per payout,
+    // so one payout a month keeps that to a single charge per person. Unis
+    // covers it.
+    private static final int MONTHLY_PAYOUT_DAY = 1;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ACCOUNT CREATION — Create a Stripe Express connected account
@@ -93,7 +108,80 @@ public class StripeConnectService {
         user.setStripeOnboardingComplete(false);
         userRepository.save(user);
 
+        // Monthly payouts. Not fatal: if Stripe refuses, the account still
+        // works (on Stripe's default daily schedule) and the admin
+        // "monthly payouts" button can apply it later.
+        applyMonthlyPayoutSchedule(stripeAccountId);
+
         return stripeAccountId;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PAYOUT SCHEDULE — once a month, on the 1st
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Sets one connected account to be paid out monthly. Returns null on success, or Stripe's error. */
+    public String applyMonthlyPayoutSchedule(String stripeAccountId) {
+        try {
+            String formBody = "settings[payouts][schedule][interval]=monthly"
+                    + "&settings[payouts][schedule][monthly_anchor]=" + MONTHLY_PAYOUT_DAY;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.stripe.com/v1/accounts/" + stripeAccountId))
+                    .header("Authorization", "Bearer " + stripeSecretKey)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 300) {
+                String message = stripeErrorMessage(response.body());
+                log.warn("[Payouts] action=monthly_schedule account={} status=error code={} err={}",
+                        stripeAccountId, response.statusCode(), message);
+                return message;
+            }
+            log.info("[Payouts] action=monthly_schedule account={} status=ok", stripeAccountId);
+            return null;
+        } catch (Exception e) {
+            log.warn("[Payouts] action=monthly_schedule account={} status=error err={}", stripeAccountId, e.getMessage());
+            return e.getMessage() == null ? "Couldn't reach Stripe." : e.getMessage();
+        }
+    }
+
+    /** Applies the monthly schedule to every existing connected account (admin button). */
+    public Map<String, Object> applyMonthlyPayoutScheduleToAll() {
+        List<Map<String, Object>> accounts = jdbc.queryForList(
+                "SELECT username, stripe_account_id FROM users"
+                + " WHERE stripe_account_id IS NOT NULL AND stripe_account_id <> '' AND deleted_at IS NULL"
+                + " ORDER BY username");
+        int updated = 0;
+        List<Map<String, Object>> failures = new ArrayList<>();
+        for (Map<String, Object> a : accounts) {
+            String error = applyMonthlyPayoutSchedule(String.valueOf(a.get("stripe_account_id")));
+            if (error == null) {
+                updated++;
+            } else {
+                Map<String, Object> f = new LinkedHashMap<>();
+                f.put("username", a.get("username"));
+                f.put("error", error);
+                failures.add(f);
+            }
+        }
+        log.info("[Payouts] action=monthly_schedule_all accounts={} updated={} failed={}",
+                accounts.size(), updated, failures.size());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("accounts", accounts.size());
+        result.put("updated", updated);
+        result.put("failed", failures.size());
+        result.put("failures", failures);
+        return result;
+    }
+
+    private String stripeErrorMessage(String body) {
+        try {
+            String msg = objectMapper.readTree(body).path("error").path("message").asText("");
+            return msg.isBlank() ? "Stripe refused the change." : msg;
+        } catch (Exception e) {
+            return "Stripe refused the change.";
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

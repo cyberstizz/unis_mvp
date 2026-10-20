@@ -28,7 +28,10 @@ activity AS (
     WHERE activity_date BETWEEN :first AND :last GROUP BY user_id
 ),
 paid AS (
-    SELECT payer_id, SUM(amount) AS gpv, SUM(COALESCE(platform_fee, 0)) AS fees FROM (
+    -- fees = what Unis kept after Stripe's card fee on each payment (2.9%
+    -- rounded up + 30¢, the same sum as PlatformFees.stripeCardFeeCents).
+    SELECT payer_id, SUM(amount) AS gpv,
+           SUM(COALESCE(platform_fee, 0) - ((amount * 29 + 999) / 1000 + 30)) AS fees FROM (
         SELECT buyer_id AS payer_id, amount, platform_fee FROM purchases WHERE status = 'completed' AND created_at < :mend
         UNION ALL
         SELECT supporter_id, amount, platform_fee FROM support_payments WHERE status = 'completed' AND created_at < :mend

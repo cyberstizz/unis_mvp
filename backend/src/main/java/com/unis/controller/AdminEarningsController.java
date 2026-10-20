@@ -2,6 +2,8 @@ package com.unis.controller;
 
 import com.unis.service.CommunityShareService;
 import com.unis.service.ModerationService;
+import com.unis.service.StripeConnectService;
+import com.unis.service.TaxReportService;
 import com.unis.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,10 +27,13 @@ import java.util.UUID;
  *   POST /api/v1/admin/earnings/close           close a month: credits everyone's balance
  *   GET  /api/v1/admin/earnings/adjustments     recent manual adjustments
  *   POST /api/v1/admin/earnings/adjustments     add one
+ *   POST /api/v1/admin/earnings/payout-schedule put every Stripe account on monthly payouts
+ *   GET  /api/v1/admin/earnings/tax-report      what each person was paid in a tax year (1099s)
  *
- * Reading: admin and super admin (SecurityConfig's /api/v1/admin/** rule).
- * Anything that moves money (POST): super admin only. Every POST is written to
- * the audit log.
+ * Reading: admin and super admin (SecurityConfig's /api/v1/admin/** rule),
+ * except the tax report (names, emails, money): super admin only. Anything that
+ * moves money or changes Stripe (POST): super admin only. Every POST and every
+ * tax report is written to the audit log.
  */
 @RestController
 @RequestMapping("/api/v1/admin/earnings")
@@ -38,6 +43,8 @@ public class AdminEarningsController {
 
     @Autowired private CommunityShareService communityShareService;
     @Autowired private ModerationService moderationService;
+    @Autowired private StripeConnectService stripeConnectService;
+    @Autowired private TaxReportService taxReportService;
 
     // GET /api/v1/admin/earnings/closes
     @GetMapping("/closes")
@@ -113,6 +120,33 @@ public class AdminEarningsController {
             moderationService.logAction(by, "earnings_adjusted", "user", (UUID) result.get("userId"),
                     note, "Amount: $" + result.get("amount"));
             return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return bad(e.getMessage());
+        }
+    }
+
+    // POST /api/v1/admin/earnings/payout-schedule
+    // Puts every existing Stripe account on one payout a month (the 1st). New
+    // accounts get it when they're created. Safe to press again.
+    @PostMapping("/payout-schedule")
+    public ResponseEntity<?> monthlyPayouts() {
+        UUID by = SecurityUtils.getAuthenticatedUserId();
+        Map<String, Object> result = stripeConnectService.applyMonthlyPayoutScheduleToAll();
+        moderationService.logAction(by, "payout_schedule_monthly", "earnings", auditTarget("payout-schedule"),
+                "Monthly payouts applied", "Accounts " + result.get("accounts") + " · updated " + result.get("updated")
+                        + " · failed " + result.get("failed"));
+        return ResponseEntity.ok(result);
+    }
+
+    // GET /api/v1/admin/earnings/tax-report?year=2026
+    @GetMapping("/tax-report")
+    public ResponseEntity<?> taxReport(@RequestParam int year) {
+        UUID by = SecurityUtils.getAuthenticatedUserId();
+        try {
+            Map<String, Object> report = taxReportService.report(year);
+            moderationService.logAction(by, "tax_report_viewed", "earnings", auditTarget("tax-" + year),
+                    "Tax year report " + year, "People: " + ((Map<?, ?>) report.get("summary")).get("people"));
+            return ResponseEntity.ok(report);
         } catch (IllegalArgumentException e) {
             return bad(e.getMessage());
         }
