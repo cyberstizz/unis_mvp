@@ -18,13 +18,14 @@ import java.util.UUID;
  * SupportedArtistScheduler -- promotes queued supported-artist changes to
  * effective at the month boundary.
  *
- * WHY THIS IS SAFE: earnings attribution snapshots the supported artist onto
- * each ad_view row at view time (see EarningsService.trackAdView), and every
- * earnings query sums ad_views.supported_artist_id -- never re-reading
- * users.supported_artist_id at payout. So flipping the effective artist here
- * has NO retroactive effect: the departing artist keeps every cent earned
- * while they were effective. No "close earnings before promote" ordering is
- * required; this job can run independently of any payout job.
+ * WHY THIS IS SAFE: every play stamps the listener's supported artist onto the
+ * song_plays row at play time (MediaService.playSong), and the monthly
+ * Community Share pays the artist stamped on each play -- never re-reading
+ * users.supported_artist_id when the month is closed. So flipping the
+ * effective artist here has NO retroactive effect: the departing artist keeps
+ * the share of every play made while they were effective. No "close the month
+ * before promote" ordering is required; this job runs independently of the
+ * close.
  *
  * Side effects deferred to promotion (NOT done at selection time for a change):
  *   - create the Supporter row for the new pairing

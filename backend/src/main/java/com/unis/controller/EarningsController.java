@@ -18,24 +18,21 @@ public class EarningsController {
     private EarningsService earningsService;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // AD VIEW TRACKING
+    // AD VIEW TRACKING — retired
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * POST /api/v1/earnings/track-view
-     * Called by the frontend when a user sees a display ad.
-     * Uses JWT to identify the viewer — no client-supplied userId.
+     * POST /api/v1/earnings/track-view — no longer records anything.
+     *
+     * Ad views used to credit the viewer's supported artist and referrers.
+     * Google's ad rules forbid paying anyone because ads were viewed, so the
+     * money now follows listening through the monthly Community Share. The
+     * endpoint stays (answering "not tracked") so app builds that still call
+     * it don't show errors.
      */
     @PostMapping("/track-view")
     public ResponseEntity<?> trackAdView() {
-        try {
-            UUID userId = SecurityUtils.getAuthenticatedUserId();
-            earningsService.trackAdView(userId);
-            return ResponseEntity.ok(Map.of("tracked", true));
-        } catch (Exception e) {
-            // Silent failure — ad tracking should never block the user experience
-            return ResponseEntity.ok(Map.of("tracked", false));
-        }
+        return ResponseEntity.ok(Map.of("tracked", false, "retired", true));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -44,9 +41,8 @@ public class EarningsController {
 
     /**
      * GET /api/v1/earnings/my-summary
-     * Returns the authenticated user's complete earnings summary.
-     * Works for both listeners (referral earnings only) and
-     * artists (referral + supporter earnings).
+     * The signed-in person's earnings: balance, lifetime and last closed
+     * month by level, and this month's listening so far in their network.
      */
     @GetMapping("/my-summary")
     public ResponseEntity<?> getMySummary() {
@@ -62,8 +58,8 @@ public class EarningsController {
 
     /**
      * GET /api/v1/earnings/my-referrals
-     * Returns a list of the user's referrals with their individual
-     * ad view counts and earnings contributions.
+     * The people this user invited directly: plays this month and what their
+     * listening has earned this user at level 1.
      */
     @GetMapping("/my-referrals")
     public ResponseEntity<?> getMyReferrals() {
@@ -78,16 +74,18 @@ public class EarningsController {
     }
 
     /**
-     * GET /api/v1/earnings/my-history?days=30
-     * Returns daily earnings breakdown for charting.
-     * Each entry contains referral earnings, supporter earnings, and total.
+     * GET /api/v1/earnings/my-history?months=12
+     * Month-by-month earnings for the chart, oldest first. The current month
+     * shows 0 until it's closed. (Older app builds send ?days=30; that's
+     * turned into a number of months.)
      */
     @GetMapping("/my-history")
-    public ResponseEntity<?> getMyHistory(@RequestParam(defaultValue = "30") int days) {
+    public ResponseEntity<?> getMyHistory(
+            @RequestParam(required = false) Integer months,
+            @RequestParam(required = false) Integer days) {
         try {
             UUID userId = SecurityUtils.getAuthenticatedUserId();
-            List<Map<String, Object>> history = earningsService.getDailyHistory(userId, days);
-            return ResponseEntity.ok(history);
+            return ResponseEntity.ok(earningsService.getMonthlyHistory(userId, monthsFrom(months, days)));
         } catch (Exception e) {
             return ResponseEntity.status(500)
                     .body(Map.of("error", "Failed to load history: " + e.getMessage()));
@@ -99,17 +97,18 @@ public class EarningsController {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * GET /api/v1/earnings/{artistId}?days=30
-     * Original artist-specific endpoint.
+     * GET /api/v1/earnings/{artistId}?months=12
+     * Original artist-specific endpoint; now monthly like /my-history.
      */
     @GetMapping("/{artistId}")
     public ResponseEntity<?> getEarnings(
             @PathVariable UUID artistId,
-            @RequestParam(defaultValue = "30") int days) {
+            @RequestParam(required = false) Integer months,
+            @RequestParam(required = false) Integer days) {
         if (!isSelfOrAdmin(artistId)) {
             return ResponseEntity.status(403).body(Map.of("error", "You can only see your own earnings"));
         }
-        List<Map<String, Object>> history = earningsService.getDailyHistory(artistId, Math.min(Math.max(days, 1), 366));
+        List<Map<String, Object>> history = earningsService.getMonthlyHistory(artistId, monthsFrom(months, days));
         return ResponseEntity.ok(history);
     }
 
@@ -126,6 +125,13 @@ public class EarningsController {
         }
         Map<String, Object> summary = earningsService.getEarningsSummary(artistId);
         return ResponseEntity.ok(summary);
+    }
+
+    /** ?months wins; otherwise ?days rounded up to months; otherwise 12. */
+    private static int monthsFrom(Integer months, Integer days) {
+        if (months != null) return Math.max(1, Math.min(months, 24));
+        if (days != null) return Math.max(1, Math.min((days + 29) / 30, 24));
+        return 12;
     }
 
     /**

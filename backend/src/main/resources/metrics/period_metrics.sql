@@ -58,16 +58,22 @@ pay_all AS (
 pay AS (
     SELECT * FROM pay_all WHERE status = 'completed'
 ),
-ads AS (
-    SELECT av.*, u.jurisdiction_id AS viewer_area, unis_age_band(u.date_of_birth, :last) AS viewer_band,
-           COALESCE(av.revenue_share, 0.0035) * 100 AS rev_cents,
-           COALESCE(av.revenue_share, 0.0035) * 100 * (1
-             - CASE WHEN av.supported_artist_id IS NOT NULL THEN 0.15 ELSE 0 END
-             - CASE WHEN av.referred_artist_id  IS NOT NULL THEN 0.10 ELSE 0 END
-             - CASE WHEN av.referrer_level2_id  IS NOT NULL THEN 0.05 ELSE 0 END
-             - CASE WHEN av.referrer_level3_id  IS NOT NULL THEN 0.02 ELSE 0 END) AS unis_cents
-    FROM ad_views av JOIN users u ON u.user_id = av.user_id
-    WHERE av.viewed_at >= :mstart AND av.viewed_at < :mend AND u.exclude_from_metrics = FALSE
+-- Community Share: real income from months closed in Admin → Community Share
+-- (replaces ad views priced at an estimated $3.50 per 1,000). A closed month
+-- counts when its first day falls inside the period.
+cs AS (
+    SELECT COALESCE(SUM(counted_plays), 0) AS counted_plays,
+           COALESCE(SUM(ad_income), 0) * 100 AS ad_cents,
+           COALESCE(SUM(other_income), 0) * 100 AS other_cents,
+           COALESCE(SUM(paid_to_community), 0) * 100 AS paid_cents
+    FROM community_share_closes WHERE period_month BETWEEN :first AND :last
+),
+cs_streams AS (
+    SELECT COALESCE(SUM(l.amount) FILTER (WHERE l.stream = 'supporter'), 0) * 100 AS artist_cents,
+           COALESCE(SUM(l.amount) FILTER (WHERE l.stream LIKE 'referral%'), 0) * 100 AS referrer_cents
+    FROM earnings_ledger l
+    JOIN community_share_closes c ON c.close_id = l.close_id
+    WHERE c.period_month BETWEEN :first AND :last
 ),
 payer_info AS (
     SELECT p.*, u.jurisdiction_id AS payer_area, unis_age_band(u.date_of_birth, :last) AS payer_band,
@@ -131,12 +137,17 @@ prev_artists AS (
       AND CAST((a.created_at AT TIME ZONE :dbtz AT TIME ZONE 'America/New_York') AS DATE) BETWEEN :prev_first AND :prev_last
 ),
 fees AS (SELECT COALESCE(SUM(platform_fee), 0) AS cents FROM pay),
-ad_unis AS (SELECT COALESCE(SUM(unis_cents), 0) AS cents FROM ads),
+-- What Unis kept of its ad and other income after paying the Community Share
+-- (the share is funded by all income, fees included, so this can dip below
+-- zero in a month with almost no ad income; net revenue below still adds up).
+ad_unis AS (SELECT ad_cents + other_cents - paid_cents AS cents FROM cs),
+-- Fees follow the payer's area. Community Share income isn't tied to one
+-- area, so it's reported under "none".
 area_rev AS (
     SELECT area, SUM(cents) AS cents FROM (
         SELECT payer_area AS area, platform_fee AS cents FROM payer_info WHERE payer_band <> '13-17'
         UNION ALL
-        SELECT viewer_area, unis_cents FROM ads WHERE viewer_band <> '13-17'
+        SELECT CAST(NULL AS uuid), cents FROM ad_unis
     ) x GROUP BY area
 )
 SELECT k AS metric_key, st AS segment_type, sv AS segment_value, v AS value FROM (
@@ -272,17 +283,19 @@ SELECT k AS metric_key, st AS segment_type, sv AS segment_value, v AS value FROM
     UNION ALL SELECT 'refunded_payments', 'all', 'all', COUNT(*) FROM pay_all WHERE status IN ('refunded', 'disputed')
     UNION ALL SELECT 'refunded_cents', 'all', 'all', COALESCE(SUM(amount), 0) FROM pay_all WHERE status IN ('refunded', 'disputed')
     UNION ALL SELECT 'paying_users', 'all', 'all', COUNT(DISTINCT payer_id) FROM pay
-    UNION ALL SELECT 'ad_views', 'all', 'all', COUNT(*) FROM ads
-    UNION ALL SELECT 'ad_revenue_cents', 'all', 'all', COALESCE(SUM(rev_cents), 0) FROM ads
+    -- Community Share (key names kept from the ad-view era): counted plays
+    -- behind the share, ad income received, Unis's keep, and what went to
+    -- supported artists and referrers.
+    UNION ALL SELECT 'ad_views', 'all', 'all', counted_plays FROM cs
+    UNION ALL SELECT 'ad_revenue_cents', 'all', 'all', ad_cents FROM cs
     UNION ALL SELECT 'ad_unis_share_cents', 'all', 'all', cents FROM ad_unis
-    UNION ALL SELECT 'ad_artist_share_cents', 'all', 'all', COALESCE(SUM(rev_cents * 0.15) FILTER (WHERE supported_artist_id IS NOT NULL), 0) FROM ads
-    UNION ALL SELECT 'ad_referrer_share_cents', 'all', 'all', COALESCE(SUM(rev_cents - unis_cents), 0)
-              - COALESCE(SUM(rev_cents * 0.15) FILTER (WHERE supported_artist_id IS NOT NULL), 0) FROM ads
+    UNION ALL SELECT 'ad_artist_share_cents', 'all', 'all', artist_cents FROM cs_streams
+    UNION ALL SELECT 'ad_referrer_share_cents', 'all', 'all', referrer_cents FROM cs_streams
     UNION ALL SELECT 'net_revenue_cents', 'all', 'all', (SELECT cents FROM fees) + (SELECT cents FROM ad_unis)
     UNION ALL SELECT 'net_revenue_cents', 'area', COALESCE(area::text, 'none'), cents FROM area_rev
     UNION ALL SELECT 'artist_earnings_cents', 'all', 'all',
               COALESCE((SELECT SUM(amount - COALESCE(platform_fee, 0)) FROM pay), 0)
-              + COALESCE((SELECT SUM(rev_cents * 0.15) FROM ads WHERE supported_artist_id IS NOT NULL), 0)
+              + (SELECT artist_cents FROM cs_streams)
     UNION ALL SELECT 'payouts_sent', 'all', 'all', COUNT(*) FROM payouts
               WHERE status = 'completed' AND completed_at >= :mstart AND completed_at < :mend
     UNION ALL SELECT 'payouts_sent_cents', 'all', 'all', COALESCE(SUM(amount) * 100, 0) FROM payouts

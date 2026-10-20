@@ -94,6 +94,9 @@ public class SecurityConfig {
                 // past days or reopening a locked month: super admins only.
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/metrics/rebuild").hasRole("SUPER_ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/metrics/close").hasRole("SUPER_ADMIN")
+                // Community Share: anyone admin can look; only super admins move money
+                // (closing a month, adjusting a balance).
+                .requestMatchers(HttpMethod.POST, "/api/v1/admin/earnings/**").hasRole("SUPER_ADMIN")
 
                 // Everything else under /admin needs at least ADMIN. This catch-all
                 // must come AFTER the specific rules above: Spring uses the first

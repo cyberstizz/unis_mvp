@@ -31,10 +31,6 @@ pay AS (
     UNION ALL
     SELECT s.amount, s.platform_fee FROM support_payments s JOIN users u ON u.user_id = s.supporter_id
     WHERE s.created_at >= :dstart AND s.created_at < :dend AND s.status = 'completed' AND u.exclude_from_metrics = FALSE
-),
-ads AS (
-    SELECT av.* FROM ad_views av JOIN users u ON u.user_id = av.user_id
-    WHERE av.viewed_at >= :dstart AND av.viewed_at < :dend AND u.exclude_from_metrics = FALSE
 )
 INSERT INTO metric_daily (metric_date, metric_key, segment_type, segment_value, value)
 SELECT CAST(:d AS DATE), k, st, sv, v FROM (
@@ -95,11 +91,10 @@ SELECT CAST(:d AS DATE), k, st, sv, v FROM (
     UNION ALL
     SELECT 'platform_fee_cents', 'all', 'all', COALESCE(SUM(platform_fee), 0) FROM pay
     UNION ALL
-    SELECT 'ad_views', 'all', 'all', COUNT(*) FROM ads
+    -- Ad income is only known per month, when the month is closed in Admin →
+    -- Community Share (see period_metrics.sql). Ad views are no longer
+    -- recorded. Both rows stay at 0 so daily charts keep their shape.
+    SELECT 'ad_views', 'all', 'all', 0
     UNION ALL
-    SELECT 'ad_unis_share_cents', 'all', 'all', COALESCE(SUM(COALESCE(revenue_share, 0.0035) * 100 * (1
-            - CASE WHEN supported_artist_id IS NOT NULL THEN 0.15 ELSE 0 END
-            - CASE WHEN referred_artist_id  IS NOT NULL THEN 0.10 ELSE 0 END
-            - CASE WHEN referrer_level2_id  IS NOT NULL THEN 0.05 ELSE 0 END
-            - CASE WHEN referrer_level3_id  IS NOT NULL THEN 0.02 ELSE 0 END)), 0) FROM ads
+    SELECT 'ad_unis_share_cents', 'all', 'all', 0
 ) rows

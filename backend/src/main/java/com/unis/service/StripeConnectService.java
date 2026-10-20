@@ -216,11 +216,9 @@ public class StripeConnectService {
             throw new RuntimeException("You already have a payout being processed.");
         }
 
-        // Calculate available balance
-        Map<String, Object> summary = earningsService.getEarningsSummary(userId);
-        BigDecimal totalEarnings = new BigDecimal(summary.get("currentBalance").toString());
-        BigDecimal completedPayouts = payoutRepository.sumCompletedPayouts(userId);
-        BigDecimal availableBalance = totalEarnings.subtract(completedPayouts);
+        // Available = closed Community Share months + adjustments − payouts
+        // already made from them (EarningsService reads the ledger).
+        BigDecimal availableBalance = earningsService.getAvailableBalance(userId);
 
         if (availableBalance.compareTo(PAYOUT_THRESHOLD) < 0) {
             throw new RuntimeException("Minimum payout is $50.00. Current balance: $" + availableBalance.setScale(2, RoundingMode.HALF_UP));

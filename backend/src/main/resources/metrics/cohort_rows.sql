@@ -34,24 +34,17 @@ paid AS (
         SELECT supporter_id, amount, platform_fee FROM support_payments WHERE status = 'completed' AND created_at < :mend
     ) x GROUP BY payer_id
 ),
-ad_share AS (
-    SELECT user_id, SUM(COALESCE(revenue_share, 0.0035) * 100 * (1
-             - CASE WHEN supported_artist_id IS NOT NULL THEN 0.15 ELSE 0 END
-             - CASE WHEN referred_artist_id  IS NOT NULL THEN 0.10 ELSE 0 END
-             - CASE WHEN referrer_level2_id  IS NOT NULL THEN 0.05 ELSE 0 END
-             - CASE WHEN referrer_level3_id  IS NOT NULL THEN 0.02 ELSE 0 END)) AS cents
-    FROM ad_views WHERE viewed_at < :mend GROUP BY user_id
-),
 joined AS (
     SELECT s.cohort_month, s.months_since::int AS months_since, s.role, s.referred,
            (a.user_id IS NOT NULL) AS active,
            COALESCE(a.secs, 0) AS secs,
            COALESCE(p.gpv, 0) AS gpv,
-           COALESCE(p.fees, 0) + COALESCE(ad.cents, 0) AS net
+           -- Fees only: Community Share income is paid per month, not per
+           -- person, so it isn't split across cohorts.
+           COALESCE(p.fees, 0) AS net
     FROM scoped s
     LEFT JOIN activity a ON a.user_id = s.user_id
     LEFT JOIN paid p     ON p.payer_id = s.user_id
-    LEFT JOIN ad_share ad ON ad.user_id = s.user_id
     WHERE s.months_since >= 0
 )
 SELECT cohort_month, months_since, 'all' AS segment_type, 'all' AS segment_value,

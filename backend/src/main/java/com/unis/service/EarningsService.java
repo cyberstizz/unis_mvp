@@ -1,321 +1,260 @@
 package com.unis.service;
 
-import com.unis.entity.AdView;
-import com.unis.entity.User;
-import com.unis.repository.AdViewRepository;
-import com.unis.repository.ReferralRepository;
-import com.unis.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.Date;
+import java.sql.Timestamp;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.*;
 
+/**
+ * What a person has earned on Unis, read from the earnings ledger.
+ *
+ * Supporter and referral money comes from the monthly Community Share
+ * (CommunityShareService): once a month has been closed, everyone's share of
+ * it is a row in earnings_ledger and counts toward their balance. Song sales
+ * and support never pass through here; Stripe pays those straight into the
+ * artist's account.
+ *
+ * Until November 2026 this class credited a share of a simulated $3.50 CPM on
+ * every signed-in ad view. That model is gone: Google's ad rules forbid paying
+ * anyone because ads were viewed, and those balances had no money behind them.
+ * The old ad_views rows are kept for history and count for nothing.
+ *
+ * Balance = everything in the ledger − payouts made from the ledger
+ * (completed or still processing). Payouts made before the change are marked
+ * from_ledger = FALSE and don't count.
+ */
 @Service
-@Transactional
 public class EarningsService {
 
-    @Autowired
-    private AdViewRepository adViewRepository;
+    private final JdbcTemplate jdbc;
+    private final CommunityShareService communityShareService;
 
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private ReferralRepository referralRepository;
-
-    @Autowired
-    private com.unis.repository.PayoutRepository payoutRepository;
+    public EarningsService(JdbcTemplate jdbc, CommunityShareService communityShareService) {
+        this.jdbc = jdbc;
+        this.communityShareService = communityShareService;
+    }
 
     /** Smallest payout Stripe Connect sends (StripeConnectService uses the same $50). */
     public static final BigDecimal PAYOUT_THRESHOLD = new BigDecimal("50.00");
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // CONSTANTS — Display Ad Revenue Split
-    //
-    // Per ad view, the total revenue (CPM/1000) is split:
-    //   Supported Artist:  15%
-    //   Level 1 Referrer:  10%
-    //   Level 2 Referrer:   5%
-    //   Level 3 Referrer:   2%
-    //   Unis:              68% (base) + unclaimed referral shares
-    //
-    // Total always = 100%. If a referral level doesn't exist, that
-    // share goes to Unis (not redistributed).
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private static final BigDecimal CPM = new BigDecimal("3.50");
-    private static final BigDecimal REVENUE_PER_VIEW = CPM.divide(
-            new BigDecimal("1000"), 10, RoundingMode.HALF_UP); // $0.0035
-
-    private static final BigDecimal SUPPORTER_RATE = new BigDecimal("0.15");  // 15%
-    private static final BigDecimal LEVEL1_RATE = new BigDecimal("0.10");     // 10%
-    private static final BigDecimal LEVEL2_RATE = new BigDecimal("0.05");     // 5%
-    private static final BigDecimal LEVEL3_RATE = new BigDecimal("0.02");     // 2%
-    // Unis gets 68% base + any unclaimed referral shares
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // AD VIEW TRACKING
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Track a display ad view with full 3-level referral attribution.
-     *
-     * 1. Look up viewer's supported artist → 15%
-     * 2. Walk 3 levels up the referral chain → 10% / 5% / 2%
-     * 3. Store all attributions on the ad_view record
-     */
-    public AdView trackAdView(UUID viewerUserId) {
-        User viewer = userRepository.findById(viewerUserId)
-                .orElseThrow(() -> new RuntimeException("User not found: " + viewerUserId));
-
-        // Look up the 3-level referral chain in one query
-        UUID level1Id = null;
-        UUID level2Id = null;
-        UUID level3Id = null;
-
-        List<Object[]> chain = adViewRepository.findReferralChain(viewerUserId);
-        if (chain != null && !chain.isEmpty()) {
-            Object[] row = chain.get(0);
-            level1Id = (UUID) row[0];
-            level2Id = (UUID) row[1];
-            level3Id = (UUID) row[2];
-        }
-
-        // Look up supported artist
-        UUID supportedArtistId = viewer.getSupportedArtistId();
-
-
-
-        // Build the ad view record
-        AdView adView = new AdView();
-        adView.setUser(viewer);
-        adView.setRevenueShare(REVENUE_PER_VIEW);
-        adView.setViewedAt(LocalDateTime.now());
-
-        // Each share goes only to a live, phone-verified account. A deleted
-        // account earns nothing from here on: its own share stays with Unis,
-        // and everyone else in the chain keeps their level — a deleted level-1
-        // referrer doesn't cut levels 2 and 3 off from this branch.
-
-        // Set supported artist (15%)
-        if (supportedArtistId != null) {
-            userRepository.findById(supportedArtistId)
-                .filter(EarningsService::canEarn)
-                .ifPresent(adView::setSupportedArtist);
-        }
-
-        // Set Level 1 referrer (10%)
-        if (level1Id != null) {
-            userRepository.findById(level1Id)
-                .filter(EarningsService::canEarn)
-                .ifPresent(adView::setReferredArtist);        
-        }
-
-        // Set Level 2 referrer (5%)
-        if (level2Id != null) {
-            userRepository.findById(level2Id)
-                .filter(EarningsService::canEarn)
-                .ifPresent(adView::setReferrerLevel2);          
-        }
-
-        // Set Level 3 referrer (2%)
-        if (level3Id != null) {
-            userRepository.findById(level3Id)
-                .filter(EarningsService::canEarn)
-                .ifPresent(adView::setReferrerLevel3);         
-        }
-
-        return adViewRepository.save(adView);
-    }
+    private static final List<String> STREAMS = List.of("supporter", "referral_1", "referral_2", "referral_3", "adjustment");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // EARNINGS SUMMARY
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Complete earnings summary for any user.
-     * Calculates all revenue streams with correct percentages.
+     * Everything the Earnings page and the artist dashboard show.
+     *
+     * Key names from the old summary are kept (referralEarnings, supporterEarnings,
+     * totalEarnings, currentBalance, payoutThreshold, payoutReady, referralCount,
+     * supporterCount, referralViewsThisMonth) so app builds that predate the
+     * Community Share keep working. "thisMonth" is always 0: a month's money is
+     * only known once it's closed. "lastMonth" is the most recent closed month.
      */
     public Map<String, Object> getEarningsSummary(UUID userId) {
-        Map<String, Object> summary = new HashMap<>();
+        Map<String, BigDecimal> lifetime = sumByStream(userId, null);
 
-        LocalDate now = LocalDate.now();
-        LocalDateTime monthStart = now.withDayOfMonth(1).atStartOfDay();
+        LocalDate lastClosed = jdbc.queryForObject(
+                "SELECT MAX(period_month) FROM community_share_closes", LocalDate.class);
+        Map<String, BigDecimal> last = lastClosed == null ? emptyStreams() : sumByStream(userId, lastClosed);
 
-        // ── Level 1 referral earnings (10%) ──
-        BigDecimal l1Lifetime = safeSum(adViewRepository.sumLevel1ReferralEarnings(userId))
-                .multiply(LEVEL1_RATE).setScale(6, RoundingMode.HALF_UP);
-        BigDecimal l1Monthly = safeSum(adViewRepository.sumLevel1ReferralEarningsSince(userId, monthStart))
-                .multiply(LEVEL1_RATE).setScale(6, RoundingMode.HALF_UP);
+        BigDecimal l1 = lifetime.get("referral_1"), l2 = lifetime.get("referral_2"), l3 = lifetime.get("referral_3");
+        BigDecimal referralLifetime = l1.add(l2).add(l3);
+        BigDecimal referralLast = last.get("referral_1").add(last.get("referral_2")).add(last.get("referral_3"));
+        BigDecimal supporterLifetime = lifetime.get("supporter");
+        BigDecimal adjustmentsLifetime = lifetime.get("adjustment");
+        BigDecimal totalLifetime = referralLifetime.add(supporterLifetime).add(adjustmentsLifetime);
+        BigDecimal totalLast = referralLast.add(last.get("supporter")).add(last.get("adjustment"));
 
-        // ── Level 2 referral earnings (5%) ──
-        BigDecimal l2Lifetime = safeSum(adViewRepository.sumLevel2ReferralEarnings(userId))
-                .multiply(LEVEL2_RATE).setScale(6, RoundingMode.HALF_UP);
-        BigDecimal l2Monthly = safeSum(adViewRepository.sumLevel2ReferralEarningsSince(userId, monthStart))
-                .multiply(LEVEL2_RATE).setScale(6, RoundingMode.HALF_UP);
+        BigDecimal available = getAvailableBalance(userId);
+        BigDecimal paidOut = ledgerPayouts(userId, "completed");
 
-        // ── Level 3 referral earnings (2%) ──
-        BigDecimal l3Lifetime = safeSum(adViewRepository.sumLevel3ReferralEarnings(userId))
-                .multiply(LEVEL3_RATE).setScale(6, RoundingMode.HALF_UP);
-        BigDecimal l3Monthly = safeSum(adViewRepository.sumLevel3ReferralEarningsSince(userId, monthStart))
-                .multiply(LEVEL3_RATE).setScale(6, RoundingMode.HALF_UP);
+        Map<String, Object> listening = communityShareService.listeningThisMonth(userId);
+        @SuppressWarnings("unchecked")
+        long level1People = ((Number) ((Map<String, Object>) listening.get("level1")).get("people")).longValue();
+        @SuppressWarnings("unchecked")
+        long level1Plays = ((Number) ((Map<String, Object>) listening.get("level1")).get("plays")).longValue();
 
-        // ── Total referral earnings (all 3 levels) ──
-        BigDecimal referralLifetime = l1Lifetime.add(l2Lifetime).add(l3Lifetime);
-        BigDecimal referralMonthly = l1Monthly.add(l2Monthly).add(l3Monthly);
+        Long supporterCount = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE supported_artist_id = ? AND deleted_at IS NULL",
+                Long.class, userId);
 
-        // ── Supporter earnings (15% — artists only) ──
-        BigDecimal supporterLifetime = safeSum(adViewRepository.sumSupporterEarnings(userId))
-                .multiply(SUPPORTER_RATE).setScale(6, RoundingMode.HALF_UP);
-        BigDecimal supporterMonthly = safeSum(adViewRepository.sumSupporterEarningsSince(userId, monthStart))
-                .multiply(SUPPORTER_RATE).setScale(6, RoundingMode.HALF_UP);
-
-        // ── Totals ──
-        BigDecimal totalLifetime = referralLifetime.add(supporterLifetime);
-        BigDecimal totalMonthly = referralMonthly.add(supporterLifetime);
-
-        // ── Counts ──
-        long referralCount = referralRepository.countByReferrer(userId);
-        long supporterCount = userRepository.countBySupportedArtistId(userId);
-        long referralViewsThisMonth = adViewRepository.countLevel1ReferralViewsSince(userId, monthStart);
-
-        // ── Payout ──
-        BigDecimal payoutThreshold = PAYOUT_THRESHOLD;
-        BigDecimal currentBalance = totalLifetime; // Simplified — subtract past payouts in production
-
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("model", "community_share");
         summary.put("referralEarnings", Map.of(
-                "lifetime", referralLifetime.setScale(4, RoundingMode.HALF_UP),
-                "thisMonth", referralMonthly.setScale(4, RoundingMode.HALF_UP),
-                "level1", Map.of("lifetime", l1Lifetime.setScale(4, RoundingMode.HALF_UP), "thisMonth", l1Monthly.setScale(4, RoundingMode.HALF_UP)),
-                "level2", Map.of("lifetime", l2Lifetime.setScale(4, RoundingMode.HALF_UP), "thisMonth", l2Monthly.setScale(4, RoundingMode.HALF_UP)),
-                "level3", Map.of("lifetime", l3Lifetime.setScale(4, RoundingMode.HALF_UP), "thisMonth", l3Monthly.setScale(4, RoundingMode.HALF_UP))
-        ));
+                "lifetime", money(referralLifetime),
+                "lastMonth", money(referralLast),
+                "thisMonth", money(BigDecimal.ZERO),
+                "level1", level(l1, last.get("referral_1")),
+                "level2", level(l2, last.get("referral_2")),
+                "level3", level(l3, last.get("referral_3"))));
         summary.put("supporterEarnings", Map.of(
-                "lifetime", supporterLifetime.setScale(4, RoundingMode.HALF_UP),
-                "thisMonth", supporterMonthly.setScale(4, RoundingMode.HALF_UP)
-        ));
+                "lifetime", money(supporterLifetime),
+                "lastMonth", money(last.get("supporter")),
+                "thisMonth", money(BigDecimal.ZERO)));
+        summary.put("adjustments", Map.of("lifetime", money(adjustmentsLifetime)));
         summary.put("totalEarnings", Map.of(
-                "lifetime", totalLifetime.setScale(4, RoundingMode.HALF_UP),
-                "thisMonth", totalMonthly.setScale(4, RoundingMode.HALF_UP)
-        ));
-        summary.put("referralCount", referralCount);
-        summary.put("supporterCount", supporterCount);
-        summary.put("referralViewsThisMonth", referralViewsThisMonth);
-        summary.put("currentBalance", currentBalance.setScale(4, RoundingMode.HALF_UP));
-        summary.put("payoutThreshold", payoutThreshold);
-        summary.put("payoutReady", currentBalance.compareTo(payoutThreshold) >= 0);
-        summary.put("cpm", CPM);
-
+                "lifetime", money(totalLifetime),
+                "lastMonth", money(totalLast),
+                "thisMonth", money(BigDecimal.ZERO)));
+        summary.put("lastClosedMonth", lastClosed == null ? null : YearMonth.from(lastClosed).toString());
+        summary.put("listeningThisMonth", listening);
+        summary.put("referralCount", level1People);
+        summary.put("referralViewsThisMonth", level1Plays);   // old key; now counted plays by direct referrals
+        summary.put("supporterCount", supporterCount == null ? 0 : supporterCount);
+        summary.put("currentBalance", money(available));
+        summary.put("lifetimePaidOut", money(paidOut));
+        summary.put("payoutThreshold", PAYOUT_THRESHOLD);
+        summary.put("payoutReady", available.compareTo(PAYOUT_THRESHOLD) >= 0);
+        summary.put("rates", Map.of(
+                "supporter", 15, "level1", 10, "level2", 5, "level3", 2,
+                "dailyPlayCap", CommunityShareService.DAILY_PLAY_CAP));
         return summary;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // REFERRAL BREAKDOWN — Per-referral contribution (Level 1 direct only)
+    // REFERRALS — the people you invited directly
     // ═══════════════════════════════════════════════════════════════════════════
 
+    /**
+     * Each direct referral: how much they've listened this month, and what
+     * their listening has earned you at level 1 across closed months.
+     */
     public List<Map<String, Object>> getReferralBreakdown(UUID userId) {
-        List<Object[]> referralData = adViewRepository.getReferralContributions(userId);
+        Timestamp since = Timestamp.valueOf(CommunityShareService.serverRange(
+                YearMonth.now(CommunityShareService.UNIS_ZONE))[0]);
+        return jdbc.query("""
+                SELECT r.referred_id, u.username, u.photo_url, (u.deleted_at IS NOT NULL) AS left_unis,
+                       (SELECT COUNT(*) FROM song_plays sp
+                         WHERE sp.user_id = r.referred_id AND sp.played_at >= ?) AS plays_this_month,
+                       (SELECT COALESCE(SUM(l.amount), 0) FROM earnings_ledger l
+                         WHERE l.user_id = ? AND l.source_user_id = r.referred_id AND l.stream = 'referral_1') AS earned
+                FROM referrals r
+                JOIN users u ON u.user_id = r.referred_id
+                WHERE r.referrer_id = ?
+                ORDER BY earned DESC, plays_this_month DESC, u.username
+                """, (rs, i) -> {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("userId", rs.getObject("referred_id", UUID.class));
+            entry.put("username", rs.getString("username"));
+            entry.put("photoUrl", rs.getString("photo_url"));
+            entry.put("leftUnis", rs.getBoolean("left_unis"));
+            entry.put("playsThisMonth", rs.getLong("plays_this_month"));
+            entry.put("earnings", money(rs.getBigDecimal("earned")));
+            return entry;
+        }, since, userId, userId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MONTHLY HISTORY — for the chart
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * The last {@code months} months, oldest first, including the current one
+     * (which shows 0 until it's closed). Each entry:
+     * {month, date, closed, referralEarnings, supporterEarnings, adjustments, total}.
+     */
+    public List<Map<String, Object>> getMonthlyHistory(UUID userId, int months) {
+        int n = Math.max(1, Math.min(months, 24));
+        YearMonth current = YearMonth.now(CommunityShareService.UNIS_ZONE);
+        YearMonth first = current.minusMonths(n - 1L);
+
+        Map<YearMonth, Map<String, BigDecimal>> byMonth = new HashMap<>();
+        jdbc.query("""
+                SELECT period_month, stream, SUM(amount) AS total
+                FROM earnings_ledger
+                WHERE user_id = ? AND period_month >= ?
+                GROUP BY period_month, stream
+                """, rs -> {
+            YearMonth ym = YearMonth.from(rs.getDate("period_month").toLocalDate());
+            byMonth.computeIfAbsent(ym, k -> new HashMap<>()).put(rs.getString("stream"), rs.getBigDecimal("total"));
+        }, userId, Date.valueOf(first.atDay(1)));
+
+        Set<YearMonth> closed = new HashSet<>();
+        jdbc.query("SELECT period_month FROM community_share_closes WHERE period_month >= ?",
+                rs -> { closed.add(YearMonth.from(rs.getDate("period_month").toLocalDate())); },
+                Date.valueOf(first.atDay(1)));
+
         List<Map<String, Object>> result = new ArrayList<>();
-
-        for (Object[] row : referralData) {
-            UUID referredUserId = (UUID) row[0];
-            String username = (String) row[1];
-            String photoUrl = (String) row[2];
-            Long viewCount = ((Number) row[3]).longValue();
-
-            // Level 1 earnings: each view × revenue_per_view × 10%
-            BigDecimal earnings = REVENUE_PER_VIEW
-                    .multiply(LEVEL1_RATE)
-                    .multiply(new BigDecimal(viewCount))
-                    .setScale(6, RoundingMode.HALF_UP);
-
-            Map<String, Object> entry = new HashMap<>();
-            entry.put("userId", referredUserId);
-            entry.put("username", username);
-            entry.put("photoUrl", photoUrl);
-            entry.put("adViews", viewCount);
-            entry.put("earnings", earnings);
+        for (YearMonth ym = first; !ym.isAfter(current); ym = ym.plusMonths(1)) {
+            Map<String, BigDecimal> s = byMonth.getOrDefault(ym, Map.of());
+            BigDecimal referral = s.getOrDefault("referral_1", BigDecimal.ZERO)
+                    .add(s.getOrDefault("referral_2", BigDecimal.ZERO))
+                    .add(s.getOrDefault("referral_3", BigDecimal.ZERO));
+            BigDecimal supporter = s.getOrDefault("supporter", BigDecimal.ZERO);
+            BigDecimal adjustments = s.getOrDefault("adjustment", BigDecimal.ZERO);
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("month", ym.toString());
+            entry.put("date", ym.atDay(1).toString());
+            entry.put("closed", closed.contains(ym));
+            entry.put("referralEarnings", money(referral));
+            entry.put("supporterEarnings", money(supporter));
+            entry.put("adjustments", money(adjustments));
+            entry.put("total", money(referral.add(supporter).add(adjustments)));
             result.add(entry);
         }
-
         return result;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // DAILY HISTORY — For chart
+    // BALANCE
     // ═══════════════════════════════════════════════════════════════════════════
 
-    public List<Map<String, Object>> getDailyHistory(UUID userId, int days) {
-        LocalDateTime startDate = LocalDate.now().minusDays(days).atStartOfDay();
+    /**
+     * What a user could be paid right now: everything in the ledger minus
+     * payouts from the ledger that completed or are still processing. Used by
+     * the payout request and by account deletion's $50 rule.
+     */
+    public BigDecimal getAvailableBalance(UUID userId) {
+        BigDecimal earned = jdbc.queryForObject(
+                "SELECT COALESCE(SUM(amount), 0) FROM earnings_ledger WHERE user_id = ?",
+                BigDecimal.class, userId);
+        BigDecimal paid = ledgerPayouts(userId, "completed").add(ledgerPayouts(userId, "processing"));
+        BigDecimal available = (earned == null ? BigDecimal.ZERO : earned).subtract(paid);
+        return available.signum() < 0 ? BigDecimal.ZERO : available;
+    }
 
-        // Get daily referral earnings with all 3 levels
-        List<Object[]> referralDaily = adViewRepository.getDailyReferralEarningsAllLevels(userId, startDate);
-        List<Object[]> supporterDaily = adViewRepository.getDailySupporterEarnings(userId, startDate);
-
-        Map<LocalDate, Map<String, BigDecimal>> dailyMap = new TreeMap<>();
-
-        for (Object[] row : referralDaily) {
-            LocalDate date = ((java.sql.Date) row[0]).toLocalDate();
-            BigDecimal l1Raw = (BigDecimal) row[1];
-            BigDecimal l2Raw = (BigDecimal) row[2];
-            BigDecimal l3Raw = (BigDecimal) row[3];
-
-            BigDecimal l1 = l1Raw.multiply(LEVEL1_RATE).setScale(6, RoundingMode.HALF_UP);
-            BigDecimal l2 = l2Raw.multiply(LEVEL2_RATE).setScale(6, RoundingMode.HALF_UP);
-            BigDecimal l3 = l3Raw.multiply(LEVEL3_RATE).setScale(6, RoundingMode.HALF_UP);
-            BigDecimal totalReferral = l1.add(l2).add(l3);
-
-            dailyMap.computeIfAbsent(date, k -> new HashMap<>()).put("referral", totalReferral);
-        }
-
-        for (Object[] row : supporterDaily) {
-            LocalDate date = ((java.sql.Date) row[0]).toLocalDate();
-            BigDecimal total = (BigDecimal) row[1];
-            BigDecimal earnings = total.multiply(SUPPORTER_RATE).setScale(6, RoundingMode.HALF_UP);
-            dailyMap.computeIfAbsent(date, k -> new HashMap<>()).put("supporter", earnings);
-        }
-
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (Map.Entry<LocalDate, Map<String, BigDecimal>> entry : dailyMap.entrySet()) {
-            Map<String, Object> dayEntry = new HashMap<>();
-            dayEntry.put("date", entry.getKey().toString());
-            BigDecimal referral = entry.getValue().getOrDefault("referral", BigDecimal.ZERO);
-            BigDecimal supporter = entry.getValue().getOrDefault("supporter", BigDecimal.ZERO);
-            dayEntry.put("referralEarnings", referral);
-            dayEntry.put("supporterEarnings", supporter);
-            dayEntry.put("total", referral.add(supporter));
-            result.add(dayEntry);
-        }
-
-        return result;
+    private BigDecimal ledgerPayouts(UUID userId, String status) {
+        BigDecimal v = jdbc.queryForObject(
+                "SELECT COALESCE(SUM(amount), 0) FROM payouts WHERE user_id = ? AND status = ? AND from_ledger = TRUE",
+                BigDecimal.class, userId, status);
+        return v == null ? BigDecimal.ZERO : v;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** Who can be credited a share of an ad view: live and phone-verified. */
-    private static boolean canEarn(com.unis.entity.User u) {
-        return u.getDeletedAt() == null && Boolean.TRUE.equals(u.getPhoneVerified());
+    /** Ledger totals per stream: lifetime (month == null) or for one month. */
+    private Map<String, BigDecimal> sumByStream(UUID userId, LocalDate month) {
+        Map<String, BigDecimal> m = emptyStreams();
+        String sql = "SELECT stream, COALESCE(SUM(amount), 0) AS total FROM earnings_ledger WHERE user_id = ?"
+                + (month == null ? "" : " AND period_month = ?")
+                + " GROUP BY stream";
+        Object[] args = month == null ? new Object[] { userId } : new Object[] { userId, Date.valueOf(month) };
+        jdbc.query(sql, rs -> { m.put(rs.getString("stream"), rs.getBigDecimal("total")); }, args);
+        return m;
     }
 
-    /**
-     * What a user could be paid right now: everything ever earned minus
-     * completed payouts. Same formula StripeConnectService.requestPayout uses.
-     * Account deletion uses it to apply the $50 rule.
-     */
-    public BigDecimal getAvailableBalance(UUID userId) {
-        BigDecimal lifetime = new BigDecimal(getEarningsSummary(userId).get("currentBalance").toString());
-        BigDecimal paid = safeSum(payoutRepository.sumCompletedPayouts(userId));
-        return lifetime.subtract(paid);
+    private static Map<String, BigDecimal> emptyStreams() {
+        Map<String, BigDecimal> m = new HashMap<>();
+        for (String s : STREAMS) m.put(s, BigDecimal.ZERO);
+        return m;
     }
 
-    private BigDecimal safeSum(BigDecimal value) {
-        return value != null ? value : BigDecimal.ZERO;
+    private static Map<String, Object> level(BigDecimal lifetime, BigDecimal lastMonth) {
+        return Map.of("lifetime", money(lifetime), "lastMonth", money(lastMonth), "thisMonth", money(BigDecimal.ZERO));
+    }
+
+    /** Four decimals: a listener's share can be a fraction of a cent, so the page doesn't round it to $0.00. */
+    private static BigDecimal money(BigDecimal v) {
+        return (v == null ? BigDecimal.ZERO : v).setScale(4, RoundingMode.HALF_UP);
     }
 }

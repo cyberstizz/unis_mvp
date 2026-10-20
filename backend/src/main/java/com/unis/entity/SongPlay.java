@@ -48,4 +48,13 @@ public class SongPlay {
     @Column(name = "platform", length = 10)
     private String platform;
 
+    /**
+     * The artist the listener supported at the moment of this play. The
+     * monthly Community Share pays that artist for this listening, so a
+     * supported-artist switch on the 1st never moves money already earned.
+     * Raw UUID like listenerJurisdictionId: no join on a write-heavy table.
+     */
+    @Column(name = "supported_artist_id")
+    private UUID supportedArtistId;
+
 }

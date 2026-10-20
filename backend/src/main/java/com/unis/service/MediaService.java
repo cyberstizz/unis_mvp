@@ -763,6 +763,7 @@ public class MediaService {
             .listenerJurisdictionId(listenerJurisdictionId)  // NEW
             .completed(false)                            // NEW — set true on completion
             .platform(com.unis.util.ClientPlatform.current())  // web | ios | android, for the metrics
+            .supportedArtistId(user.getSupportedArtistId())   // who this listening supports (Community Share)
             .build();
         SongPlay saved = songPlayRepository.save(play);
 
