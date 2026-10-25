@@ -4,6 +4,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -98,7 +101,11 @@ public class ProfileSummaryDto {
         private UUID userId;
         private String username;
         private String photoUrl;
-        private LocalDateTime effectiveDate; // first moment of next month (ET)
+        // First moment of next month in EASTERN time — a calendar date, not
+        // a UTC instant. Kept zone-less on purpose so it is NOT marked UTC by
+        // UtcDateTimeJacksonConfig (that would show "Oct 31" for "Nov 1").
+        @JsonSerialize(using = LocalDateTimeSerializer.class)
+        private LocalDateTime effectiveDate;
     }
 
     @Data
