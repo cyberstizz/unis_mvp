@@ -35,20 +35,19 @@ import java.util.UUID;
  * song/video `likes` table: photo likes award NO points and must never be
  * counted by anything that scores songs, artists or listeners.
  *
- * VISIBILITY (the under-18 safeguard + the Account Settings "Public profile"
- * toggle). A gallery is RESTRICTED when any of these is true:
- *   - the owner is under 18 (from date_of_birth),
- *   - the owner is a listener with no date_of_birth on file (registration does
- *     not require one server-side, so unknown is treated as possibly a minor;
- *     artists with no DOB stay public so existing artist galleries don't vanish),
+ * VISIBILITY (the under-17 safeguard + the Account Settings "Public profile"
+ * toggle). Unis is a social app: everyone's photos are visible to everyone,
+ * signed in or not, unless one of these is true:
+ *   - the owner is under {@link #PUBLIC_PHOTO_MIN_AGE} (from date_of_birth),
  *   - the owner turned "Public profile" off.
- * A restricted gallery is visible only to the owner and to MUTUAL follows
- * (owner follows the viewer AND the viewer follows the owner). Logged-out
- * visitors never see it. Ages are self-declared, so "other minors can see
- * minors" is deliberately NOT a rule — an adult claiming to be 15 would see
- * every teen's photos. Independently of the above: a viewer the owner blocked
- * sees nothing, and a soft-deleted owner's gallery is gone for everyone.
- * The same gate guards likes, so you can't like what you can't see.
+ * Then the gallery is visible only to the owner and to MUTUAL follows (owner
+ * follows the viewer AND the viewer follows the owner); logged-out visitors
+ * never see it. An account with no date of birth on file is treated like any
+ * adult (sign-up asks for one). Ages are self-declared, so "other minors can
+ * see minors" is deliberately NOT a rule — an adult claiming to be 15 would
+ * see every teen's photos. Independently of the above: a viewer the owner
+ * blocked sees nothing, and a soft-deleted owner's gallery is gone for
+ * everyone. The same gate guards likes, so you can't like what you can't see.
  *
  * MAX_PHOTOS is the single source of truth for the cap — change it here and the
  * frontend reads the same number.
@@ -57,6 +56,12 @@ import java.util.UUID;
 public class ArtistPhotoService {
 
     public static final int MAX_PHOTOS = 15;
+
+    /**
+     * Owners younger than this never have a public gallery, whatever their
+     * Public profile toggle says. The one place to change the age.
+     */
+    public static final int PUBLIC_PHOTO_MIN_AGE = 17;
 
     private final ArtistPhotoRepository repo;
     private final FileStorageService fileStorageService;
@@ -83,8 +88,7 @@ public class ArtistPhotoService {
     public enum Visibility {
         EVERYONE("everyone"),
         PRIVATE("private"),
-        UNDER_18("under18"),
-        NO_BIRTHDATE("noBirthdate");
+        MINOR("minor");
 
         public final String wire;
         Visibility(String wire) { this.wire = wire; }
@@ -94,7 +98,7 @@ public class ArtistPhotoService {
      * What the list endpoint returns.
      *   hidden     — true when the viewer isn't allowed to see this gallery
      *                (photos is then empty). Same value for "private" and
-     *                "under 18", so a stranger can't tell which applies.
+     *                "minor", so a stranger can't tell which applies.
      *   visibility — only filled in when the viewer IS the owner, so the
      *                profile can tell them who sees their photos; null otherwise.
      */
@@ -102,13 +106,13 @@ public class ArtistPhotoService {
 
     public Visibility visibilityOf(User owner) {
         if (Boolean.FALSE.equals(owner.getPublicProfile())) return Visibility.PRIVATE;
+        return isMinor(owner) ? Visibility.MINOR : Visibility.EVERYONE;
+    }
+
+    /** True when the owner's date of birth makes them younger than PUBLIC_PHOTO_MIN_AGE. */
+    public static boolean isMinor(User owner) {
         LocalDate dob = owner.getDateOfBirth();
-        if (dob != null) {
-            return Period.between(dob, LocalDate.now()).getYears() < 18
-                    ? Visibility.UNDER_18
-                    : Visibility.EVERYONE;
-        }
-        return owner.getRole() == User.Role.artist ? Visibility.EVERYONE : Visibility.NO_BIRTHDATE;
+        return dob != null && Period.between(dob, LocalDate.now()).getYears() < PUBLIC_PHOTO_MIN_AGE;
     }
 
     /** The single gate for seeing (and therefore liking) someone's photos. */

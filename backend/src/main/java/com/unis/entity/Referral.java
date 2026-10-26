@@ -27,4 +27,10 @@ public class Referral {
 
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    // The exact code typed at sign-up: the referrer's own code or a short
+    // code they own (see ReferralCodeService). Null on referrals made before
+    // V2026_10k__launch_marketing.sql.
+    @Column(name = "code_used", length = 64)
+    private String codeUsed;
 }

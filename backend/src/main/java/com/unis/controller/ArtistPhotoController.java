@@ -30,10 +30,11 @@ import java.util.UUID;
  * GET response:
  *   { photos: [PhotoView...], max: 15, hidden: bool, visibility?: string }
  *   hidden     — true when this viewer may not see the gallery (photos is []).
- *                Restricted galleries (under 18, no DOB on a listener, or
- *                "Public profile" off) are shown only to the owner and mutual
- *                follows — see ArtistPhotoService.canView.
- *   visibility — owner only: everyone | private | under18 | noBirthdate.
+ *                Restricted galleries (owner under 17, or "Public profile"
+ *                off) are shown only to the owner and mutual follows — see
+ *                ArtistPhotoService.canView. Everyone else's are public,
+ *                signed in or not.
+ *   visibility — owner only: everyone | private | minor.
  */
 @RestController
 @RequestMapping("/api/v1/users")

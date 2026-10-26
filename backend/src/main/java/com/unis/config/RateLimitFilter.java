@@ -89,6 +89,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         new Rule("sponsor-tap",    "GET",  "/api/v1/sponsors/*/go",                 60, MINUTE,  Key.IP),
 
         // ── Public forms ──
+        new Rule("team-join",      "POST", "/api/v1/team/join",                      5, HOUR,    Key.IP),
+        new Rule("team-links",     null,   "/api/v1/team/**",                       60, MINUTE,  Key.IP),
+        new Rule("award-card",     "GET",  "/api/v1/awards/*/card",                120, MINUTE,  Key.IP),
         new Rule("dmca",           "POST", "/api/v1/dmca/submit",                   10, HOUR,    Key.IP),
         new Rule("activity",       "POST", "/api/v1/activity/track",               120, MINUTE,  Key.IP),
         new Rule("csp-report",     "POST", "/api/csp-report",                       30, MINUTE,  Key.IP),

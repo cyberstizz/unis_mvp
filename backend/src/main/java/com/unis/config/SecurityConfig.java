@@ -123,6 +123,13 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/sponsors/serve").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/sponsors/*/go").permitAll()
 
+                // ===== STREET TEAM & WINNER CARDS =====
+                // The street team has no login: members are known by the private
+                // token in their email links (StreetTeamService). Award cards are
+                // the public share pages for winners (AwardCardService).
+                .requestMatchers("/api/v1/team/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/awards/*/card").permitAll()
+
                 // ===== PLAYLIST — ADMIN =====
                 .requestMatchers(HttpMethod.POST, "/api/v1/playlists/official").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/v1/playlists/official/*/sync").hasRole("ADMIN")

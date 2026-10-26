@@ -75,6 +75,8 @@ public class UserController {
 
     @Autowired private com.unis.config.JwtUtil jwtUtil;
 
+    @Autowired private com.unis.service.ReferralCodeService referralCodeService;
+
 
     private static final Logger log = LoggerFactory.getLogger(UserController.class);
 
@@ -534,7 +536,7 @@ public class UserController {
         Map<String, Object> response = new HashMap<>();
 
         // Master launch code - always valid
-        if ("UNIS-LAUNCH-2024".equals(code)) {
+        if (com.unis.service.ReferralCodeService.LAUNCH_CODE.equals(com.unis.service.ReferralCodeService.normalize(code))) {
             response.put("valid", true);
             response.put("referrerUsername", "Unis");
             response.put("referrerId", null);
@@ -542,15 +544,16 @@ public class UserController {
         }
 
         try {
-            // A deleted account's code no longer refers anyone.
-            Optional<User> referrerOpt = userRepository.findByReferralCode(code)
-                    .filter(r -> r.getDeletedAt() == null);
+            // A member's own code or an active short code (HARLEM), any case.
+            // Deleted accounts and switched-off short codes refer nobody.
+            Optional<com.unis.service.ReferralCodeService.Resolved> resolved = referralCodeService.resolve(code);
 
-            if (referrerOpt.isPresent()) {
-                User referrer = referrerOpt.get();
+            if (resolved.isPresent()) {
+                User referrer = resolved.get().owner();
                 response.put("valid", true);
                 response.put("referrerUsername", referrer.getUsername());
                 response.put("referrerId", referrer.getUserId());
+                response.put("code", resolved.get().code());
                 return ResponseEntity.ok(response);
             } else {
                 response.put("valid", false);

@@ -52,6 +52,9 @@ public class UserService {
     private ReferralRepository referralRepository;
 
     @Autowired
+    private ReferralCodeService referralCodeService;
+
+    @Autowired
     private SongRepository songRepository;
 
     @Autowired
@@ -374,18 +377,20 @@ public class UserService {
         // Handle referral tracking
         boolean referralTracked = false;   // feeds signup_source below
         if (referralCode != null && !referralCode.trim().isEmpty()) {
+            // A member's own code or a short code they own (HARLEM), any case.
             // A deleted account's code no longer refers anyone.
-            Optional<User> referrerOpt = userRepository.findByReferralCode(referralCode)
-                    .filter(r -> r.getDeletedAt() == null);
-            
-            if (referrerOpt.isPresent()) {
-                User referrer = referrerOpt.get();
-                
-                // Create referral record
+            Optional<ReferralCodeService.Resolved> resolved = referralCodeService.resolve(referralCode);
+
+            if (resolved.isPresent()) {
+                User referrer = resolved.get().owner();
+
+                // Create referral record, keeping the exact code used so admin
+                // can count sign-ups per code.
                 Referral referral = Referral.builder()
                         .referrer(referrer)
                         .referred(savedUser)
                         .createdAt(LocalDateTime.now())
+                        .codeUsed(resolved.get().code())
                         .build();
                 referralRepository.save(referral);
                 referralTracked = true;
