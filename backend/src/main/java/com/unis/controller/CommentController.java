@@ -24,6 +24,19 @@ public class CommentController {
     private final UserRepository userRepository;
 
     /**
+     * Signed-in viewer's id, or null for guests. The comment GETs are public
+     * (permitAll), so a guest has no UUID credentials; this only decides
+     * whether likedByMe can be true.
+     */
+    private static UUID currentUserIdOrNull() {
+        try {
+            return SecurityUtils.getAuthenticatedUserId();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
      * POST /api/v1/comments
      * Create a new comment or reply
      * C6 FIX: userId comes from JWT, not from request body
@@ -58,7 +71,7 @@ public class CommentController {
     @GetMapping("/song/{songId}")
     public ResponseEntity<?> getCommentsBySong(@PathVariable UUID songId) {
         try {
-            List<CommentDTO.Response> comments = commentService.getCommentsBySongId(songId);
+            List<CommentDTO.Response> comments = commentService.getCommentsBySongId(songId, currentUserIdOrNull());
             return ResponseEntity.ok(comments);
         } catch (Exception e) {
             log.error("Error fetching comments for song {}", songId, e);
@@ -73,7 +86,7 @@ public class CommentController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
         try {
-            CommentDTO.PagedResponse response = commentService.getCommentsBySongIdPaginated(songId, page, size);
+            CommentDTO.PagedResponse response = commentService.getCommentsBySongIdPaginated(songId, page, size, currentUserIdOrNull());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("Error fetching paginated comments for song {}", songId, e);
@@ -85,7 +98,7 @@ public class CommentController {
     @GetMapping("/{commentId}")
     public ResponseEntity<?> getComment(@PathVariable UUID commentId) {
         try {
-            CommentDTO.Response comment = commentService.getCommentById(commentId);
+            CommentDTO.Response comment = commentService.getCommentById(commentId, currentUserIdOrNull());
             return ResponseEntity.ok(comment);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
@@ -99,7 +112,7 @@ public class CommentController {
     @GetMapping("/{commentId}/replies")
     public ResponseEntity<?> getReplies(@PathVariable UUID commentId) {
         try {
-            List<CommentDTO.Response> replies = commentService.getReplies(commentId);
+            List<CommentDTO.Response> replies = commentService.getReplies(commentId, currentUserIdOrNull());
             return ResponseEntity.ok(replies);
         } catch (Exception e) {
             log.error("Error fetching replies for comment {}", commentId, e);
@@ -127,7 +140,7 @@ public class CommentController {
     @GetMapping("/video/{videoId}")
     public ResponseEntity<?> getCommentsByVideo(@PathVariable UUID videoId) {
         try {
-            List<CommentDTO.Response> comments = commentService.getCommentsByVideoId(videoId);
+            List<CommentDTO.Response> comments = commentService.getCommentsByVideoId(videoId, currentUserIdOrNull());
             return ResponseEntity.ok(comments);
         } catch (Exception e) {
             log.error("Error fetching comments for video {}", videoId, e);
@@ -142,7 +155,7 @@ public class CommentController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
         try {
-            CommentDTO.PagedResponse response = commentService.getCommentsByVideoIdPaginated(videoId, page, size);
+            CommentDTO.PagedResponse response = commentService.getCommentsByVideoIdPaginated(videoId, page, size, currentUserIdOrNull());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             log.error("Error fetching paginated comments for video {}", videoId, e);
@@ -235,6 +248,45 @@ public class CommentController {
         } catch (Exception e) {
             // If not authenticated, return 0 (guest users can't comment anyway)
             return ResponseEntity.ok(Map.of("count", 0, "limit", 3, "remaining", 3, "limitReached", false));
+        }
+    }
+
+    // ========================================================================
+    // COMMENT LIKES
+    //   POST   /api/v1/comments/{commentId}/like   → { liked: true,  likeCount }
+    //   DELETE /api/v1/comments/{commentId}/like   → { liked: false, likeCount }
+    // Signed-in users only (the /api/v1/** authenticated catch-all in
+    // SecurityConfig covers both). Same rule as song likes: no phone
+    // verification needed. Comment likes award no points.
+    // ========================================================================
+
+    @PostMapping("/{commentId}/like")
+    public ResponseEntity<?> likeComment(@PathVariable UUID commentId) {
+        UUID me = SecurityUtils.getAuthenticatedUserId();
+        try {
+            long count = commentService.likeComment(commentId, me);
+            return ResponseEntity.ok(Map.of("liked", true, "likeCount", count));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Comment like failed {} by {}", commentId, me, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Could not like that comment."));
+        }
+    }
+
+    @DeleteMapping("/{commentId}/like")
+    public ResponseEntity<?> unlikeComment(@PathVariable UUID commentId) {
+        UUID me = SecurityUtils.getAuthenticatedUserId();
+        try {
+            long count = commentService.unlikeComment(commentId, me);
+            return ResponseEntity.ok(Map.of("liked", false, "likeCount", count));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Comment unlike failed {} by {}", commentId, me, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Could not remove that like."));
         }
     }
 

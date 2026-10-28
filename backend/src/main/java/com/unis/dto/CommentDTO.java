@@ -54,7 +54,13 @@ public class CommentDTO {
         private UUID userId;
         private String username;
         private String userPhotoUrl;
-        
+
+        // Likes (comment_likes). fromEntity leaves these at 0 / false;
+        // CommentService fills them in for every comment it returns.
+        // likedByMe is always false for guests.
+        private long likeCount;
+        private boolean likedByMe;
+
         // Nested replies (only populated for top-level comments)
         private List<Response> replies;
 

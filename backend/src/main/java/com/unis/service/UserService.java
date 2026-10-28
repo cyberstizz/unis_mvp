@@ -804,6 +804,8 @@ public class UserService {
         //    Photo likes: the soft delete keeps the users row, so the ON DELETE
         //    CASCADE on photo_likes never fires.
         jdbcTemplate.update("DELETE FROM photo_likes WHERE user_id = ?", userId);
+        //    Comment likes, for the same reason.
+        jdbcTemplate.update("DELETE FROM comment_likes WHERE user_id = ?", userId);
         jdbcTemplate.update("DELETE FROM follows WHERE follower_id = ? OR followed_id = ?", userId, userId);
         jdbcTemplate.update("""
             UPDATE playlist SET follower_count = GREATEST(0, follower_count - 1)
