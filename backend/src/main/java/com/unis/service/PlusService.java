@@ -134,8 +134,44 @@ public class PlusService {
                 "SELECT email, username, deleted_at FROM users WHERE user_id = ?", userId);
         if (user.get("deleted_at") != null) throw new IllegalStateException("This account is closed.");
 
-        String customerId = customerFor(userId, (String) user.get("email"), (String) user.get("username"));
+        checkPrice();
 
+        String email = (String) user.get("email");
+        String username = (String) user.get("username");
+        String customerId = customerFor(userId, email, username);
+        try {
+            return createSession(userId, customerId);
+        } catch (StripeApi.StripeException e) {
+            // A customer saved under another Stripe account or mode (test keys
+            // swapped for live ones, or keys rotated to a new account) no longer
+            // exists for the current key. Make a fresh one and try once more.
+            if (e.getMessage() == null || !e.getMessage().toLowerCase().contains("no such customer")) throw e;
+            log.warn("[Plus] action=checkout userId={} status=stale_customer customer={} note=recreating", userId, customerId);
+            customerId = replaceCustomer(userId, email, username);
+            return createSession(userId, customerId);
+        }
+    }
+
+    /**
+     * The Plus price must exist for the current key, be active, and repeat
+     * monthly. Each mistake gets its own message, which admins see on the Plus
+     * page (PlusController), so a setup problem shows up as a sentence instead
+     * of "Checkout couldn't start".
+     */
+    private void checkPrice() {
+        JsonNode price = stripe.get("prices/" + priceId);   // "No such price" comes back as a StripeException
+        if (!price.path("active").asBoolean(true)) {
+            throw new StripeApi.StripeException(0, "The Plus price (" + priceId + ") is archived in Stripe. "
+                    + "Make it active again, or set STRIPE_PLUS_PRICE_ID to an active price.");
+        }
+        if (!"recurring".equals(price.path("type").asText())) {
+            throw new StripeApi.StripeException(0, "The Plus price (" + priceId + ") is a one-time price. "
+                    + "Unis Plus needs a recurring monthly price.");
+        }
+        cachedPriceCents = price.path("unit_amount").asInt();
+    }
+
+    private String createSession(UUID userId, String customerId) {
         Map<String, String> f = StripeApi.form();
         f.put("mode", "subscription");
         f.put("customer", customerId);
@@ -150,6 +186,24 @@ public class PlusService {
         JsonNode session = stripe.post("checkout/sessions", f);
         log.info("[Plus] action=checkout userId={} session={}", userId, session.path("id").asText());
         return session.path("url").asText();
+    }
+
+    /** Swaps a stale Stripe customer for a new one (only while the user has no live subscription). */
+    private String replaceCustomer(UUID userId, String email, String username) {
+        Map<String, String> f = StripeApi.form();
+        if (email != null && !email.isBlank()) f.put("email", email);
+        if (username != null) f.put("name", username);
+        f.put("metadata[unis_user_id]", userId.toString());
+        JsonNode customer = stripe.post("customers", f, "unis-plus-customer-" + userId + "-" + UUID.randomUUID());
+        String customerId = customer.path("id").asText();
+        jdbc.update("""
+                UPDATE plus_subscriptions
+                   SET stripe_customer_id = ?, stripe_subscription_id = NULL, status = 'incomplete',
+                       current_period_end = NULL, cancel_at_period_end = FALSE, updated_at = NOW()
+                 WHERE user_id = ?
+                """, customerId, userId);
+        log.info("[Plus] action=replace_customer userId={} customer={}", userId, customerId);
+        return customerId;
     }
 
     /** Opens Stripe's customer portal (change card, cancel). */

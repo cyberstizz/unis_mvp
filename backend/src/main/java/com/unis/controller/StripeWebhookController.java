@@ -1,6 +1,8 @@
 package com.unis.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.unis.service.DirectSupportService;
+import com.unis.service.DownloadService;
 import com.unis.service.PlusService;
 import com.unis.service.SponsorService;
 import com.unis.service.StripeApi;
@@ -13,7 +15,8 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Map;
 
 /**
- * Stripe → Unis notifications for Unis Plus and local sponsors.
+ * Stripe → Unis notifications for Unis Plus, local sponsors, song purchases
+ * and artist support.
  *
  *   POST /api/v1/stripe/webhook
  *
@@ -30,6 +33,9 @@ import java.util.Map;
  *   customer.subscription.deleted   of the period, ended)
  *   invoice.paid                    a Plus month was paid (Community Share)
  *   charge.refunded                 a sponsor or Plus payment was refunded
+ *   payment_intent.succeeded        a song purchase or support payment went
+ *                                   through (records it even if the buyer
+ *                                   closed the page before the app confirmed)
  */
 @RestController
 @RequestMapping("/api/v1/stripe/webhook")
@@ -40,11 +46,16 @@ public class StripeWebhookController {
     private final StripeApi stripe;
     private final PlusService plus;
     private final SponsorService sponsors;
+    private final DownloadService downloads;
+    private final DirectSupportService support;
 
-    public StripeWebhookController(StripeApi stripe, PlusService plus, SponsorService sponsors) {
+    public StripeWebhookController(StripeApi stripe, PlusService plus, SponsorService sponsors,
+                                   DownloadService downloads, DirectSupportService support) {
         this.stripe = stripe;
         this.plus = plus;
         this.sponsors = sponsors;
+        this.downloads = downloads;
+        this.support = support;
     }
 
     @PostMapping
@@ -74,6 +85,13 @@ public class StripeWebhookController {
                 case "customer.subscription.created", "customer.subscription.updated",
                      "customer.subscription.deleted" -> plus.onSubscriptionEvent(obj);
                 case "invoice.paid" -> plus.onInvoicePaid(obj);
+                case "payment_intent.succeeded" -> {
+                    // Song sales and support carry metadata[type]; Plus and sponsor
+                    // payments don't, and are handled by their own events above.
+                    String kind = obj.path("metadata").path("type").asText("");
+                    if ("song_purchase".equals(kind)) downloads.recordFromWebhook(obj);
+                    else if ("direct_support".equals(kind)) support.recordFromWebhook(obj);
+                }
                 case "charge.refunded" -> onChargeRefunded(obj);
                 default -> log.debug("[StripeWebhook] event={} type={} status=ignored", eventId, type);
             }

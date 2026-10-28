@@ -7,8 +7,10 @@ import com.unis.entity.SupportPayment;
 import com.unis.entity.User;
 import com.unis.repository.SupportPaymentRepository;
 import com.unis.repository.UserRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Direct fan-to-artist support ("tips").
@@ -49,15 +52,33 @@ public class DirectSupportService {
     // At $1.00 the gate takes 34¢ (Stripe's 33¢ + 1¢); the artist gets 66¢.
     private static final int MINIMUM_SUPPORT_CENTS = 100;
 
-    // Hard ceiling to blunt fat-finger / fraud ($2,000). Adjust as needed.
-    private static final int MAXIMUM_SUPPORT_CENTS = 200_000;
+    // Most one payment can be ($100), against fat fingers and fraud.
+    private static final int MAXIMUM_SUPPORT_CENTS = 10_000;
+
+    // Money in DMs and on profiles: fan to artist only, with limits, so Unis
+    // can't be used to move money between people (Stripe prohibits
+    // person-to-person money transmission) or to cash out stolen cards.
+    private static final int DAILY_LIMIT_CENTS = 25_000;    // $250 per sender in any 24 hours
+    private static final int WEEKLY_LIMIT_CENTS = 50_000;   // $500 per sender in any 7 days
+    private static final int MIN_ACCOUNT_AGE_DAYS = 7;      // a brand-new account can't send money yet
+
+    // A note is a message to the artist, not a way to arrange payment elsewhere.
+    private static final Pattern NOTE_BLOCKED = Pattern.compile(
+            "(https?://|www\\.|\\b[a-z0-9-]+\\.(com|net|org|io|me|app|co|ly|gg)\\b"
+            + "|\\$[a-z][a-z0-9_]{1,}|\\b(venmo|zelle|cash ?app|paypal|telegram|whatsapp|bitcoin|btc|usdt)\\b"
+            + "|(\\d[\\s().-]*){7,})",
+            Pattern.CASE_INSENSITIVE);
 
     private static final int NOTE_MAX_LEN = 280;
 
+    private final JdbcTemplate jdbc;
+
     public DirectSupportService(SupportPaymentRepository supportPaymentRepository,
-                                UserRepository userRepository) {
+                                UserRepository userRepository,
+                                JdbcTemplate jdbc) {
         this.supportPaymentRepository = supportPaymentRepository;
         this.userRepository = userRepository;
+        this.jdbc = jdbc;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -85,6 +106,21 @@ public class DirectSupportService {
         User artist = userRepository.findById(artistId)
                 .filter(a -> a.getDeletedAt() == null)
                 .orElseThrow(() -> new RuntimeException("This artist is no longer on Unis."));
+        if (artist.getRole() != User.Role.artist) {
+            throw new RuntimeException("Support can only be sent to artists.");
+        }
+
+        User supporter = userRepository.findById(supporterId)
+                .filter(u -> u.getDeletedAt() == null)
+                .orElseThrow(() -> new RuntimeException("Your account can't send support."));
+        if (!Boolean.TRUE.equals(supporter.getPhoneVerified())) {
+            throw new RuntimeException("Verify your phone number to send support.");
+        }
+        if (supporter.getCreatedAt() != null
+                && supporter.getCreatedAt().isAfter(LocalDateTime.now().minusDays(MIN_ACCOUNT_AGE_DAYS))) {
+            throw new RuntimeException("New accounts can send support after their first " + MIN_ACCOUNT_AGE_DAYS + " days.");
+        }
+        checkSenderLimits(supporterId, amountCents);
 
         String artistStripeAccountId = artist.getStripeAccountId();
         if (artistStripeAccountId == null || artistStripeAccountId.isEmpty()
@@ -95,6 +131,9 @@ public class DirectSupportService {
         }
 
         String cleanNote = sanitizeNote(note);
+        if (cleanNote != null && NOTE_BLOCKED.matcher(cleanNote).find()) {
+            throw new RuntimeException("Notes can't include links, phone numbers or payment handles.");
+        }
         String cleanSource = (source != null && source.equalsIgnoreCase("dm")) ? "dm" : "profile";
         int platformFee = PlatformFees.feeCents(amountCents, PLATFORM_FEE_PERCENT);
 
@@ -115,6 +154,9 @@ public class DirectSupportService {
 
             if (cleanNote != null) {
                 params.putMetadata("note", cleanNote);
+            }
+            if (supporter.getEmail() != null && !supporter.getEmail().isBlank()) {
+                params.setReceiptEmail(supporter.getEmail());   // Stripe emails the receipt
             }
 
             PaymentIntent paymentIntent = PaymentIntent.create(params.build());
@@ -183,31 +225,79 @@ public class DirectSupportService {
             String note = meta.get("note");
             String source = meta.getOrDefault("source", "profile");
 
-            SupportPayment support = SupportPayment.builder()
-                    .supporterId(supporterId)
-                    .artistId(artistId)
-                    .amount(amount)
-                    .platformFee(platformFee)
-                    .note(note)
-                    .source(source)
-                    .stripePaymentIntentId(paymentIntentId)
-                    .status("completed")
-                    .build();
-
-            support = supportPaymentRepository.save(support);
-
-            log.info("Support recorded: supporter {} -> artist {} for {}c",
-                    supporterId, artistId, amount);
+            Long supportId = recordSupport(supporterId, artistId, amount, platformFee, note, source, paymentIntentId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("supportId", support.getId());
+            response.put("supportId", supportId);
             response.put("amount", amount);
             return response;
 
         } catch (Exception e) {
             log.error("Support confirmation failed (artist {}): {}", artistId, e.getMessage());
             throw new RuntimeException("Support confirmation failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * payment_intent.succeeded for a support payment (StripeWebhookController).
+     * Records it even if the fan closed the page before the app confirmed it.
+     * Safe to run twice and alongside confirmSupport: one row per PaymentIntent.
+     */
+    public void recordFromWebhook(JsonNode pi) {
+        JsonNode meta = pi.path("metadata");
+        String paymentIntentId = pi.path("id").asText(null);
+        String supporter = meta.path("supporter_id").asText(null);
+        String artist = meta.path("artist_id").asText(null);
+        if (paymentIntentId == null || supporter == null || artist == null) {
+            log.warn("[Support] action=webhook intent={} status=missing_metadata", paymentIntentId);
+            return;
+        }
+        int amount = pi.path("amount_received").asInt(pi.path("amount").asInt(0));
+        int fee = pi.path("application_fee_amount").asInt(0);
+        String note = meta.hasNonNull("note") ? meta.path("note").asText() : null;
+        String source = meta.path("source").asText("profile");
+        recordSupport(UUID.fromString(supporter), UUID.fromString(artist), amount, fee, note, source, paymentIntentId);
+    }
+
+    /** One row per PaymentIntent (unique index), whoever gets here first. Returns the row's id. */
+    private Long recordSupport(UUID supporterId, UUID artistId, int amount, int platformFee,
+                               String note, String source, String paymentIntentId) {
+        List<Long> inserted = jdbc.queryForList("""
+                INSERT INTO support_payments
+                    (supporter_id, artist_id, amount, platform_fee, note, source,
+                     stripe_payment_intent_id, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', NOW())
+                ON CONFLICT (stripe_payment_intent_id) DO NOTHING
+                RETURNING id
+                """, Long.class, supporterId, artistId, amount, platformFee, note,
+                "dm".equals(source) ? "dm" : "profile", paymentIntentId);
+        if (!inserted.isEmpty()) {
+            log.info("[Support] action=record supporter={} artist={} amount={}c intent={} status=ok",
+                    supporterId, artistId, amount, paymentIntentId);
+            return inserted.get(0);
+        }
+        return jdbc.queryForObject("SELECT id FROM support_payments WHERE stripe_payment_intent_id = ?",
+                Long.class, paymentIntentId);
+    }
+
+    /** $250 in any 24 hours and $500 in any 7 days per sender, across all artists. */
+    private void checkSenderLimits(UUID supporterId, int amountCents) {
+        Map<String, Object> sent = jdbc.queryForMap("""
+                SELECT COALESCE(SUM(amount) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours'), 0) AS day,
+                       COALESCE(SUM(amount), 0) AS week
+                FROM support_payments
+                WHERE supporter_id = ? AND status = 'completed' AND created_at > NOW() - INTERVAL '7 days'
+                """, supporterId);
+        long day = ((Number) sent.get("day")).longValue();
+        long week = ((Number) sent.get("week")).longValue();
+        if (day + amountCents > DAILY_LIMIT_CENTS) {
+            throw new RuntimeException("You can send up to $" + (DAILY_LIMIT_CENTS / 100) + " in support a day. "
+                    + "You have $" + String.format("%.2f", Math.max(0, DAILY_LIMIT_CENTS - day) / 100.0) + " left today.");
+        }
+        if (week + amountCents > WEEKLY_LIMIT_CENTS) {
+            throw new RuntimeException("You can send up to $" + (WEEKLY_LIMIT_CENTS / 100) + " in support a week. "
+                    + "You have $" + String.format("%.2f", Math.max(0, WEEKLY_LIMIT_CENTS - week) / 100.0) + " left this week.");
         }
     }
 

@@ -47,7 +47,7 @@ public class PlusController {
         } catch (StripeApi.StripeException e) {
             log.warn("[Plus] action=checkout userId={} status=stripe_error err={}", userId, e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                    .body(Map.of("error", "Checkout couldn't start. Please try again in a minute."));
+                    .body(Map.of("error", forViewer("Checkout couldn't start. Please try again in a minute.", e)));
         }
     }
 
@@ -61,8 +61,21 @@ public class PlusController {
         } catch (StripeApi.StripeException e) {
             log.warn("[Plus] action=portal userId={} status=stripe_error err={}", userId, e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                    .body(Map.of("error", "Couldn't open plan settings. Please try again in a minute."));
+                    .body(Map.of("error", forViewer("Couldn't open plan settings. Please try again in a minute.", e)));
         }
+    }
+
+    /**
+     * Members see the plain message. Admins also see Stripe's own reason (for
+     * example "No such price" or "you must set an account or business name"),
+     * so a setup problem can be fixed without digging through server logs.
+     */
+    private static String forViewer(String message, StripeApi.StripeException e) {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        boolean admin = auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+        return admin ? message + " Stripe said: " + e.getMessage() + " (shown to admins only)" : message;
     }
 
     private static UUID currentUserOrNull() {

@@ -287,36 +287,65 @@ public class StripeConnectService {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Request a payout for the user.
-     * Validates balance >= $50, no active payouts, and Stripe account is ready.
+     * A payout Stripe refused. It's a checked exception on purpose: Spring
+     * commits the transaction for checked exceptions, so the failed payout and
+     * its reason are kept in the person's payout history (a RuntimeException
+     * would roll them back and they'd see nothing).
+     */
+    public static class PayoutException extends Exception {
+        public PayoutException(String message) {
+            super(message);
+        }
+    }
+
+    /** How long a payout may sit unconfirmed before the next request checks Stripe for it. */
+    private static final int UNCONFIRMED_MINUTES = 2;
+
+    /**
+     * Request a payout for the user: their whole available balance, $50 or more.
+     *
+     * Safe against double payouts:
+     *   - The user's row is locked first, so a second request (another tab, a
+     *     double tap, a retry) waits, then sees this payout and the new balance.
+     *   - Stripe gets an idempotency key made from the payout's id, so the same
+     *     payout can never become two transfers, even if it's sent twice.
+     *   - If Stripe doesn't answer, the payout is returned as "processing"
+     *     (which blocks a new one). The next request looks the transfer up in
+     *     Stripe and either confirms it or sends it again with the same key.
      */
     public Payout requestPayout(UUID userId) throws Exception {
+        jdbc.queryForList("SELECT user_id FROM users WHERE user_id = ? FOR UPDATE", userId);
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found: " + userId));
 
-        // Validate Stripe account
-        if (user.getStripeAccountId() == null || !user.getStripeOnboardingComplete()) {
+        if (user.getStripeAccountId() == null || !Boolean.TRUE.equals(user.getStripeOnboardingComplete())) {
             throw new RuntimeException("Please complete Stripe onboarding before requesting a payout.");
         }
 
-        // Check for active payouts
-        if (payoutRepository.hasActivePayout(userId)) {
+        List<UUID> open = jdbc.queryForList("""
+                SELECT payout_id FROM payouts
+                WHERE user_id = ? AND status IN ('pending', 'processing')
+                ORDER BY created_at DESC LIMIT 1
+                """, UUID.class, userId);
+        if (!open.isEmpty()) {
+            Payout stuck = payoutRepository.findById(open.get(0)).orElse(null);
+            if (stuck != null && stuck.getStripeTransferId() == null && stuck.getCreatedAt() != null
+                    && stuck.getCreatedAt().isBefore(LocalDateTime.now().minusMinutes(UNCONFIRMED_MINUTES))) {
+                return resumeUnconfirmed(stuck, user);
+            }
             throw new RuntimeException("You already have a payout being processed.");
         }
 
         // Available = closed Community Share months + adjustments − payouts
         // already made from them (EarningsService reads the ledger).
         BigDecimal availableBalance = earningsService.getAvailableBalance(userId);
-
         if (availableBalance.compareTo(PAYOUT_THRESHOLD) < 0) {
             throw new RuntimeException("Minimum payout is $50.00. Current balance: $" + availableBalance.setScale(2, RoundingMode.HALF_UP));
         }
 
-        // Round to 2 decimal places for transfer
         BigDecimal payoutAmount = availableBalance.setScale(2, RoundingMode.FLOOR);
-        long amountInCents = payoutAmount.multiply(new BigDecimal("100")).longValue();
 
-        // Create the payout record first (status: processing)
         Payout payout = Payout.builder()
                 .user(user)
                 .amount(payoutAmount)
@@ -325,47 +354,118 @@ public class StripeConnectService {
                 .periodEnd(LocalDate.now().withDayOfMonth(1).minusDays(1))
                 .createdAt(LocalDateTime.now())
                 .build();
-        payout = payoutRepository.save(payout);
+        payout = payoutRepository.saveAndFlush(payout);
+        return sendTransfer(payout, user);
+    }
 
-        try {
-            // Create Stripe Transfer
-            String formBody = "amount=" + amountInCents
-                    + "&currency=usd"
-                    + "&destination=" + user.getStripeAccountId()
-                    + "&metadata[unis_payout_id]=" + payout.getPayoutId().toString()
-                    + "&metadata[unis_user_id]=" + userId.toString();
+    /** Sends (or re-sends, with the same idempotency key) the transfer for one payout. */
+    private Payout sendTransfer(Payout payout, User user) throws PayoutException {
+        long amountInCents = payout.getAmount().setScale(2, RoundingMode.FLOOR)
+                .multiply(new BigDecimal("100")).longValueExact();
+        String formBody = "amount=" + amountInCents
+                + "&currency=usd"
+                + "&destination=" + user.getStripeAccountId()
+                + "&metadata[unis_payout_id]=" + payout.getPayoutId()
+                + "&metadata[unis_user_id]=" + user.getUserId();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://api.stripe.com/v1/transfers"))
+                .timeout(java.time.Duration.ofSeconds(30))
+                .header("Authorization", "Bearer " + stripeSecretKey)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Idempotency-Key", "unis-payout-" + payout.getPayoutId())
+                .POST(HttpRequest.BodyPublishers.ofString(formBody))
+                .build();
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api.stripe.com/v1/transfers"))
-                    .header("Authorization", "Bearer " + stripeSecretKey)
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString(formBody))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() >= 300) {
-                throw new RuntimeException("Stripe transfer failed: " + response.body());
+        HttpResponse<String> response = null;
+        for (int attempt = 1; attempt <= 2 && response == null; attempt++) {
+            try {
+                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                log.warn("[Payouts] action=transfer payout={} attempt={} status=no_answer err={}",
+                        payout.getPayoutId(), attempt, e.getMessage());
             }
-
-            JsonNode json = objectMapper.readTree(response.body());
-            String transferId = json.get("id").asText();
-
-            // Update payout record
-            payout.setStripeTransferId(transferId);
-            payout.setStatus("completed");
-            payout.setCompletedAt(LocalDateTime.now());
-            payoutRepository.save(payout);
-
-            return payout;
-
-        } catch (Exception e) {
-            // Mark payout as failed
-            payout.setStatus("failed");
-            payout.setFailureReason(e.getMessage());
-            payoutRepository.save(payout);
-            throw e;
         }
+
+        if (response == null) {
+            // Unknown: Stripe may have made the transfer. Keep "processing" so no
+            // second payout can start; the next request checks Stripe.
+            payout.setFailureReason("No answer from Stripe yet; confirming.");
+            payoutRepository.save(payout);
+            log.error("[Payouts] action=transfer payout={} user={} amount={} status=unconfirmed",
+                    payout.getPayoutId(), user.getUserId(), payout.getAmount());
+            return payout;
+        }
+
+        String reason = null;
+        String transferId = null;
+        try {
+            JsonNode json = objectMapper.readTree(response.body());
+            if (response.statusCode() >= 300) reason = json.path("error").path("message").asText("Stripe returned " + response.statusCode());
+            else transferId = json.path("id").asText(null);
+        } catch (Exception e) {
+            reason = "Unreadable answer from Stripe (" + response.statusCode() + ")";
+        }
+
+        if (transferId == null) {
+            payout.setStatus("failed");
+            payout.setFailureReason(reason);
+            payoutRepository.save(payout);
+            boolean ourSide = reason != null && reason.toLowerCase().contains("insufficient");
+            log.error("[Payouts] action=transfer payout={} user={} amount={} status=failed ourSide={} err={}",
+                    payout.getPayoutId(), user.getUserId(), payout.getAmount(), ourSide, reason);
+            throw new PayoutException(ourSide
+                    ? "Payouts are paused for a moment on our side. Your balance is safe; please try again later today."
+                    : "Stripe couldn't send this payout. Check your account in the Stripe dashboard, then try again.");
+        }
+
+        payout.setStripeTransferId(transferId);
+        payout.setStatus("completed");
+        payout.setCompletedAt(LocalDateTime.now());
+        payout.setFailureReason(null);
+        payoutRepository.save(payout);
+        log.info("[Payouts] action=transfer payout={} user={} amount={} transfer={} status=ok",
+                payout.getPayoutId(), user.getUserId(), payout.getAmount(), transferId);
+        return payout;
+    }
+
+    /**
+     * A payout Stripe never answered for. Look for its transfer (they carry
+     * unis_payout_id); if it's there, mark it completed, otherwise send it again
+     * with the same idempotency key, which can't create a second transfer.
+     */
+    private Payout resumeUnconfirmed(Payout payout, User user) throws PayoutException {
+        try {
+            long since = payout.getCreatedAt().minusHours(1).atZone(java.time.ZoneId.systemDefault()).toEpochSecond();
+            HttpRequest list = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.stripe.com/v1/transfers?limit=100&destination="
+                            + user.getStripeAccountId() + "&created%5Bgte%5D=" + since))
+                    .timeout(java.time.Duration.ofSeconds(30))
+                    .header("Authorization", "Bearer " + stripeSecretKey)
+                    .GET().build();
+            HttpResponse<String> res = httpClient.send(list, HttpResponse.BodyHandlers.ofString());
+            if (res.statusCode() < 300) {
+                for (JsonNode t : objectMapper.readTree(res.body()).path("data")) {
+                    if (payout.getPayoutId().toString().equals(t.path("metadata").path("unis_payout_id").asText())) {
+                        payout.setStripeTransferId(t.path("id").asText());
+                        payout.setStatus("completed");
+                        payout.setCompletedAt(LocalDateTime.now());
+                        payout.setFailureReason(null);
+                        payoutRepository.save(payout);
+                        log.info("[Payouts] action=resume payout={} status=found transfer={}", payout.getPayoutId(), t.path("id").asText());
+                        return payout;
+                    }
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("[Payouts] action=resume payout={} status=lookup_failed err={}", payout.getPayoutId(), e.getMessage());
+        }
+        log.info("[Payouts] action=resume payout={} status=resending", payout.getPayoutId());
+        return sendTransfer(payout, user);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

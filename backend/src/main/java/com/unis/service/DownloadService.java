@@ -12,7 +12,9 @@ import com.unis.entity.User;
 import com.unis.repository.PurchaseRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.UserRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,12 +43,16 @@ public class DownloadService {
     // song can always be cheapest on Unis. The fee gate keeps Unis whole at it.
     private static final int MINIMUM_PRICE_CENTS = PlatformFees.MIN_SONG_PRICE_CENTS;
 
+    private final JdbcTemplate jdbc;
+
     public DownloadService(SongRepository songRepository,
                            PurchaseRepository purchaseRepository,
-                           UserRepository userRepository) {
+                           UserRepository userRepository,
+                           JdbcTemplate jdbc) {
         this.songRepository = songRepository;
         this.purchaseRepository = purchaseRepository;
         this.userRepository = userRepository;
+        this.jdbc = jdbc;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -114,20 +120,22 @@ public class DownloadService {
             throw new RuntimeException("You already own this song.");
         }
 
-        // Get the artist's Stripe Connect account ID
-        // IMPORTANT: Verify your User entity has this field.
-        // It should have been added when you implemented Stripe Connect onboarding.
-        // If the field is named differently (e.g. stripeConnectId), adjust here.
         UUID artistUserId = song.getArtist().getUserId();
+        // Buying your own song moves no music, only money: it's how stolen cards
+        // get cashed out through a store, so it's never allowed.
+        if (artistUserId.equals(buyerId)) {
+            throw new RuntimeException("You can't buy your own song. You can always download it from your dashboard.");
+        }
         User artist = userRepository.findById(artistUserId)
                 .orElseThrow(() -> new RuntimeException("Artist not found"));
 
         String artistStripeAccountId = artist.getStripeAccountId();
-        if (artistStripeAccountId == null || artistStripeAccountId.isEmpty()) {
+        if (artistStripeAccountId == null || artistStripeAccountId.isEmpty()
+                || !Boolean.TRUE.equals(artist.getStripeOnboardingComplete())) {
             throw new RuntimeException(
-                    "This artist has not set up payouts yet. "
-                            + "They need to connect their Stripe account before selling tracks.");
+                    "This artist hasn't finished setting up payouts yet, so this song can't be bought right now.");
         }
+        String buyerEmail = userRepository.findById(buyerId).map(User::getEmail).orElse(null);
 
         int priceInCents = song.getDownloadPrice();
         // Break-even gate: never below Stripe's card fee + 1¢ (songs priced
@@ -135,7 +143,7 @@ public class DownloadService {
         int platformFee = PlatformFees.feeCents(priceInCents, PLATFORM_FEE_PERCENT);
 
         try {
-            PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
+            PaymentIntentCreateParams.Builder params = PaymentIntentCreateParams.builder()
                     .setAmount((long) priceInCents)
                     .setCurrency("usd")
                     .setApplicationFeeAmount((long) platformFee)
@@ -147,10 +155,12 @@ public class DownloadService {
                     .putMetadata("song_id", songId.toString())
                     .putMetadata("buyer_id", buyerId.toString())
                     .putMetadata("artist_id", artistUserId.toString())
-                    .putMetadata("type", "song_purchase")
-                    .build();
+                    .putMetadata("type", "song_purchase");
+            if (buyerEmail != null && !buyerEmail.isBlank()) {
+                params.setReceiptEmail(buyerEmail);   // Stripe emails the receipt
+            }
 
-            PaymentIntent paymentIntent = PaymentIntent.create(params);
+            PaymentIntent paymentIntent = PaymentIntent.create(params.build());
 
             log.info("PaymentIntent created: {} for song {} buyer {} amount {}",
                     paymentIntent.getId(), songId, buyerId, priceInCents);
@@ -220,31 +230,68 @@ public class DownloadService {
             int platformFee = paymentIntent.getApplicationFeeAmount() != null
                     ? paymentIntent.getApplicationFeeAmount().intValue() : 0;
 
-            Purchase purchase = Purchase.builder()
-                    .buyerId(buyerId)
-                    .songId(songId)
-                    .artistId(song.getArtist().getUserId())
-                    .amount(amount)
-                    .platformFee(platformFee)
-                    .stripePaymentIntentId(paymentIntentId)
-                    .status("completed")
-                    .build();
-
-            purchaseRepository.save(purchase);
-
-            log.info("Purchase recorded: buyer {} bought song {} for {} cents",
-                    buyerId, songId, amount);
+            Long purchaseId = recordPurchase(buyerId, songId, song.getArtist().getUserId(),
+                    amount, platformFee, paymentIntentId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("downloadUrl", song.getFileUrl());
-            response.put("purchaseId", purchase.getId());
+            response.put("purchaseId", purchaseId);
             return response;
 
         } catch (Exception e) {
             log.error("Purchase confirmation failed for song {}: {}", songId, e.getMessage());
             throw new RuntimeException("Purchase confirmation failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * payment_intent.succeeded for a song (StripeWebhookController). Records the
+     * purchase even if the buyer closed the page before the app confirmed it,
+     * so they still own the song. Safe to run twice and alongside
+     * confirmPurchase: one row per PaymentIntent. A song removed in the
+     * meantime is refunded in full, the same as confirmPurchase does.
+     */
+    @Transactional
+    public void recordFromWebhook(JsonNode pi) {
+        Stripe.apiKey = stripeSecretKey;
+        JsonNode meta = pi.path("metadata");
+        String paymentIntentId = pi.path("id").asText(null);
+        String songId = meta.path("song_id").asText(null);
+        String buyerId = meta.path("buyer_id").asText(null);
+        String artistId = meta.path("artist_id").asText(null);
+        if (paymentIntentId == null || songId == null || buyerId == null || artistId == null) {
+            log.warn("[Purchase] action=webhook intent={} status=missing_metadata", paymentIntentId);
+            return;
+        }
+        Song song = songRepository.findById(UUID.fromString(songId)).orElse(null);
+        if (song != null && song.isRemoved()) {
+            refundRemovedSongPurchase(song, UUID.fromString(buyerId), paymentIntentId);
+            return;
+        }
+        int amount = pi.path("amount_received").asInt(pi.path("amount").asInt(0));
+        int fee = pi.path("application_fee_amount").asInt(0);
+        recordPurchase(UUID.fromString(buyerId), UUID.fromString(songId), UUID.fromString(artistId),
+                amount, fee, paymentIntentId);
+    }
+
+    /** One row per PaymentIntent (unique index), whoever gets here first. Returns the row's id. */
+    private Long recordPurchase(UUID buyerId, UUID songId, UUID artistId, int amount, int platformFee,
+                                String paymentIntentId) {
+        List<Long> inserted = jdbc.queryForList("""
+                INSERT INTO purchases
+                    (buyer_id, song_id, artist_id, amount, platform_fee, stripe_payment_intent_id, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'completed', NOW())
+                ON CONFLICT (stripe_payment_intent_id) DO NOTHING
+                RETURNING id
+                """, Long.class, buyerId, songId, artistId, amount, platformFee, paymentIntentId);
+        if (!inserted.isEmpty()) {
+            log.info("[Purchase] action=record buyer={} song={} amount={}c intent={} status=ok",
+                    buyerId, songId, amount, paymentIntentId);
+            return inserted.get(0);
+        }
+        return jdbc.queryForObject("SELECT id FROM purchases WHERE stripe_payment_intent_id = ?",
+                Long.class, paymentIntentId);
     }
 
     // ═══════════════════════════════════════════════════════════

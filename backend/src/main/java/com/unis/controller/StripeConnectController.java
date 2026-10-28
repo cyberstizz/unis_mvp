@@ -78,12 +78,14 @@ public class StripeConnectController {
                     "amount", payout.getAmount(),
                     "status", payout.getStatus()
             ));
+        } catch (StripeConnectService.PayoutException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(500)
-                    .body(Map.of("error", "Payout failed: " + e.getMessage()));
+                    .body(Map.of("error", "Payout couldn't start. Please try again."));
         }
     }
 

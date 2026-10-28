@@ -42,11 +42,21 @@ import java.util.*;
  * and AdMob rules forbid paying anyone because ads were viewed, so the money
  * follows listening, and ad income is just one of the things that fund it.
  *
- * Unis Plus is settled in the same close, before the pot is divided: 60% of
- * each subscriber's payment (after Stripe's card and Billing fees) goes to
- * the artists that subscriber played that month, by counted plays (same
- * rules and daily cap), or to their supported artist if they played no one.
- * Ineligible artists' parts stay with Unis. Unis's part joins the pot.
+ * Unis Plus is settled in the same close, before the pot is divided. Of each
+ * subscriber's payment (after Stripe's card and Billing fees), 60% goes to
+ * artists: 15% to the artist they supported when they paid, whatever they
+ * played, and 45% to the artists they played that month, by counted plays
+ * (same rules and daily cap; their supported artist gets a share of this too
+ * if they played them). If they played no one, the 45% also goes to their
+ * supported artist; with no supported artist who can be paid, the 15% joins
+ * the played artists' part. Parts nobody can be paid stay with Unis. Unis's
+ * 40% joins the pot.
+ *
+ * Only phone-verified listeners' plays count toward the pot. Phone numbers
+ * are scarce, email addresses aren't: without this, a script running
+ * unverified accounts could dilute everyone's share and route part of it to
+ * the accounts above them. (Plus subscribers' plays always count for where
+ * their own fee goes: that's their money.)
  *
  * Results are written to earnings_ledger (one row per earner, per listener,
  * per level) and community_share_closes (one row per month). Balances and
@@ -66,6 +76,10 @@ public class CommunityShareService {
 
     /** Unis Plus: the artists' share of each subscriber's fee, after Stripe's fees. */
     public static final BigDecimal PLUS_ARTIST_RATE = new BigDecimal("0.60");
+    /** Of that: the subscriber's supported artist, whatever they played. */
+    public static final BigDecimal PLUS_SUPPORTED_RATE = new BigDecimal("0.15");
+    /** And: the artists they played, by counted plays. */
+    public static final BigDecimal PLUS_PLAYED_RATE = PLUS_ARTIST_RATE.subtract(PLUS_SUPPORTED_RATE);
 
     /** Counted plays per listener per day that count toward the share (about 2.5 hours of music). */
     public static final int DAILY_PLAY_CAP = 50;
@@ -189,6 +203,7 @@ public class CommunityShareService {
                 WHERE sp.played_at >= ? AND sp.played_at < ?
                   AND s.artist_id IS DISTINCT FROM sp.user_id
                   AND u.exclude_from_metrics = FALSE
+                  AND u.phone_verified = TRUE
             ),
             grp AS (
                 SELECT user_id, supported_artist_id, d, CAST(COUNT(*) AS numeric) AS n
@@ -297,10 +312,12 @@ public class CommunityShareService {
 
     /**
      * Unis Plus for a close: every paid, unsettled payment made before the
-     * month ended. 60% of each (after Stripe's fees) is split across the
-     * artists that subscriber played this month, by counted plays; if they
-     * played no one it goes to the artist they supported when they paid.
-     * Parts for artists who can't be paid stay with Unis.
+     * month ended. Of each payment (after Stripe's fees), 15% goes to the
+     * artist the subscriber supported when they paid and 45% to the artists
+     * they played this month, by counted plays. No plays: the 45% goes to the
+     * supported artist too. No supported artist who can be paid: the 15% is
+     * added to the played artists' part. Anything nobody can be paid for stays
+     * with Unis.
      */
     private PlusResult planPlus(LocalDateTime[] range, Set<UUID> canEarn) {
         Timestamp end = Timestamp.valueOf(range[1]);
@@ -317,17 +334,6 @@ public class CommunityShareService {
             return new PlusResult(List.of(), BigDecimal.ZERO, BigDecimal.ZERO, List.of());
         }
 
-        Map<UUID, BigDecimal> netByUser = new LinkedHashMap<>();
-        Map<UUID, UUID> fallbackArtist = new HashMap<>();
-        List<String> invoices = new ArrayList<>();
-        BigDecimal income = BigDecimal.ZERO;
-        for (PlusPayment p : payments) {
-            netByUser.merge(p.userId(), p.net(), BigDecimal::add);
-            if (p.supportedArtistId() != null) fallbackArtist.put(p.userId(), p.supportedArtistId());
-            invoices.add(p.invoiceId());
-            income = income.add(p.net());
-        }
-
         Map<UUID, List<ArtistWeight>> weights = new HashMap<>();
         jdbc.query(PLUS_WEIGHT_SQL, rs -> {
             ArtistWeight w = new ArtistWeight(rs.getObject("user_id", UUID.class),
@@ -335,33 +341,59 @@ public class CommunityShareService {
             weights.computeIfAbsent(w.listenerId(), k -> new ArrayList<>()).add(w);
         }, end, ZoneId.systemDefault().getId(), Timestamp.valueOf(range[0]), end, DAILY_PLAY_CAP, DAILY_PLAY_CAP);
 
-        List<Entry> entries = new ArrayList<>();
-        BigDecimal toArtists = BigDecimal.ZERO;
-        for (Map.Entry<UUID, BigDecimal> e : netByUser.entrySet()) {
-            UUID subscriber = e.getKey();
-            BigDecimal pool = e.getValue().multiply(PLUS_ARTIST_RATE);
-            List<ArtistWeight> ws = weights.getOrDefault(subscriber, List.of());
+        // One entry per earner per subscriber, so a subscriber with two unsettled
+        // payments (or whose supported artist they also played) gives one line.
+        Map<UUID, Map<UUID, BigDecimal>> owed = new LinkedHashMap<>();   // subscriber -> artist -> dollars
+        Map<UUID, Map<UUID, BigDecimal>> playsBehind = new HashMap<>();  // subscriber -> artist -> counted plays
+        List<String> invoices = new ArrayList<>();
+        BigDecimal income = BigDecimal.ZERO;
+
+        for (PlusPayment p : payments) {
+            invoices.add(p.invoiceId());
+            income = income.add(p.net());
+            UUID subscriber = p.userId();
+            UUID supported = p.supportedArtistId();
+            boolean supportedPayable = supported != null && !supported.equals(subscriber) && canEarn.contains(supported);
+
+            BigDecimal supportedPart = p.net().multiply(PLUS_SUPPORTED_RATE);
+            BigDecimal playedPart = p.net().multiply(PLUS_PLAYED_RATE);
+            Map<UUID, BigDecimal> mine = owed.computeIfAbsent(subscriber, k -> new LinkedHashMap<>());
+
+            if (supportedPayable) mine.merge(supported, supportedPart, BigDecimal::add);
+            else playedPart = playedPart.add(supportedPart);   // the 15% follows the plays instead
+
+            // Played artists who can be paid, and their plays.
+            List<ArtistWeight> ws = new ArrayList<>();
             BigDecimal totalWeight = BigDecimal.ZERO;
-            for (ArtistWeight w : ws) totalWeight = totalWeight.add(w.weight());
+            for (ArtistWeight w : weights.getOrDefault(subscriber, List.of())) {
+                UUID a = w.artistId();
+                if (a == null || a.equals(subscriber) || !canEarn.contains(a) || w.weight().signum() <= 0) continue;
+                ws.add(w);
+                totalWeight = totalWeight.add(w.weight());
+            }
 
             if (totalWeight.signum() > 0) {
                 for (ArtistWeight w : ws) {
-                    UUID artist = w.artistId();
-                    if (artist == null || artist.equals(subscriber) || !canEarn.contains(artist)) continue;
-                    BigDecimal amount = cents6(pool.multiply(w.weight()).divide(totalWeight, 12, RoundingMode.DOWN));
-                    if (amount.signum() <= 0) continue;
-                    entries.add(new Entry(artist, "plus_artist", subscriber, w.weight(), amount));
-                    toArtists = toArtists.add(amount);
+                    BigDecimal amount = playedPart.multiply(w.weight()).divide(totalWeight, 12, RoundingMode.DOWN);
+                    mine.merge(w.artistId(), amount, BigDecimal::add);
+                    playsBehind.computeIfAbsent(subscriber, k -> new HashMap<>()).put(w.artistId(), w.weight());
                 }
-            } else {
-                UUID artist = fallbackArtist.get(subscriber);
-                if (artist != null && !artist.equals(subscriber) && canEarn.contains(artist)) {
-                    BigDecimal amount = cents6(pool);
-                    if (amount.signum() > 0) {
-                        entries.add(new Entry(artist, "plus_artist", subscriber, BigDecimal.ZERO, amount));
-                        toArtists = toArtists.add(amount);
-                    }
-                }
+            } else if (supportedPayable) {
+                mine.merge(supported, playedPart, BigDecimal::add);   // played no one who can be paid
+            }
+            // Otherwise nobody can be paid for this part; it stays with Unis.
+        }
+
+        List<Entry> entries = new ArrayList<>();
+        BigDecimal toArtists = BigDecimal.ZERO;
+        for (Map.Entry<UUID, Map<UUID, BigDecimal>> bySub : owed.entrySet()) {
+            UUID subscriber = bySub.getKey();
+            for (Map.Entry<UUID, BigDecimal> e : bySub.getValue().entrySet()) {
+                BigDecimal amount = cents6(e.getValue());
+                if (amount.signum() <= 0) continue;
+                BigDecimal plays = playsBehind.getOrDefault(subscriber, Map.of()).getOrDefault(e.getKey(), BigDecimal.ZERO);
+                entries.add(new Entry(e.getKey(), "plus_artist", subscriber, plays, amount));
+                toArtists = toArtists.add(amount);
             }
         }
         return new PlusResult(entries, income, toArtists, invoices);
