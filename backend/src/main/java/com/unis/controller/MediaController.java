@@ -41,6 +41,8 @@ public class MediaController {
             @RequestPart("song") String songJson,
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "artwork", required = false) MultipartFile artwork) {
+        // Checked before the token is spent, so a refused debut song can be fixed and sent again.
+        mediaService.requireRightsConfirmed(songJson, false);
         UUID artistId = signupUploadService.consume(signupToken);   // validates + single-use
         Song saved = mediaService.addSongForArtist(artistId, songJson, file, artwork);
         return ResponseEntity.ok(saved);

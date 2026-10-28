@@ -35,4 +35,10 @@ public class SongUploadRequest {
     // downloadPrice is in cents. Missing = free.
     private String downloadPolicy;   // "free" | "paid" | "unavailable"
     private Integer downloadPrice;
+
+    // The uploader ticked the rights box (Terms 3.6): they control this song,
+    // no publisher or publishing administrator handles it, no writer is with
+    // SESAC or GMR, and it isn't a cover or built on uncleared samples. Every
+    // upload must send true; MediaService refuses anything else.
+    private Boolean rightsConfirmed;
 }

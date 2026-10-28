@@ -61,6 +61,8 @@ import java.util.stream.Collectors;
 @Transactional
 public class MediaService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MediaService.class);
+
     @Autowired
     private SongRepository songRepository;
 
@@ -121,6 +123,9 @@ public class MediaService {
             }
             if (file == null || file.isEmpty()) {
                 throw new IllegalArgumentException("Audio file is required");
+            }
+            if (!Boolean.TRUE.equals(req.getRightsConfirmed())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, RIGHTS_REFUSED_SONG);
             }
 
             // Resolve artist using authenticated user
@@ -220,6 +225,7 @@ public class MediaService {
             }
 
             Song savedSong = songRepository.save(song);
+            recordRightsConfirmed("songs", "song_id", savedSong.getSongId());
 
             // If this is the artist's first song (no default song set), make it the default
             if (artist.getDefaultSongId() == null) {
@@ -233,6 +239,72 @@ public class MediaService {
         } catch (IllegalArgumentException e) {
             throw new RuntimeException("Invalid upload data: " + e.getMessage(), e);
         }
+    }
+
+
+    // ========================================================================
+    // UPLOAD RIGHTS (Terms 3.6)
+    // ========================================================================
+    //
+    // Until Unis holds licenses from The MLC and the performing rights
+    // organizations, it can only carry songs the uploader controls: no
+    // publisher or publishing administrator, no SESAC or GMR writer, no
+    // covers, no uncleared samples. Every upload path (the upload wizard, the
+    // signup debut song, the mobile app) shows a checkbox for this and sends
+    // rightsConfirmed: true. The server refuses anything else, so no client can
+    // skip it, and keeps the time it was confirmed on the song or video row.
+
+    public static final String RIGHTS_REFUSED_SONG =
+            "Check the box confirming you control this song's rights before uploading. Unis can't accept songs "
+            + "a publisher or publishing administrator handles, songs with a SESAC or GMR writer, covers, or songs "
+            + "with uncleared samples.";
+    public static final String RIGHTS_REFUSED_VIDEO =
+            "Check the box confirming you control the rights to the music in this video before uploading. Unis "
+            + "can't accept music a publisher or publishing administrator handles, music with a SESAC or GMR "
+            + "writer, covers, or music with uncleared samples.";
+
+    /**
+     * Refuses upload metadata that doesn't confirm the rights. Used where the
+     * check must run before anything else happens (the signup debut song, whose
+     * single-use token would otherwise be spent). Unreadable JSON is left for
+     * the upload itself to report.
+     */
+    public void requireRightsConfirmed(String json, boolean video) {
+        boolean confirmed;
+        try {
+            confirmed = objectMapper.readTree(json).path("rightsConfirmed").asBoolean(false);
+        } catch (IOException e) {
+            return;
+        }
+        if (!confirmed) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, video ? RIGHTS_REFUSED_VIDEO : RIGHTS_REFUSED_SONG);
+        }
+    }
+
+    /** True once V2026_10l__upload_rights.sql has added the columns; checked again until then. */
+    private volatile boolean rightsColumnsReady;
+
+    /**
+     * Stamps when the uploader confirmed the rights. If the SQL hasn't been run
+     * yet the upload still goes through and this logs an error, because a
+     * failed statement here would roll the whole upload back.
+     */
+    private void recordRightsConfirmed(String table, String idColumn, UUID id) {
+        if (!rightsColumnsReady) {
+            Integer found = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+                            + "AND table_name IN ('songs', 'videos') AND column_name = 'rights_confirmed_at'",
+                    Integer.class);
+            rightsColumnsReady = found != null && found == 2;
+            if (!rightsColumnsReady) {
+                log.error("[UploadRights] action=record status=skipped table={} id={} reason=column_missing "
+                        + "fix=run backend/sql/V2026_10l__upload_rights.sql", table, id);
+                return;
+            }
+        }
+        entityManager.flush();   // the new row must exist before it can be stamped
+        jdbcTemplate.update("UPDATE " + table + " SET rights_confirmed_at = NOW() WHERE " + idColumn + " = ?", id);
+        log.info("[UploadRights] action=record status=ok table={} id={}", table, id);
     }
 
 
@@ -430,6 +502,9 @@ public class MediaService {
                 throw new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.FORBIDDEN, "Only artists can upload videos.");
             }
+            if (!Boolean.TRUE.equals(req.getRightsConfirmed())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, RIGHTS_REFUSED_VIDEO);
+            }
 
             Genre genre = null;
             if (req.getGenreId() != null) {
@@ -470,7 +545,9 @@ public class MediaService {
             video.setLevel("silver");
             video.setCreatedAt(LocalDateTime.now());
 
-            return videoRepository.save(video);
+            Video savedVideo = videoRepository.save(video);
+            recordRightsConfirmed("videos", "video_id", savedVideo.getVideoId());
+            return savedVideo;
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             // Surface WHICH field failed — the previous generic message made
             // this class of bug invisible in the Railway logs.

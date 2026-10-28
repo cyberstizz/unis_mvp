@@ -28,4 +28,7 @@ public class VideoUploadRequest {
     private String description;
     private UUID jurisdictionId;  
     private Integer duration;
+
+    // Same rights box as songs (Terms 3.6), for the music in the video.
+    private Boolean rightsConfirmed;
 }
