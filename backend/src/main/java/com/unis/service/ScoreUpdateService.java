@@ -193,14 +193,7 @@ public class ScoreUpdateService {
 
     @Transactional
     public void onAward(UUID targetId, int weight) {
-        User target = userRepository.findById(targetId).orElse(null);
-        if (target != null) {
-            int newScore = target.getScore() + weight;
-            String level = getLevel(newScore);
-            target.setScore(newScore);
-            target.setLevel(level);
-            userRepository.save(target);
-        }
+        updateUserScoreIncrement(targetId, weight);
     }
 
     // ============================================================================
@@ -266,39 +259,44 @@ public class ScoreUpdateService {
     // MONTHLY SCHEDULED JOB
     // ============================================================================
 
+    // One statement for every eligible account. It used to load every user into
+    // memory and then read and save each one (two queries per user, in one long
+    // transaction): fine at 1,000 users, minutes of database time at 100,000.
+    // Same rule: live accounts at least one full month old get +1 point.
     @Scheduled(cron = "0 0 0 1 * ?")
     @Transactional
     public void monthlyAgeBonuses() {
-        List<User> allUsers = userRepository.findAll();
-        
-        for (User user : allUsers) {
-            if (user.getDeletedAt() != null) continue;  // deleted accounts don't keep earning
-            LocalDateTime created = user.getCreatedAt();
-            if (created != null) {
-                long monthsOld = ChronoUnit.MONTHS.between(created, LocalDateTime.now());
-                if (monthsOld > 0) {
-                    updateUserScoreIncrement(user.getUserId(), 1);
-                }
-            }
-        }
+        int updated = jdbcTemplate.update("UPDATE users SET score = GREATEST(0, COALESCE(score, 0) + 1), level = "
+                + LEVEL_SQL.replace("{s}", "GREATEST(0, COALESCE(score, 0) + 1)")
+                + " WHERE deleted_at IS NULL AND created_at IS NOT NULL AND created_at <= ?",
+                java.sql.Timestamp.valueOf(LocalDateTime.now().minusMonths(1)));
+        System.out.println("[Score] action=monthly_age_bonus status=ok users=" + updated);
     }
 
     // ============================================================================
     // HELPERS
     // ============================================================================
 
+    /**
+     * Adds points in one atomic UPDATE. The old version read the user, added in
+     * Java and saved the whole row: two plays credited to the same artist at the
+     * same moment both read the same score and one point was lost, and saving
+     * the whole row could put back a bio or photo another request had just
+     * changed. The database now does the addition, so concurrent updates all
+     * count. Floor at zero: taking points back must never leave a negative score.
+     */
     private void updateUserScoreIncrement(UUID userId, int increment) {
-        User user = userRepository.findById(userId).orElse(null);
-        if (user != null) {
-            // Floor at zero: taking points back (deleting a playlist) must never
-            // leave a negative score, even for data created before the award existed.
-            int newScore = Math.max(0, user.getScore() + increment);
-            String level = getLevel(newScore);
-            user.setScore(newScore);
-            user.setLevel(level);
-            userRepository.save(user);
-        }
+        if (userId == null || increment == 0) return;
+        new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbcTemplate).update(
+                "UPDATE users SET score = GREATEST(0, COALESCE(score, 0) + :inc), level = "
+                        + LEVEL_SQL.replace("{s}", "GREATEST(0, COALESCE(score, 0) + :inc)")
+                        + " WHERE user_id = :userId",
+                java.util.Map.of("inc", increment, "userId", userId));
     }
+
+    /** The same thresholds as getLevel, for use inside SQL ({s} = the new score). */
+    private static final String LEVEL_SQL = "CASE WHEN {s} >= 1000 THEN 'diamond' WHEN {s} >= 500 THEN 'platinum' "
+            + "WHEN {s} >= 100 THEN 'gold' ELSE 'silver' END";
 
     private String getLevel(int score) {
         if (score >= 1000) return "diamond";

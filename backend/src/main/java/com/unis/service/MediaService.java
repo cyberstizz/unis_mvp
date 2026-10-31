@@ -34,11 +34,14 @@ import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.RowCallbackHandler;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.hibernate.Hibernate;
 import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -47,11 +50,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -101,6 +104,9 @@ public class MediaService {
 
     @Autowired
     private MoodRepository moodRepository;
+
+    @Autowired
+    private CacheManager cacheManager;
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -579,7 +585,7 @@ public class MediaService {
      * Only the song's own artist or an admin may do it. Removing a song that's
      * already removed does nothing, so a double-click is harmless.
      */
-    @CacheEvict(value = {"songs", "artists", "trending", "jurisdictions", "leaderboards", "nominees", "awards", "playlists", "userProfiles"}, allEntries = true)
+    @CacheEvict(value = {"songs", "artists", "trending", "jurisdictions", "leaderboards", "standings", "nominees", "awards", "playlists", "userProfiles"}, allEntries = true)
     public void removeSongAsOwner(UUID songId, UUID requesterId, boolean requesterIsAdmin) {
         Song song = songRepository.findById(songId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Song not found"));
@@ -596,7 +602,7 @@ public class MediaService {
      *
      * @param reason short label for the log: artist, admin, account_deleted, dmca
      */
-    @CacheEvict(value = {"songs", "artists", "trending", "jurisdictions", "leaderboards", "nominees", "awards", "playlists", "userProfiles"}, allEntries = true)
+    @CacheEvict(value = {"songs", "artists", "trending", "jurisdictions", "leaderboards", "standings", "nominees", "awards", "playlists", "userProfiles"}, allEntries = true)
     public void removeSong(Song song, String reason) {
         if (song == null || song.isRemoved()) return;
         UUID songId = song.getSongId();
@@ -799,8 +805,9 @@ public class MediaService {
         System.out.println("[VideoDelete] action=delete status=ok videoId=" + videoId);
     }
 
-    // Play song - EVICTS song cache and trending cache because playsToday changes
-    @CacheEvict(value = {"songs", "trending"}, allEntries = true)
+    // Play song. Not a cache eviction any more: wiping "songs" and "trending"
+    // on every play (even a rejected one) kept those caches empty all day.
+    // Trending refreshes every minute on its own (CacheConfig).
     public UUID playSong(UUID songId, UUID userId, String source) {
         if (userId == null) {
             System.out.println(">>> Play rejected: no userId for song " + songId);
@@ -829,8 +836,10 @@ public class MediaService {
             return null;  // silent rejection, as before
         }
 
-        // plays_today (unchanged)
-        LocalDate today = LocalDate.now();
+        // plays_today counts New York's day, the same day RaceCloseScheduler
+        // resets it on. (LocalDate.now() is the server's UTC day, which rolled
+        // over at 8 PM New York time and restarted the count early.)
+        LocalDate today = LocalDate.now(RaceClockService.DEFAULT_ZONE);
         Query q = entityManager.createNativeQuery("""
             UPDATE songs SET plays_today = CASE
                 WHEN last_play_reset_date < :today THEN 1 ELSE plays_today + 1 END,
@@ -897,7 +906,7 @@ public class MediaService {
     }
 
     // CACHED: Top songs by score (5 min TTL via CacheConfig)
-    @Cacheable(value = "songs", key = "'top-score-' + #jurisdictionId + '-' + #limit")
+    @Cacheable(value = "songs", key = "'top-score-' + #jurisdictionId + '-' + #limit", sync = true)
     public List<Song> getTopSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -919,18 +928,15 @@ public class MediaService {
         
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
-        
-        results.forEach(this::ensurePlaysCurrentForSong);
-        
-        if (results.isEmpty()) {
-            return getFallbackSongs(limit);
-        }
-        
-        return results;
+
+        List<Song> out = results.isEmpty() ? getFallbackSongs(limit) : results;
+        attachPlayCounts(out);
+        initForCache(out);
+        return out;
     }
 
     // CACHED: Trending songs by plays_today (shorter 1 min TTL via "trending" cache)
-    @Cacheable(value = "trending", key = "'plays-today-' + #jurisdictionId + '-' + #limit")
+    @Cacheable(value = "trending", key = "'plays-today-' + #jurisdictionId + '-' + #limit", sync = true)
     public List<Song> getTrendingSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -952,10 +958,11 @@ public class MediaService {
         
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
-        
-        results.forEach(this::ensurePlaysCurrentForSong);
-        
-        return results.isEmpty() ? getFallbackSongs(limit) : results;
+
+        List<Song> out = results.isEmpty() ? getFallbackSongs(limit) : results;
+        attachPlayCounts(out);
+        initForCache(out);
+        return out;
     }
 
     // NOT CACHED - video methods
@@ -980,30 +987,69 @@ public class MediaService {
         @SuppressWarnings("unchecked")
         List<Video> results = q.getResultList();
         List<Video> out = results.isEmpty() ? getFallbackVideos(limit) : results;
-        out.forEach(this::decorateVideoStats);
+        attachVideoPlayCounts(out);
         return out;
     }
 
-    // NOT CACHED - private helper method
-    private void ensurePlaysCurrentForSong(Song song) {
-        Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
-        song.setPlayCount(playCount != null ? playCount : 0L);
+    // ── Batch helpers (one query for a whole list instead of one per song) ──
+
+    /** Sets each song's lifetime play count with one grouped query. */
+    private void attachPlayCounts(List<Song> songs) {
+        if (songs == null || songs.isEmpty()) return;
+        Map<UUID, Long> counts = countBy("SELECT song_id AS id, COUNT(*) AS n FROM song_plays WHERE song_id IN (:ids) GROUP BY song_id",
+                songs.stream().map(Song::getSongId).collect(Collectors.toList()));
+        for (Song s : songs) s.setPlayCount(counts.getOrDefault(s.getSongId(), 0L));
     }
 
-    // NOT CACHED - private fallback method
+    /** Sets each song's like count with one grouped query. */
+    private void attachLikeCounts(List<Song> songs) {
+        if (songs == null || songs.isEmpty()) return;
+        Map<UUID, Long> counts = countBy("SELECT media_id AS id, COUNT(*) AS n FROM likes WHERE media_type = 'song' AND media_id IN (:ids) GROUP BY media_id",
+                songs.stream().map(Song::getSongId).collect(Collectors.toList()));
+        for (Song s : songs) s.setLikes(counts.getOrDefault(s.getSongId(), 0L).intValue());
+    }
+
+    /** Sets each video's lifetime play count with one grouped query. */
+    private void attachVideoPlayCounts(List<Video> videos) {
+        if (videos == null || videos.isEmpty()) return;
+        Map<UUID, Long> counts = countBy("SELECT video_id AS id, COUNT(*) AS n FROM video_plays WHERE video_id IN (:ids) GROUP BY video_id",
+                videos.stream().map(Video::getVideoId).collect(Collectors.toList()));
+        for (Video v : videos) v.setPlayCount(counts.getOrDefault(v.getVideoId(), 0L));
+    }
+
+    private Map<UUID, Long> countBy(String sql, List<UUID> ids) {
+        Map<UUID, Long> counts = new HashMap<>();
+        new NamedParameterJdbcTemplate(jdbcTemplate).query(sql, Map.of("ids", ids),
+                (RowCallbackHandler) rs -> counts.put((UUID) rs.getObject("id"), rs.getLong("n")));
+        return counts;
+    }
+
+    /**
+     * Loads the lazy parts of each song's artist that the JSON includes, while
+     * the database session is still open. These lists are cached and handed to
+     * other requests; a cached entity with an unloaded part fails (or, worse,
+     * reaches into another request's session) when the next request turns it
+     * into JSON. With hibernate.default_batch_fetch_size this is one batched
+     * query per kind, not one per song.
+     */
+    private static void initForCache(List<Song> songs) {
+        if (songs == null) return;
+        for (Song s : songs) {
+            User artist = s.getArtist();
+            if (artist != null) {
+                Hibernate.initialize(artist.getJurisdiction());
+                Hibernate.initialize(artist.getGenre());
+            }
+        }
+    }
+
+    // NOT CACHED - private fallback method. Only the rows it needs (it used to
+    // load every song in the table and keep the first few).
     private List<Song> getFallbackSongs(int limit) {
-        List<Song> songs = songRepository.findAll(Sort.by(Sort.Direction.ASC, "songId"))
-            .stream()
-            .filter(song -> !song.isRemoved())
-            .limit(limit)
-            .collect(Collectors.toList());
-        
-        songs.forEach(song -> {
-            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
-            song.setPlayCount(playCount != null ? playCount : 0L);
-        });
-        
-        return songs;
+        return entityManager.createQuery(
+                "SELECT s FROM Song s WHERE s.deletedAt IS NULL ORDER BY s.songId", Song.class)
+            .setMaxResults(Math.max(1, limit))
+            .getResultList();
     }
 
     /**
@@ -1015,54 +1061,29 @@ public class MediaService {
                 org.springframework.data.domain.PageRequest.of(
                         0, limit, Sort.by(Sort.Direction.DESC, "createdAt")))
                 .getContent();
-        videos.forEach(this::decorateVideoStats);
+        attachVideoPlayCounts(videos);
         return videos;
     }
 
-    /** Attach transient play/like counts without failing the whole response. */
-    private void decorateVideoStats(Video video) {
-        try {
-            Long playCount = videoPlayRepository.countTotalPlaysByVideoId(video.getVideoId());
-            video.setPlayCount(playCount != null ? playCount : 0L);
-        } catch (Exception e) {
-            video.setPlayCount(0L);
-        }
-    }
-
-    // NOT CACHED - private fallback method
+    // NOT CACHED - private fallback method (only the rows it needs)
     private List<Video> getFallbackVideos(int limit) {
-        return videoRepository.findAll(Sort.by(Sort.Direction.ASC, "videoId"))
-            .stream()
-            .limit(limit)
-            .collect(Collectors.toList());
+        return videoRepository.findAll(
+                org.springframework.data.domain.PageRequest.of(0, Math.max(1, limit), Sort.by(Sort.Direction.ASC, "videoId")))
+            .getContent();
     }
 
-    // ========== UPDATED: CACHED Artist's songs with likes and plays ==========
-    @Cacheable(value = "artists", key = "'songs-' + #artistId")
+    // ========== CACHED: an artist's live songs with likes and plays ==========
+    // Was one SQL that counted every like and every play on Unis (both tables,
+    // in full) and then joined, plus seven lookups per song in the row mapper.
+    // Now: the artist's songs (an index lookup), then one grouped count each
+    // for plays and likes. Same songs, same order, same likes/playCount fields.
+    @Cacheable(value = "artists", key = "'songs-' + #artistId", sync = true)
     public List<Song> getSongsByArtist(UUID artistId) {
-        String sql = """
-            SELECT 
-                s.*,
-                COALESCE(like_counts.likes, 0) as likes,
-                COALESCE(play_counts.plays, 0) as plays
-            FROM songs s
-            LEFT JOIN (
-                SELECT media_id, COUNT(*) as likes
-                FROM likes
-                WHERE media_type = 'song'
-                GROUP BY media_id
-            ) like_counts ON s.song_id = like_counts.media_id
-            LEFT JOIN (
-                SELECT song_id, COUNT(*) as plays
-                FROM song_plays
-                GROUP BY song_id
-            ) play_counts ON s.song_id = play_counts.song_id
-            WHERE s.artist_id = ?
-              AND s.deleted_at IS NULL
-            ORDER BY s.created_at DESC
-        """;
-        
-        return jdbcTemplate.query(sql, new SongWithStatsRowMapper(), artistId);
+        List<Song> songs = songRepository.findByArtistId(artistId);
+        attachPlayCounts(songs);
+        attachLikeCounts(songs);
+        initForCache(songs);
+        return songs;
     }
 
     // NOT CACHED - video methods
@@ -1134,7 +1155,7 @@ public class MediaService {
     }
 
     // CACHED: New releases (5 min TTL)
-    @Cacheable(value = "songs", key = "'new-' + #jurisdictionId + '-' + #limit")
+    @Cacheable(value = "songs", key = "'new-' + #jurisdictionId + '-' + #limit", sync = true)
     public List<Song> getNewSongsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
@@ -1156,17 +1177,11 @@ public class MediaService {
         
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
-        
-        results.forEach(song -> {
-            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
-            song.setPlayCount(playCount != null ? playCount : 0L);
-        });
-        
-        if (results.isEmpty()) {
-            return getFallbackSongs(limit);
-        }
-        
-        return results;
+
+        List<Song> out = results.isEmpty() ? getFallbackSongs(limit) : results;
+        attachPlayCounts(out);
+        initForCache(out);
+        return out;
     }
 
     /**
@@ -1201,11 +1216,7 @@ public class MediaService {
         @SuppressWarnings("unchecked")
         List<Song> results = q.getResultList();
 
-        results.forEach(song -> {
-            Long playCount = songPlayRepository.countTotalPlaysBySongId(song.getSongId());
-            song.setPlayCount(playCount != null ? playCount : 0L);
-        });
-
+        attachPlayCounts(results);
         return results;
     }
 
@@ -1226,7 +1237,6 @@ public class MediaService {
      */
 
     @Transactional
-    @CacheEvict(value = {"songs", "artists"}, allEntries = true)
     public LikeOutcome likeSong(UUID songId, UUID userId) {
         // Check if already liked
         String checkSql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
@@ -1263,6 +1273,9 @@ public class MediaService {
         System.out.println("✓ Like created: User " + userId + " liked Song " + songId
             + (firstLike ? " (points awarded)" : " (re-like, no points)"));
 
+        // Only this artist's song list shows like counts; the rest of the
+        // caches don't (likes used to empty "songs" and "artists" entirely).
+        evictArtistSongs(song.getArtist() != null ? song.getArtist().getUserId() : null);
         return new LikeOutcome(true, firstLike ? 1 : 0);
     }
     
@@ -1273,7 +1286,6 @@ public class MediaService {
      * @return true if unliked, false if wasn't liked
      */
     @Transactional
-    @CacheEvict(value = {"songs", "artists"}, allEntries = true)
     public boolean unlikeSong(UUID songId, UUID userId) {
         String deleteSql = "DELETE FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'song'";
         int rowsAffected = jdbcTemplate.update(deleteSql, userId, songId);
@@ -1283,9 +1295,18 @@ public class MediaService {
         
         if (rowsAffected > 0) {
             System.out.println("✓ Like removed: User " + userId + " unliked Song " + songId + " (points retained)");
+            List<UUID> artist = jdbcTemplate.queryForList("SELECT artist_id FROM songs WHERE song_id = ?", UUID.class, songId);
+            evictArtistSongs(artist.isEmpty() ? null : artist.get(0));
         }
         
         return rowsAffected > 0;
+    }
+
+    /** Drops one artist's cached song list (the "songs-<artistId>" key), after the commit. */
+    private void evictArtistSongs(UUID artistId) {
+        if (artistId == null) return;
+        org.springframework.cache.Cache artists = cacheManager.getCache("artists");
+        if (artists != null) artists.evict("songs-" + artistId);
     }
     
     /**
@@ -1316,10 +1337,9 @@ public class MediaService {
     // computeVideoScores() already weights video likes x2 — these methods
     // simply expose the missing API surface for videos.
 
-    // Evicts "artists" only: there is no "videos" cache in CacheConfig, and
-    // naming one that doesn't exist makes every call fail.
+    // No cache holds video like counts, so nothing to evict (it used to empty
+    // the whole "artists" cache on every video like).
     @Transactional
-    @CacheEvict(value = {"artists"}, allEntries = true)
     public LikeOutcome likeVideo(UUID videoId, UUID userId) {
         String checkSql = "SELECT COUNT(*) FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'video'";
         Integer count = jdbcTemplate.queryForObject(checkSql, Integer.class, userId, videoId);
@@ -1354,7 +1374,6 @@ public class MediaService {
     }
 
     @Transactional
-    @CacheEvict(value = {"artists"}, allEntries = true)
     public boolean unlikeVideo(UUID videoId, UUID userId) {
         String deleteSql = "DELETE FROM likes WHERE user_id = ? AND media_id = ? AND media_type = 'video'";
         int rowsAffected = jdbcTemplate.update(deleteSql, userId, videoId);
@@ -1379,90 +1398,6 @@ public class MediaService {
     }
 
     // ========== END LIKES SERVICE METHODS ==========
-
-    // ========== ROW MAPPER FOR SONGS WITH STATS (NEW) ==========
-    
-    /**
-     * Custom RowMapper to map database results to Song entity with stats
-     */
-    private class SongWithStatsRowMapper implements RowMapper<Song> {
-        @Override
-        public Song mapRow(ResultSet rs, int rowNum) throws SQLException {
-            Song song = new Song();
-            
-            // Map all existing Song fields
-            song.setSongId((UUID) rs.getObject("song_id"));
-            song.setTitle(rs.getString("title"));
-            song.setDescription(rs.getString("description"));
-            song.setFileUrl(rs.getString("file_url"));
-            song.setArtworkUrl(rs.getString("artwork_url"));
-            song.setScore(rs.getInt("score"));
-            song.setLevel(rs.getString("level"));
-            song.setExplicit(rs.getBoolean("explicit"));
-            song.setLyrics(rs.getString("lyrics"));
-            song.setPlaysToday(rs.getInt("plays_today"));
-            song.setIsrc(rs.getString("isrc"));
-            
-            // Handle duration (might be null)
-            int duration = rs.getInt("duration");
-            if (!rs.wasNull()) {
-                song.setDuration(duration);
-            }
-            
-            // Handle LocalDate
-            java.sql.Date lastPlayResetDate = rs.getDate("last_play_reset_date");
-            if (lastPlayResetDate != null) {
-                song.setLastPlayResetDate(lastPlayResetDate.toLocalDate());
-            }
-            
-            // Handle LocalDateTime
-            java.sql.Timestamp createdAt = rs.getTimestamp("created_at");
-            if (createdAt != null) {
-                song.setCreatedAt(createdAt.toLocalDateTime());
-            }
-            
-            // Load relationships (@ManyToOne fields) using repository lookups
-            UUID artistId = (UUID) rs.getObject("artist_id");
-            UUID genreId = (UUID) rs.getObject("genre_id");
-            UUID jurisdictionId = (UUID) rs.getObject("jurisdiction_id");
-            
-            if (artistId != null) {
-                userRepository.findById(artistId).ifPresent(song::setArtist);
-            }
-            if (genreId != null) {
-                genreRepository.findById(genreId).ifPresent(song::setGenre);
-            }
-            if (jurisdictionId != null) {
-                jurisdictionRepository.findById(jurisdictionId).ifPresent(song::setJurisdiction);
-            }
-
-            // Discovery tags (columns added by V2026_10c)
-            UUID primarySubgenreId = (UUID) rs.getObject("primary_subgenre_id");
-            UUID secondarySubgenreId = (UUID) rs.getObject("secondary_subgenre_id");
-            UUID primaryMoodId = (UUID) rs.getObject("primary_mood_id");
-            UUID secondaryMoodId = (UUID) rs.getObject("secondary_mood_id");
-            if (primarySubgenreId != null) {
-                subgenreRepository.findById(primarySubgenreId).ifPresent(song::setPrimarySubgenre);
-            }
-            if (secondarySubgenreId != null) {
-                subgenreRepository.findById(secondarySubgenreId).ifPresent(song::setSecondarySubgenre);
-            }
-            if (primaryMoodId != null) {
-                moodRepository.findById(primaryMoodId).ifPresent(song::setPrimaryMood);
-            }
-            if (secondaryMoodId != null) {
-                moodRepository.findById(secondaryMoodId).ifPresent(song::setSecondaryMood);
-            }
-            song.setLanguage(rs.getString("language"));
-            song.setSubgenreWriteIn(rs.getString("subgenre_write_in"));
-            
-            // Set the NEW transient fields for likes and plays
-            song.setLikes(rs.getInt("likes"));
-            song.setPlayCount((long) rs.getInt("plays"));
-            
-            return song;
-        }
-    }
 
     @Transactional
     public void completeSongPlay(UUID playId, double percentPlayed) {

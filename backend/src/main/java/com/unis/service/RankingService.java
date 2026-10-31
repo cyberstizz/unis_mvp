@@ -76,6 +76,19 @@ public class RankingService {
     private final EntityManager entityManager;
     private final RaceClockService raceClock;
 
+    /**
+     * The jurisdiction tree only changes when a region is added, so each
+     * jurisdiction's subtree and ancestors are kept for ten minutes. Every
+     * ranking query used to run both recursive lookups first (up to eight
+     * extra queries per board).
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<UUID, List<UUID>> subtrees =
+        com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .expireAfterWrite(10, java.util.concurrent.TimeUnit.MINUTES).maximumSize(10_000).build();
+    private final com.github.benmanes.caffeine.cache.Cache<UUID, List<UUID>> ancestorLists =
+        com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+            .expireAfterWrite(10, java.util.concurrent.TimeUnit.MINUTES).maximumSize(10_000).build();
+
     public RankingService(EntityManager entityManager, RaceClockService raceClock) {
         this.entityManager = entityManager;
         this.raceClock = raceClock;
@@ -87,9 +100,13 @@ public class RankingService {
      * decide a winner. A null genreId ranks across all genres (Charts only —
      * awards are always per genre).
      */
+    // sync = true: when the entry is missing (expired, or cleared by a vote),
+    // the first request computes it and any others asking for the same board
+    // at that moment wait for that result, instead of all running the same
+    // heavy query at once (a monthly board is ~0.35 s of database CPU).
     @Cacheable(value = "leaderboards",
         key = "'rank-' + #targetType + '-' + #raceJurisdictionId + '-' + #genreId + '-' "
-            + "+ #startDate + '-' + #endDate + '-' + #limit + '-' + #offset")
+            + "+ #startDate + '-' + #endDate + '-' + #limit + '-' + #offset", sync = true)
     public List<Candidate> rankForDisplay(String targetType, UUID raceJurisdictionId, UUID genreId,
                                           LocalDate startDate, LocalDate endDate, int limit, int offset) {
         return rank(targetType, raceJurisdictionId, genreId, startDate, endDate, limit, offset);
@@ -230,8 +247,12 @@ public class RankingService {
     // =========================================================================
 
     /** This jurisdiction and everything inside it. */
-    @SuppressWarnings("unchecked")
     public List<UUID> subtreeOf(UUID jurisdictionId) {
+        return subtrees.get(jurisdictionId, this::loadSubtree);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<UUID> loadSubtree(UUID jurisdictionId) {
         Query q = entityManager.createNativeQuery("""
             WITH RECURSIVE tree AS (
                 SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :id
@@ -244,12 +265,16 @@ public class RankingService {
         q.setParameter("id", jurisdictionId);
         List<UUID> ids = q.getResultList();
         if (ids.isEmpty()) ids = List.of(jurisdictionId);
-        return ids;
+        return List.copyOf(ids);
     }
 
     /** Every jurisdiction above this one. */
-    @SuppressWarnings("unchecked")
     public List<UUID> ancestorsOf(UUID jurisdictionId) {
+        return ancestorLists.get(jurisdictionId, this::loadAncestors);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<UUID> loadAncestors(UUID jurisdictionId) {
         Query q = entityManager.createNativeQuery("""
             WITH RECURSIVE up AS (
                 SELECT parent_jurisdiction_id AS id FROM jurisdictions
@@ -262,7 +287,7 @@ public class RankingService {
             SELECT id FROM up
             """);
         q.setParameter("id", jurisdictionId);
-        return q.getResultList();
+        return List.copyOf((List<UUID>) q.getResultList());
     }
 
     // =========================================================================

@@ -3,7 +3,6 @@ package com.unis.controller;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
-import org.springframework.cache.caffeine.CaffeineCache;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import com.unis.service.CronMonitorService;
@@ -36,14 +35,18 @@ public class AdminController {
             if (cache != null) {
                 Map<String, Object> cacheInfo = new HashMap<>();
                 
-                // Get Caffeine cache instance
-                if (cache instanceof CaffeineCache) {
-                    com.github.benmanes.caffeine.cache.Cache<Object, Object> nativeCache = 
-                        ((CaffeineCache) cache).getNativeCache();
-                    
-                    // Get stats
+                // The caches are Caffeine caches wrapped so evictions wait for
+                // the database commit (CacheConfig); getNativeCache() reaches
+                // through the wrapper. hitRate is the share of reads served
+                // from memory since the last restart.
+                if (cache.getNativeCache() instanceof com.github.benmanes.caffeine.cache.Cache<?, ?> nativeCache) {
+                    com.github.benmanes.caffeine.cache.stats.CacheStats s = nativeCache.stats();
                     cacheInfo.put("size", nativeCache.estimatedSize());
-                    cacheInfo.put("stats", nativeCache.stats().toString());
+                    cacheInfo.put("hitRate", Math.round(s.hitRate() * 1000) / 10.0);
+                    cacheInfo.put("hits", s.hitCount());
+                    cacheInfo.put("misses", s.missCount());
+                    cacheInfo.put("evictions", s.evictionCount());
+                    cacheInfo.put("stats", s.toString());
                 } else {
                     cacheInfo.put("type", cache.getClass().getSimpleName());
                 }

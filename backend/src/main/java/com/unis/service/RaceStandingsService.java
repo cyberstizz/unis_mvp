@@ -87,10 +87,14 @@ public class RaceStandingsService {
      * Each entry carries where it placed in the period before the one shown,
      * for the movement arrows; entries that scored now but not then are new.
      */
+    // sync = true: one request rebuilds a missing board while others asking
+    // for the same board wait for it (no stampede after a vote clears the cache).
+    // Its own cache, "standings": a sync computation must never read or write
+    // the cache it is filling, and this one reads rankForDisplay's "leaderboards".
     @Transactional(readOnly = true)
-    @Cacheable(value = "leaderboards",
+    @Cacheable(value = "standings",
         key = "'standings-' + #targetType + '-' + #jurisdictionId + '-' + #genreId + '-' "
-            + "+ #intervalId + '-' + #limit + '-' + #offset + '-' + #viewDate")
+            + "+ #intervalId + '-' + #limit + '-' + #offset + '-' + #viewDate", sync = true)
     public RaceStandingsDto standings(String targetType, UUID jurisdictionId, UUID genreId,
                                       UUID intervalId, int limit, int offset, LocalDate viewDate) {
         VotingInterval interval = votingIntervalRepository.findById(intervalId)

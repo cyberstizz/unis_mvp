@@ -142,4 +142,9 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
     // Find votes by user for vote history
     @Query("SELECT v FROM Vote v WHERE v.user.userId = :userId ORDER BY v.voteDate DESC")
     List<Vote> findByUserUserIdOrderByVoteDateDesc(@Param("userId") UUID userId);
+
+    // A user's newest votes, one page at a time (the feed asks for 20 on every
+    // visit; loading every vote the person ever cast to keep 20 grew without end).
+    @Query("SELECT v FROM Vote v WHERE v.user.userId = :userId ORDER BY v.voteDate DESC, v.createdAt DESC")
+    List<Vote> findRecentByUser(@Param("userId") UUID userId, org.springframework.data.domain.Pageable pageable);
 }

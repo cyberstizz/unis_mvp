@@ -44,6 +44,12 @@ public class User {
     @Column(name = "supported_artist_id")
     private UUID supportedArtistId;
 
+    // In JSON, the nested jurisdiction is just this jurisdiction: no map
+    // polygon and no parent chain. Serializing parentJurisdiction loaded and
+    // sent every ancestor (Harlem -> Manhattan -> ... -> Unis) inside every
+    // song and user, about 1.5 KB each time, plus a query per level. The
+    // jurisdiction endpoints still return polygons and parents for the map.
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"parentJurisdiction", "polygon"})
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "jurisdiction_id")
     private Jurisdiction jurisdiction;

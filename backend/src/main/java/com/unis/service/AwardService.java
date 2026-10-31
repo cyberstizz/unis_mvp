@@ -152,7 +152,12 @@ public class AwardService {
         return populateAwardEntities(awards);
     }
 
+    // Cached: award rows only change when the hourly race-close job records a
+    // winner, and that job clears "awards" (closeRacePeriod). The feed asks for
+    // this twice on every visit; it used to be about 15 queries each time.
     @Transactional(readOnly = true)
+    @Cacheable(value = "awards", sync = true,
+        key = "'past-' + #type + '-' + #startDate + '-' + #endDate + '-' + #jurisdictionId + '-' + #genreId + '-' + #intervalId")
     public List<Award> getPastAwards(String type, LocalDate startDate, LocalDate endDate,
                                     UUID jurisdictionId, UUID genreId, UUID intervalId) {
         log.info("getPastAwards: type={}, range={}..{}, jurisdiction={}, genre={}, interval={}",
@@ -341,7 +346,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
      * @return how many award rows were created
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = false)
-    @CacheEvict(value = {"awards", "leaderboards", "nominees"}, allEntries = true)
+    @CacheEvict(value = {"awards", "leaderboards", "standings", "nominees"}, allEntries = true)
     public int closeRacePeriod(LocalDate periodEnd, UUID intervalId, UUID jurisdictionId) {
         int created = computeAwardsInternal(periodEnd, intervalId, jurisdictionId, null);
         entityManager.createNativeQuery(
@@ -358,7 +363,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     }
 
     @Transactional(readOnly = false)
-    @CacheEvict(value = {"awards", "leaderboards", "nominees"}, allEntries = true)
+    @CacheEvict(value = {"awards", "leaderboards", "standings", "nominees"}, allEntries = true)
     public void computeAwardsForDate(LocalDate awardDate, UUID intervalId, UUID jurisdictionId, UUID genreId) {
         computeAwardsInternal(awardDate, intervalId, jurisdictionId, genreId);
     }
@@ -683,7 +688,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     // =========================================================================
 
     @Transactional(readOnly = false)
-    @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
+    @CacheEvict(value = {"awards", "leaderboards", "standings"}, allEntries = true)
     public void computeForInterval(UUID intervalId, UUID jurisdictionId, UUID genreId, LocalDate cronDate) {
         computeAwardsInternal(cronDate, intervalId, jurisdictionId, genreId);
     }
@@ -696,7 +701,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     }
 
     @Transactional(readOnly = false)
-    @CacheEvict(value = {"awards", "leaderboards"}, allEntries = true)
+    @CacheEvict(value = {"awards", "leaderboards", "standings"}, allEntries = true)
     public void recomputeAllHistoricalAwards() {
         System.out.println("=== RECOMPUTING ALL HISTORICAL AWARDS ===");
         
@@ -899,19 +904,46 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     }
 
     private List<Award> populateAwardEntities(List<Award> awards) {
+        // One batched load per kind instead of one findById per award.
+        List<UUID> songIds = new ArrayList<>();
+        List<UUID> userIds = new ArrayList<>();
+        for (Award award : awards) {
+            if ("song".equals(award.getTargetType())) songIds.add(award.getTargetId());
+            else if ("artist".equals(award.getTargetType())) userIds.add(award.getTargetId());
+        }
+        Map<UUID, Song> songs = new HashMap<>();
+        for (Song song : songRepository.findAllById(songIds)) songs.put(song.getSongId(), song);
+        Map<UUID, User> users = new HashMap<>();
+        for (User user : userRepository.findAllById(userIds)) users.put(user.getUserId(), user);
+
         for (Award award : awards) {
             if ("song".equals(award.getTargetType())) {
-                songRepository.findById(award.getTargetId()).ifPresent(song -> {
+                Song song = songs.get(award.getTargetId());
+                if (song != null) {
                     award.setSong(song);
-                    if (song.getArtist() != null) {
-                        song.getArtist().getUsername();
-                    }
-                });
+                    initUser(song.getArtist());
+                }
             } else if ("artist".equals(award.getTargetType())) {
-                userRepository.findById(award.getTargetId()).ifPresent(award::setUser);
+                User user = users.get(award.getTargetId());
+                if (user != null) {
+                    award.setUser(user);
+                    initUser(user);
+                }
             }
+            // Loaded now, while the session is open: these lists are cached and
+            // turned into JSON by later requests, which must not find an
+            // unloaded part.
+            org.hibernate.Hibernate.initialize(award.getGenre());
+            org.hibernate.Hibernate.initialize(award.getJurisdiction());
+            org.hibernate.Hibernate.initialize(award.getInterval());
         }
         return awards;
+    }
+
+    private static void initUser(User user) {
+        if (user == null) return;
+        org.hibernate.Hibernate.initialize(user.getJurisdiction());
+        org.hibernate.Hibernate.initialize(user.getGenre());
     }
 
     @Transactional(readOnly = true)

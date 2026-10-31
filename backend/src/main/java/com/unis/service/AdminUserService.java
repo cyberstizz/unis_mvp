@@ -37,6 +37,11 @@ public class AdminUserService {
     @Autowired
     private UserService userService;
 
+    // Request authentication caches each account for a minute (AuthUserCache).
+    // Suspensions and staff role changes clear it so they apply on the next request.
+    @Autowired
+    private com.unis.config.AuthUserCache authUserCache;
+
     /**
      * Get paginated user list with optional search
      */
@@ -98,6 +103,7 @@ public class AdminUserService {
                 .build();
 
         AccountSuspension saved = accountSuspensionRepository.save(suspension);
+        authUserCache.evictAll();
 
         moderationService.logAction(adminUserId, "account_suspended", "user", userId,
                 reason, "Type: " + suspensionType +
@@ -125,6 +131,7 @@ public class AdminUserService {
         suspension.setLiftedAt(LocalDateTime.now());
         suspension.setLiftedBy(admin);
         accountSuspensionRepository.save(suspension);
+        authUserCache.evictAll();
 
         moderationService.logAction(adminUserId, "account_unsuspended", "user", userId,
                 reason, null);
@@ -210,6 +217,7 @@ public class AdminUserService {
                 .build();
 
         AdminRole saved = adminRoleRepository.save(role);
+        authUserCache.evictAll();
 
         moderationService.logAction(grantedByUserId, "role_granted", "user", userId,
                 "Granted " + roleLevel + " role", null);
@@ -238,6 +246,7 @@ public class AdminUserService {
         String roleLevel = role.getRoleLevel();
 
         adminRoleRepository.delete(role);
+        authUserCache.evictAll();
 
         moderationService.logAction(revokedByUserId, "role_revoked", "user", userId,
                 "Revoked " + roleLevel + " role", null);

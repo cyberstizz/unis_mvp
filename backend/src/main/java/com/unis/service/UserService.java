@@ -23,6 +23,7 @@ import com.unis.repository.SupporterRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -218,9 +219,10 @@ public class UserService {
         // ---- Vote history -----------------------------------------------------
         ProfileSummaryDto.VoteHistorySummary voteHistory;
         try {
-            List<Vote> userVotes = voteRepository.findByUserUserIdOrderByVoteDateDesc(userId);
+            // A count, not a load of every vote the user ever cast.
+            Long votes = voteRepository.countByUserId(userId);
             voteHistory = ProfileSummaryDto.VoteHistorySummary.builder()
-                .totalCount(userVotes.size())
+                .totalCount(votes == null ? 0 : votes.intValue())
                 .recent(new java.util.ArrayList<>())  // empty for now; modal can fetch its own list
                 .build();
         } catch (Exception e) {
@@ -497,7 +499,14 @@ public class UserService {
     }
 
     // Update photo - EVICTS user profile cache
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
+    @Caching(evict = {
+        @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId"),
+        // The artist page and the artist's song list are cached as
+        // "profile-<id>" and "songs-<id>" (evicting "#userId" in this cache
+        // matched nothing, so artist pages stayed stale for 5 minutes).
+        @CacheEvict(value = "artists", key = "'profile-' + #userId"),
+        @CacheEvict(value = "artists", key = "'songs-' + #userId")
+    })
     public User updatePhoto(UUID userId, String photoUrl) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -506,7 +515,14 @@ public class UserService {
     }
 
     // Update bio - EVICTS user profile cache
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
+    @Caching(evict = {
+        @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId"),
+        // The artist page and the artist's song list are cached as
+        // "profile-<id>" and "songs-<id>" (evicting "#userId" in this cache
+        // matched nothing, so artist pages stayed stale for 5 minutes).
+        @CacheEvict(value = "artists", key = "'profile-' + #userId"),
+        @CacheEvict(value = "artists", key = "'songs-' + #userId")
+    })
     public User updateBio(UUID userId, String bio) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -515,7 +531,14 @@ public class UserService {
     }
 
     // Update default song - EVICTS user profile and artist cache
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
+    @Caching(evict = {
+        @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId"),
+        // The artist page and the artist's song list are cached as
+        // "profile-<id>" and "songs-<id>" (evicting "#userId" in this cache
+        // matched nothing, so artist pages stayed stale for 5 minutes).
+        @CacheEvict(value = "artists", key = "'profile-' + #userId"),
+        @CacheEvict(value = "artists", key = "'songs-' + #userId")
+    })
     public User updateDefaultSong(UUID userId, UUID defaultSongId) {
         Optional<User> optionalUser = userRepository.findById(userId);
         User user = optionalUser.orElseThrow(() -> new RuntimeException("User not found"));
@@ -581,34 +604,64 @@ public class UserService {
     }
 
     // CACHED: Top artists by jurisdiction (5 min TTL)
-    // Expensive query with joins and aggregations
+    // Song and video scores are summed separately. The old single query joined
+    // each artist's songs to their videos, so every song score was counted once
+    // per video and every video score once per song (3 songs + 2 videos summed
+    // the song scores twice and the video scores three times). It also scanned
+    // every user. Default songs now load in one batch instead of one query each.
     @Cacheable(value = "artists", key = "'top-' + #jurisdictionId + '-' + #limit")
     public List<User> getTopArtistsByJurisdiction(UUID jurisdictionId, int limit) {
         String query = """
             WITH RECURSIVE jurisdiction_hierarchy AS (
-            SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
-            UNION ALL
-            SELECT j.jurisdiction_id FROM jurisdictions j
-            INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+                SELECT jurisdiction_id FROM jurisdictions WHERE jurisdiction_id = :jurisdictionId
+                UNION ALL
+                SELECT j.jurisdiction_id FROM jurisdictions j
+                INNER JOIN jurisdiction_hierarchy jh ON j.parent_jurisdiction_id = jh.jurisdiction_id
+            ),
+            song_scores AS (
+                SELECT s.artist_id, SUM(COALESCE(s.score, 0)) AS total
+                FROM songs s
+                JOIN jurisdiction_hierarchy jh ON jh.jurisdiction_id = s.jurisdiction_id
+                WHERE s.deleted_at IS NULL
+                GROUP BY s.artist_id
+            ),
+            video_scores AS (
+                SELECT v.artist_id, SUM(COALESCE(v.score, 0)) AS total
+                FROM videos v
+                JOIN jurisdiction_hierarchy jh ON jh.jurisdiction_id = v.jurisdiction_id
+                GROUP BY v.artist_id
+            ),
+            totals AS (
+                SELECT COALESCE(ss.artist_id, vs.artist_id) AS artist_id,
+                       COALESCE(ss.total, 0) + COALESCE(vs.total, 0) AS total_score
+                FROM song_scores ss
+                FULL OUTER JOIN video_scores vs ON vs.artist_id = ss.artist_id
             )
-            SELECT DISTINCT u.user_id, u.username, u.default_song_id, COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) as total_score
-            FROM users u
-            LEFT JOIN songs s ON s.artist_id = u.user_id AND s.deleted_at IS NULL
-                AND s.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
-            LEFT JOIN videos v ON v.artist_id = u.user_id AND v.jurisdiction_id IN (SELECT jurisdiction_id FROM jurisdiction_hierarchy)
+            SELECT u.user_id, u.username, u.default_song_id, t.total_score
+            FROM totals t
+            JOIN users u ON u.user_id = t.artist_id
             WHERE u.deleted_at IS NULL
-            GROUP BY u.user_id, u.username, u.default_song_id
-            HAVING COALESCE(SUM(s.score), 0) + COALESCE(SUM(v.score), 0) > 0
-            ORDER BY total_score DESC
+              AND t.total_score > 0
+            ORDER BY t.total_score DESC
             LIMIT :limit
             """;
-        
+
         Query q = entityManager.createNativeQuery(query);
         q.setParameter("jurisdictionId", jurisdictionId);
-        q.setParameter("limit", limit);
-        
+        q.setParameter("limit", Math.max(1, Math.min(limit, 100)));
+
         @SuppressWarnings("unchecked")
         List<Object[]> results = q.getResultList();
+
+        List<UUID> defaultSongIds = results.stream()
+                .map(row -> (UUID) row[2])
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+        Map<UUID, Song> defaultSongs = new java.util.HashMap<>();
+        for (Song song : songRepository.findAllById(defaultSongIds)) {
+            defaultSongs.put(song.getSongId(), song);
+        }
+
         return results.stream()
                 .map(row -> {
                     User artist = new User();
@@ -616,12 +669,9 @@ public class UserService {
                     artist.setUsername((String) row[1]);
                     UUID defaultSongId = (UUID) row[2];
                     artist.setDefaultSongId(defaultSongId);
-                    
-                    // Populate default song if exists
                     if (defaultSongId != null) {
-                        songRepository.findById(defaultSongId).ifPresent(artist::setDefaultSong);
+                        artist.setDefaultSong(defaultSongs.get(defaultSongId));
                     }
-                    
                     return artist;
                 })
                 .collect(Collectors.toList());
@@ -694,7 +744,7 @@ public class UserService {
      *        Required only when they have a balance under $50.
      */
     @Transactional
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries", "jurisdictions", "leaderboards", "nominees", "playlists"}, allEntries = true)
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries", "jurisdictions", "leaderboards", "standings", "nominees", "playlists"}, allEntries = true)
     public void deleteAccount(UUID userId, boolean forfeitConfirmed) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found: " + userId));
@@ -733,7 +783,7 @@ public class UserService {
      * forfeits earnings under Terms 11.6. The forfeited amount is logged.
      */
     @Transactional
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries", "jurisdictions", "leaderboards", "nominees", "playlists"}, allEntries = true)
+    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries", "jurisdictions", "leaderboards", "standings", "nominees", "playlists"}, allEntries = true)
     public java.math.BigDecimal deleteAccountByAdmin(UUID userId) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found: " + userId));
@@ -1067,7 +1117,14 @@ public class UserService {
         return trimmed;
     }
 
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
+    @Caching(evict = {
+        @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId"),
+        // The artist page and the artist's song list are cached as
+        // "profile-<id>" and "songs-<id>" (evicting "#userId" in this cache
+        // matched nothing, so artist pages stayed stale for 5 minutes).
+        @CacheEvict(value = "artists", key = "'profile-' + #userId"),
+        @CacheEvict(value = "artists", key = "'songs-' + #userId")
+    })
     public void updateSocialLinks(UUID userId, Map<String, String> payload) {
         User user = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
@@ -1109,7 +1166,14 @@ public class UserService {
     }
 
 
-    @CacheEvict(value = {"userProfiles", "artists", "profileSummaries"}, key = "#userId")
+    @Caching(evict = {
+        @CacheEvict(value = {"userProfiles", "profileSummaries"}, key = "#userId"),
+        // The artist page and the artist's song list are cached as
+        // "profile-<id>" and "songs-<id>" (evicting "#userId" in this cache
+        // matched nothing, so artist pages stayed stale for 5 minutes).
+        @CacheEvict(value = "artists", key = "'profile-' + #userId"),
+        @CacheEvict(value = "artists", key = "'songs-' + #userId")
+    })
     public void markPhoneVerified(UUID userId) {
         User u = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));

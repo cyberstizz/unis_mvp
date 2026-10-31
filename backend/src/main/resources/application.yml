@@ -2,6 +2,13 @@ server:
   port: 8080
   error:
     include-message: always
+  # Gzip JSON responses. Song lists are 5-10 KB per song uncompressed and
+  # Spring Boot doesn't compress unless told to; a 20-song feed list measured
+  # 181 KB raw vs 7 KB gzipped (0.25 ms of CPU). Big win on phone data.
+  compression:
+    enabled: true
+    mime-types: application/json,text/plain,text/html,text/css,application/javascript
+    min-response-size: 1024
 
 cloudflare:
   r2:
@@ -37,17 +44,9 @@ spring:
   profiles:
     active: local
 
-  cache:
-    type: caffeine
-    caffeine:
-      spec: maximumSize=1000,expireAfterWrite=5m
-    cache-names:
-      - songs
-      - artists
-      - jurisdictions
-      - genres
-      - trending
-      - userProfiles
+  # (The old spring.cache block was removed: config/CacheConfig.java defines
+  # every cache, its size and its lifetime, and replaces Spring Boot's own
+  # cache setup, so those lines never did anything.)
 
   web:
     resources:
@@ -59,6 +58,22 @@ spring:
     # Local development only. Set LOCAL_DB_PASSWORD on your machine; never commit a real one.
     password: ${LOCAL_DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
+    # Connection pool (HikariCP), stated explicitly instead of left to defaults.
+    # Applies in production too (application-prod.yml only sets url/user/password).
+    # 10 per backend instance fits Supabase Micro (60 direct connections) with
+    # room for Supabase's own services. With N Railway replicas the total is
+    # 10 x N; keep it under the "Pool Size" in Supabase's database settings.
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      # (minimum-idle left at its default, the same as the pool size: a fixed
+      # pool, so a burst never waits on new TLS connections to Supabase.)
+      # Fail a request after 10 s waiting for a connection instead of 30 s:
+      # under overload, fast errors beat a pile-up of 30-second requests.
+      connection-timeout: 10000
+      # Recycle each connection every 10 minutes, and ping idle ones every 2,
+      # so the Supabase pooler or a network device never silently drops one.
+      max-lifetime: 600000
+      keepalive-time: 120000
 
   jpa:
     hibernate:
@@ -67,6 +82,10 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
+        # Load related rows (a song's artist, genre, jurisdiction...) in batches
+        # of up to 50 per query instead of one query per row. Every list of
+        # songs, awards and users was doing one lookup per item.
+        default_batch_fetch_size: 50
 
   sql:
     init:
@@ -75,7 +94,9 @@ spring:
   task:
     scheduling:
       pool:
-        size: 2
+        # 14 scheduled jobs shared 2 threads; the Sunday email (minutes of
+        # sending) could hold up the hourly race close. 4 is plenty.
+        size: 4
 
   servlet:
     multipart:

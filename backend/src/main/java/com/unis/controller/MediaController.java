@@ -370,7 +370,7 @@ public class MediaController {
     public ResponseEntity<List<Song>> getTopSongsByJurisdiction(
             @PathVariable UUID jurisdictionId,
             @RequestParam(defaultValue = "3") int limit) {
-        List<Song> songs = mediaService.getTopSongsByJurisdiction(jurisdictionId, limit);
+        List<Song> songs = mediaService.getTopSongsByJurisdiction(jurisdictionId, clampLimit(limit));
         return ResponseEntity.ok(songs);
     }
 
@@ -378,7 +378,7 @@ public class MediaController {
     public ResponseEntity<List<Video>> getTopVideosByJurisdiction(
             @PathVariable UUID jurisdictionId,
             @RequestParam(defaultValue = "3") int limit) {
-        List<Video> videos = mediaService.getTopVideosByJurisdiction(jurisdictionId, limit);
+        List<Video> videos = mediaService.getTopVideosByJurisdiction(jurisdictionId, clampLimit(limit));
         return ResponseEntity.ok(videos);
     }
 
@@ -392,7 +392,7 @@ public class MediaController {
     @GetMapping("/videos/recent")
     public ResponseEntity<List<Video>> getRecentVideos(
             @RequestParam(defaultValue = "12") int limit) {
-        return ResponseEntity.ok(mediaService.getRecentVideos(limit));
+        return ResponseEntity.ok(mediaService.getRecentVideos(clampLimit(limit)));
     }
 
     @GetMapping("/videos/artist/{artistId}")
@@ -444,6 +444,7 @@ public class MediaController {
     public ResponseEntity<List<Object>> getTrendingMedia(
             @RequestParam UUID jurisdictionId,
             @RequestParam(defaultValue = "5") int limit) {
+        limit = clampLimit(limit);
         List<Song> topSongs = mediaService.getTopSongsByJurisdiction(jurisdictionId, limit);
         List<Video> topVideos = mediaService.getTopVideosByJurisdiction(jurisdictionId, limit);
         List<Object> mixed = new ArrayList<>();
@@ -459,7 +460,7 @@ public class MediaController {
             @RequestParam UUID jurisdictionId,
             @RequestParam(defaultValue = "10") int limit) {
         try {
-            List<Song> trendingSongs = mediaService.getTrendingSongsByJurisdiction(jurisdictionId, limit);
+            List<Song> trendingSongs = mediaService.getTrendingSongsByJurisdiction(jurisdictionId, clampLimit(limit));
             return ResponseEntity.ok(trendingSongs);
         } catch (Exception e) {
             log.error("Trending today query failed:", e);
@@ -490,7 +491,7 @@ public class MediaController {
             @RequestParam UUID jurisdictionId,
             @RequestParam(defaultValue = "5") int limit) {
         try {
-            List<Song> newSongs = mediaService.getNewSongsByJurisdiction(jurisdictionId, limit);
+            List<Song> newSongs = mediaService.getNewSongsByJurisdiction(jurisdictionId, clampLimit(limit));
             return ResponseEntity.ok(newSongs);
         } catch (Exception e) {
             log.error("New media query failed, falling back to trending:", e);
@@ -502,6 +503,15 @@ public class MediaController {
                 .collect(Collectors.toList());
             return ResponseEntity.ok(fallbackSongs);
         }
+    }
+
+    /**
+     * Public list endpoints accept at most 50 items. A request for limit=100000
+     * used to load (and cache under its own key) that many songs, with a play
+     * count lookup for each one.
+     */
+    static int clampLimit(int limit) {
+        return Math.max(1, Math.min(limit, 50));
     }
 
     // Only the song's artist or an admin (previously any logged-in user).

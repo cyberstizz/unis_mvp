@@ -58,6 +58,12 @@ public class SecurityConfig {
         configuration.setAllowCredentials(true);
         configuration.addAllowedHeader("*");
         configuration.addAllowedMethod("*");
+        // Browsers may reuse a CORS preflight answer this long (they cap it:
+        // Chrome at 2 hours). The app is on a different origin from the API,
+        // so every new URL it calls with a sign-in token is preceded by an
+        // OPTIONS round trip. Without this line no max age was sent, and
+        // Chrome kept each answer for only 5 seconds.
+        configuration.setMaxAge(86400L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;

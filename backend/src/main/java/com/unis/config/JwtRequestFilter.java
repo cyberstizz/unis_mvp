@@ -10,8 +10,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -21,6 +19,8 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Date;
+import java.util.Optional;
 
 @Component
 public class JwtRequestFilter extends OncePerRequestFilter {
@@ -28,7 +28,7 @@ public class JwtRequestFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(JwtRequestFilter.class);
 
     @Autowired
-    private UserDetailsService userDetailsService;
+    private AuthUserCache authUserCache;
 
     @Autowired
     private JwtUtil jwtUtil;
@@ -42,13 +42,13 @@ public class JwtRequestFilter extends OncePerRequestFilter {
 
         final String authorizationHeader = request.getHeader("Authorization");
 
-        String username = null;
-        String jwt = null;
-
+        // The token is checked and read once per request. (It used to be parsed
+        // and its signature verified four separate times.)
+        Claims claims = null;
         if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
-            jwt = authorizationHeader.substring(7);
+            String jwt = authorizationHeader.substring(7);
             try {
-                username = jwtUtil.extractUsername(jwt);
+                claims = jwtUtil.parseClaims(jwt);
             } catch (ExpiredJwtException e) {
                 // Normal: the app refreshes the session. Not worth a log line.
             } catch (JwtException | IllegalArgumentException e) {
@@ -57,23 +57,26 @@ public class JwtRequestFilter extends OncePerRequestFilter {
             }
         }
 
+        String username = claims != null ? claims.getSubject() : null;
+
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
 
-            UserDetails userDetails;
-            try {
-                userDetails = this.userDetailsService.loadUserByUsername(username);
-            } catch (UsernameNotFoundException e) {
-                // Deleted or suspended since the token was issued: signed out.
-                // (Before, this escaped as a 500 whose message included the email.)
+            // Deleted or suspended since the token was issued: signed out.
+            // Cached for a minute (AuthUserCache) instead of three queries per request.
+            Optional<UserDetails> account = authUserCache.find(username);
+            if (account.isEmpty()) {
                 chain.doFilter(request, response);
                 return;
             }
+            UserDetails userDetails = account.get();
 
-            if (jwtUtil.validateToken(jwt, userDetails)) {
+            Date expiration = claims.getExpiration();
+            boolean valid = username.equals(userDetails.getUsername())
+                    && (expiration == null || expiration.after(new Date()));
 
+            if (valid) {
                 // C6 FIX: Extract userId from JWT claims and store as credentials
                 // so downstream controllers can access it via SecurityUtils.getAuthenticatedUserId()
-                Claims claims = jwtUtil.parseClaims(jwt);
                 String userId = claims.get("userId", String.class);
 
                 // Signed out on this device, or the account's sessions were
@@ -88,13 +91,14 @@ public class JwtRequestFilter extends OncePerRequestFilter {
                 // Staff permissions only for sessions that passed two-factor
                 // sign-in. A staff account's token without it (issued before
                 // 2FA, or before the role was granted) acts as a regular user.
-                var authorities = jwtUtil.isMfaVerified(jwt)
+                boolean mfaVerified = Boolean.TRUE.equals(claims.get("mfa", Boolean.class));
+                var authorities = mfaVerified
                         ? userDetails.getAuthorities()
                         : java.util.List.<org.springframework.security.core.GrantedAuthority>of();
                 UsernamePasswordAuthenticationToken usernamePasswordAuthenticationToken =
                         new UsernamePasswordAuthenticationToken(
                                 userDetails, userId, authorities);
-                                usernamePasswordAuthenticationToken
+                usernamePasswordAuthenticationToken
                         .setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(usernamePasswordAuthenticationToken);
             }

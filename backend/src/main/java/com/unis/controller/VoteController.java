@@ -281,11 +281,25 @@ public class VoteController {
             Authentication auth,
             @RequestParam(defaultValue = "50") int limit) {
 
-        String email = auth.getName();
-        User user = userRepository.findByEmail(email)
-            .orElseThrow(() -> new RuntimeException("User not found"));
+        // The signed-in user's id comes from the token (no lookup by email).
+        UUID userId = SecurityUtils.getAuthenticatedUserId();
+        int pageSize = Math.max(1, Math.min(limit, 100));
 
-        List<Vote> votes = voteRepository.findByUserUserIdOrderByVoteDateDesc(user.getUserId());
+        // Only the newest `limit` votes, and their songs and artists in one
+        // batch each (it used to load every vote ever cast, then look up each
+        // nominee one by one).
+        List<Vote> votes = voteRepository.findRecentByUser(userId,
+            org.springframework.data.domain.PageRequest.of(0, pageSize));
+        List<UUID> songIds = new ArrayList<>();
+        List<UUID> artistIds = new ArrayList<>();
+        for (Vote vote : votes) {
+            if ("song".equalsIgnoreCase(vote.getTargetType())) songIds.add(vote.getTargetId());
+            else if ("artist".equalsIgnoreCase(vote.getTargetType())) artistIds.add(vote.getTargetId());
+        }
+        Map<UUID, Song> songs = new HashMap<>();
+        for (Song s : songRepository.findAllById(songIds)) songs.put(s.getSongId(), s);
+        Map<UUID, User> artists = new HashMap<>();
+        for (User u : userRepository.findAllById(artistIds)) artists.put(u.getUserId(), u);
 
         List<VoteHistoryDto> history = new ArrayList<>();
         int count = 0;
@@ -297,16 +311,14 @@ public class VoteController {
             String nomineeImage = null;
 
             if ("song".equalsIgnoreCase(vote.getTargetType())) {
-                Optional<Song> songOpt = songRepository.findById(vote.getTargetId());
-                if (songOpt.isPresent()) {
-                    Song song = songOpt.get();
+                Song song = songs.get(vote.getTargetId());
+                if (song != null) {
                     nomineeName = song.getTitle();
                     nomineeImage = song.getArtworkUrl();
                 }
             } else if ("artist".equalsIgnoreCase(vote.getTargetType())) {
-                Optional<User> artistOpt = userRepository.findById(vote.getTargetId());
-                if (artistOpt.isPresent()) {
-                    User artist = artistOpt.get();
+                User artist = artists.get(vote.getTargetId());
+                if (artist != null) {
                     nomineeName = artist.getUsername();
                     nomineeImage = artist.getPhotoUrl();
                 }

@@ -132,7 +132,7 @@ public class VoteService {
         }
     }
 
-    @CacheEvict(value = {"leaderboards", "nominees", "voteCounts"}, allEntries = true)
+    @CacheEvict(value = {"leaderboards", "standings", "nominees", "voteCounts"}, allEntries = true)
     @Transactional
     public Vote submitVote(Vote vote) {
         // 1. GUARD CLAUSES: Validate required fields preventing NPE
