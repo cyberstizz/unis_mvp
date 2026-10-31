@@ -6,9 +6,11 @@ import com.unis.entity.User;
 import com.unis.repository.JurisdictionRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.UserRepository;
+import com.unis.util.CacheReady;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -16,6 +18,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+// The cached methods below return entities. Each one loads every link its JSON
+// shows (CacheReady) inside a read-only transaction before the result is
+// cached, so a cached copy never has to reach back into the database session
+// of the request that first loaded it.
 @Service
 public class JurisdictionService {
     @Autowired
@@ -28,24 +34,29 @@ public class JurisdictionService {
     private SongRepository songRepository;
 
     // CACHED: Jurisdiction lookup by ID (1 hour TTL - rarely changes)
+    @Transactional(readOnly = true)
     @Cacheable(value = "jurisdictions", key = "#jurisdictionId")
     public Jurisdiction getJurisdiction(UUID jurisdictionId) {
-        return jurisdictionRepository.findById(jurisdictionId)
-            .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
+        return CacheReady.jurisdiction(jurisdictionRepository.findById(jurisdictionId)
+            .orElseThrow(() -> new RuntimeException("Jurisdiction not found")));
     }
 
     // CACHED: Jurisdiction lookup by name (1 hour TTL - rarely changes)
+    @Transactional(readOnly = true)
     @Cacheable(value = "jurisdictions", key = "'name-' + #name")
     public List<Jurisdiction> getByName(String name) {
-        return jurisdictionRepository.findAllByNameIgnoreCase(name);
+        return CacheReady.jurisdictions(jurisdictionRepository.findAllByNameIgnoreCase(name));
     }
 
     // CACHED: Tops for a jurisdiction (5 min TTL - updates with song plays/votes)
     // This is expensive with recursive hierarchy queries
+    @Transactional(readOnly = true)
     @Cacheable(value = "jurisdictions", key = "'tops-' + #jurisdictionId")
     public Map<String, Object> getJurisdictionTops(UUID jurisdictionId) {
-        List<User> topArtists = userRepository.findTopArtistsByJurisdictionWithHierarchy(jurisdictionId, 30);
-        List<Song> topSongs = songRepository.findTopByJurisdictionWithHierarchy(jurisdictionId, 30);
+        List<User> topArtists = CacheReady.users(
+            userRepository.findTopArtistsByJurisdictionWithHierarchy(jurisdictionId, 30));
+        List<Song> topSongs = CacheReady.songs(
+            songRepository.findTopByJurisdictionWithHierarchy(jurisdictionId, 30));
 
         Map<String, Object> tops = new HashMap<>();
         tops.put("topArtists", topArtists);
@@ -91,18 +102,20 @@ public class JurisdictionService {
      * Get all direct children of a jurisdiction
      * Used for map drill-down: clicking a jurisdiction shows its children
      */
+    @Transactional(readOnly = true)
     @Cacheable(value = "jurisdictions", key = "'children-' + #parentJurisdictionId")
     public List<Jurisdiction> getChildren(UUID parentJurisdictionId) {
-        return jurisdictionRepository.findByParentJurisdictionId(parentJurisdictionId);
+        return CacheReady.jurisdictions(jurisdictionRepository.findByParentJurisdictionId(parentJurisdictionId));
     }
 
     /**
      * Get root jurisdictions (no parent - typically just "Unis")
      * For the very top level of the hierarchy
      */
+    @Transactional(readOnly = true)
     @Cacheable(value = "jurisdictions", key = "'roots'")
     public List<Jurisdiction> getRootJurisdictions() {
-        return jurisdictionRepository.findTopLevelJurisdictions();
+        return CacheReady.jurisdictions(jurisdictionRepository.findTopLevelJurisdictions());
     }
 
     /**
@@ -207,6 +220,7 @@ public class JurisdictionService {
      * Get all states (Tier 2) - direct children of Unis
      * Used for the US map view
      */
+    @Transactional(readOnly = true)
     @Cacheable(value = "jurisdictions", key = "'states'")
     public List<Jurisdiction> getAllStates() {
         // First find Unis
@@ -218,6 +232,6 @@ public class JurisdictionService {
         Jurisdiction unis = unisList.get(0);
         
         // Return children of Unis (all states)
-        return jurisdictionRepository.findByParentJurisdictionId(unis.getJurisdictionId());
+        return CacheReady.jurisdictions(jurisdictionRepository.findByParentJurisdictionId(unis.getJurisdictionId()));
     }
 }

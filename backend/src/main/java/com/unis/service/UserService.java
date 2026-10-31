@@ -15,6 +15,7 @@ import com.unis.repository.VideoPlayRepository;
 import com.unis.repository.LikeRepository;
 import com.unis.repository.AdViewRepository;
 import com.unis.service.ScoreUpdateService;
+import com.unis.util.CacheReady;
 import com.unis.util.ReferralCodeGenerator;
 import com.unis.repository.ReferralRepository;
 import jakarta.persistence.EntityManager;
@@ -490,12 +491,10 @@ public class UserService {
             songRepository.findById(user.getDefaultSongId()).ifPresent(user::setDefaultSong);
         }
         
-        // Force load jurisdiction to avoid lazy load issues
-        if (user.getJurisdiction() != null) {
-            user.getJurisdiction().getName();
-        }
-        
-        return user;
+        // Load everything the JSON shows before the profile is cached
+        // (CacheReady explains why). This used to load only the jurisdiction;
+        // the genre was left to whichever request wrote the cached copy first.
+        return CacheReady.user(user);
     }
 
     // Update photo - EVICTS user profile cache
@@ -594,7 +593,9 @@ public class UserService {
             songRepository.findById(artist.getDefaultSongId()).ifPresent(artist::setDefaultSong);
         }
         
-        return artist;
+        // Load everything the JSON shows before the profile is cached
+        // (CacheReady explains why).
+        return CacheReady.user(artist);
     }
 
     // NOT CACHED - Used for authentication, needs fresh data
@@ -661,6 +662,8 @@ public class UserService {
         for (Song song : songRepository.findAllById(defaultSongIds)) {
             defaultSongs.put(song.getSongId(), song);
         }
+        // These songs go into the cache with the list (CacheReady explains why).
+        CacheReady.songs(defaultSongs.values());
 
         return results.stream()
                 .map(row -> {

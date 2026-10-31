@@ -26,6 +26,31 @@ public class AdminController {
         this.cronMonitorService = cronMonitorService;
     }
     
+    /**
+     * GET /api/v1/admin/my-role
+     * The signed-in staff member's own role level ("super_admin", "admin" or
+     * "moderator"), so the web app can show the admin pages they may open.
+     * Read from the permissions already attached to this request (no database
+     * query). Only sessions that passed two-factor sign-in have them, and
+     * SecurityConfig lets moderators and up reach this; everyone else gets 403.
+     * (The app used to ask /roles, the full list, which only super admins may
+     * read, so admins and moderators never learned their own role.)
+     */
+    @GetMapping("/my-role")
+    public Map<String, Object> getMyRole(org.springframework.security.core.Authentication authentication) {
+        java.util.Set<String> granted = new java.util.HashSet<>();
+        if (authentication != null) {
+            authentication.getAuthorities().forEach(a -> granted.add(a.getAuthority()));
+        }
+        String roleLevel = granted.contains("ROLE_SUPER_ADMIN") ? "super_admin"
+                : granted.contains("ROLE_ADMIN") ? "admin"
+                : granted.contains("ROLE_MODERATOR") ? "moderator"
+                : null;
+        Map<String, Object> body = new HashMap<>();
+        body.put("roleLevel", roleLevel);
+        return body;
+    }
+
     @GetMapping("/cache/stats")
     public Map<String, Object> getCacheStats() {
         Map<String, Object> stats = new HashMap<>();

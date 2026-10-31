@@ -91,6 +91,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/dmca/*/takedown").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/songs/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/admin/videos/**").hasRole("ADMIN")
+                // A staff member's own role level (AdminController.getMyRole).
+                .requestMatchers(HttpMethod.GET, "/api/v1/admin/my-role").hasRole("MODERATOR")
                 .requestMatchers("/api/v1/admin/analytics/**").hasRole("MODERATOR")
                 .requestMatchers(HttpMethod.GET, "/api/v1/admin/dmca/**").hasRole("MODERATOR")
                 .requestMatchers("/api/v1/admin/comments/**").hasRole("MODERATOR")
