@@ -34,8 +34,13 @@ resend:
 
 unis:
   auto-populate-awards: true
-  app-base-url: ${UNIS_APP_BASE_URL:http://localhost:5173}
-  api-base-url: ${UNIS_API_BASE_URL:http://localhost:8080}
+  # The live site and API, used for every link in the Sunday and referral
+  # emails (the logo, buttons, unsubscribe). They used to fall back to
+  # localhost when the Railway variables were missing, which broke all of them.
+  # The site falls back to app.frontend.url, the setting the verification and
+  # password-reset emails use, then to unismusic.com.
+  app-base-url: ${UNIS_APP_BASE_URL:${app.frontend.url:https://unismusic.com}}
+  api-base-url: ${UNIS_API_BASE_URL:https://unismvp-production.up.railway.app}
   media-base-url: ${UNIS_MEDIA_BASE_URL:https://cdn.unismusic.com}
   digest:
     enabled: ${UNIS_DIGEST_ENABLED:true}
