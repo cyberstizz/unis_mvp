@@ -36,15 +36,15 @@ public class WaitlistController {
 
     /**
      * GET /v1/waitlist/check-referral/{code}
-     * Validate a referral code before form submission.
+     * Validate a referral code before form submission. The code is required;
+     * it can belong to someone on the waitlist, a member, or be a short code.
      */
     @GetMapping("/api/v1/waitlist/check-referral/{code}")
     public ResponseEntity<?> checkReferral(@PathVariable String code) {
-        return preRegService.findByReferralCode(code)
-                .map(r -> ResponseEntity.ok(Map.of(
+        return preRegService.checkCode(code)
+                .<ResponseEntity<?>>map(h -> ResponseEntity.ok(Map.of(
                         "valid", true,
-                        "referrerUsername", r.getUsername(),
-                        "referrerRegion", r.getMetroRegion()
+                        "referrerUsername", h.username()
                 )))
                 .orElse(ResponseEntity.ok(Map.of("valid", false)));
     }

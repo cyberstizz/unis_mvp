@@ -555,11 +555,22 @@ public class UserController {
                 response.put("referrerId", referrer.getUserId());
                 response.put("code", resolved.get().code());
                 return ResponseEntity.ok(response);
-            } else {
-                response.put("valid", false);
-                response.put("message", "Invalid referral code");
+            }
+
+            // A waitlist code (UNIS-AB12CD). If its owner is still waiting, they
+            // get the credit the day they make an account.
+            Optional<com.unis.service.ReferralCodeService.Holder> waiting = referralCodeService.lookup(code, null);
+            if (waiting.isPresent()) {
+                response.put("valid", true);
+                response.put("referrerUsername", waiting.get().username());
+                response.put("referrerId", null);
+                response.put("code", waiting.get().code());
                 return ResponseEntity.ok(response);
             }
+
+            response.put("valid", false);
+            response.put("message", "Invalid referral code");
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
             response.put("valid", false);
             response.put("message", "Error validating code");

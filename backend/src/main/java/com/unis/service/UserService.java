@@ -367,46 +367,68 @@ public class UserService {
         if (newUser.getThemePreference() == null || newUser.getThemePreference().isBlank()) {  // ★
             newUser.setThemePreference("blue");   // default only — honor the user's pick
         } 
-        // Generate a referral code for this user
-        String uniqueReferralCode = ReferralCodeGenerator.generateUnique(
-            newUser.getUsername(),
-            code -> userRepository.existsByReferralCode(code)
-        );
-        newUser.setReferralCode(uniqueReferralCode);
+        // Everyone joins through someone. Decided before anything is saved, so
+        // a sign-up without a valid code leaves nothing behind.
+        WaitlistEntry waitlist = waitlistEntry(newUser.getEmail());
+        ReferralCodeService.Holder credit = chooseReferral(newUser.getEmail(), referralCode, waitlist);
+        if (credit == null) {
+            throw new RuntimeException(referralCode == null || referralCode.isBlank()
+                ? "A referral code is required to join Unis. Ask the person who told you about Unis for theirs."
+                : "That referral code isn't valid. Check it with the person who gave it to you.");
+        }
+
+        // The person's referral code. Someone coming off the waitlist keeps the
+        // code they've been sharing (UNIS-AB12CD), so it keeps crediting them.
+        if (waitlist != null && referralCodeService.isFreeForMember(waitlist.code())) {
+            newUser.setReferralCode(waitlist.code());
+        } else {
+            newUser.setReferralCode(ReferralCodeGenerator.generateUnique(
+                newUser.getUsername(),
+                code -> userRepository.existsByReferralCode(code)
+            ));
+        }
  
         // Save user
         User savedUser = userRepository.save(newUser);
  
         // Handle referral tracking
         boolean referralTracked = false;   // feeds signup_source below
-        if (referralCode != null && !referralCode.trim().isEmpty()) {
-            // A member's own code or a short code they own (HARLEM), any case.
-            // A deleted account's code no longer refers anyone.
-            Optional<ReferralCodeService.Resolved> resolved = referralCodeService.resolve(referralCode);
+        if ("member".equals(credit.kind())) {
+            User referrer = credit.account();
 
-            if (resolved.isPresent()) {
-                User referrer = resolved.get().owner();
+            // Create referral record, keeping the exact code used so admin
+            // can count sign-ups per code.
+            Referral referral = Referral.builder()
+                    .referrer(referrer)
+                    .referred(savedUser)
+                    .createdAt(LocalDateTime.now())
+                    .codeUsed(credit.code())
+                    .build();
+            referralRepository.save(referral);
+            referralTracked = true;
 
-                // Create referral record, keeping the exact code used so admin
-                // can count sign-ups per code.
-                Referral referral = Referral.builder()
-                        .referrer(referrer)
-                        .referred(savedUser)
-                        .createdAt(LocalDateTime.now())
-                        .codeUsed(resolved.get().code())
-                        .build();
-                referralRepository.save(referral);
-                referralTracked = true;
-                
-                // Award points to referrer (+5 for listeners, +2 for artists).
-                // Recorded so it can be taken back if this account is deleted
-                // within 30 days.
-                scoreUpdateService.onReferral(referrer.getUserId(), savedUser.getUserId());
-                
-                System.out.println("Referral tracked: " + referrer.getUsername() + " referred " + savedUser.getUsername());
-            } else {
-                System.out.println("Warning: Referral code '" + referralCode + "' not found. Proceeding without referral.");
-            }
+            // Award points to referrer (+5 for listeners, +2 for artists).
+            // Recorded so it can be taken back if this account is deleted
+            // within 30 days.
+            scoreUpdateService.onReferral(referrer.getUserId(), savedUser.getUserId());
+
+            System.out.println("Referral tracked: " + referrer.getUsername() + " referred " + savedUser.getUsername());
+        } else if ("waitlist".equals(credit.kind())) {
+            // Their referrer is still on the waitlist: credited the day they
+            // make an account (creditWaitingReferrals).
+            jdbcTemplate.update("UPDATE users SET pending_referral_code = ? WHERE user_id = ?",
+                credit.code(), savedUser.getUserId());
+            referralTracked = true;
+            System.out.println("Referral pending: " + savedUser.getUsername() + " joined with waitlist code " + credit.code());
+        } else {
+            // The launch code: Unis brought them in, and the share stays with Unis.
+            System.out.println("Referral: " + savedUser.getUsername() + " joined with the launch code");
+        }
+
+        // Coming off the waitlist: anyone who joined with their code while they
+        // were still waiting is now credited to them.
+        if (waitlist != null) {
+            creditWaitingReferrals(waitlist.code(), savedUser);
         }
  
         // For ALL users (listeners AND artists): Validate and set supported artist
@@ -440,10 +462,12 @@ public class UserService {
  
         // How this person found Unis, for the growth metrics: a referral code
         // wins, then a waitlist email, then a campaign link, otherwise organic.
+        // The waitlist entry is marked converted either way.
+        boolean fromWaitlist = markWaitlistConverted(savedUser.getEmail());
         String signupSource;
         if (referralTracked) {
             signupSource = "referral";
-        } else if (markWaitlistConverted(savedUser.getEmail())) {
+        } else if (fromWaitlist) {
             signupSource = "waitlist";
         } else if (savedUser.getSignupCampaign() != null && !savedUser.getSignupCampaign().isBlank()) {
             signupSource = "campaign";
@@ -461,6 +485,60 @@ public class UserService {
         return savedUser;
     }
  
+
+    /** A waitlist entry: their own code, and the code they joined the waitlist with. */
+    private record WaitlistEntry(String code, String referredBy) {}
+
+    private WaitlistEntry waitlistEntry(String email) {
+        if (email == null || email.isBlank()) return null;
+        List<WaitlistEntry> rows = jdbcTemplate.query(
+            "SELECT referral_code, referred_by FROM pre_registrations WHERE lower(email) = lower(?) LIMIT 1",
+            (rs, i) -> new WaitlistEntry(rs.getString("referral_code"), rs.getString("referred_by")),
+            email.trim());
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /**
+     * Who gets credit for this sign-up. The code someone joined the waitlist
+     * with comes first: whoever brought them in back then keeps the credit,
+     * whatever is typed now. Otherwise the code typed on the form. Null when
+     * there's no valid code (the sign-up is refused).
+     */
+    private ReferralCodeService.Holder chooseReferral(String email, String typed, WaitlistEntry waitlist) {
+        if (waitlist != null && waitlist.referredBy() != null && !waitlist.referredBy().isBlank()) {
+            Optional<ReferralCodeService.Holder> original = referralCodeService.lookup(waitlist.referredBy(), email);
+            if (original.isPresent()) return original.get();
+        }
+        if (typed == null || typed.isBlank()) return null;
+        return referralCodeService.lookup(typed, email).orElse(null);
+    }
+
+    /**
+     * Someone with this waitlist code just made an account: everyone who
+     * signed up with the code while they were still waiting becomes their
+     * referral now.
+     */
+    private void creditWaitingReferrals(String waitlistCode, User referrer) {
+        if (waitlistCode == null || waitlistCode.isBlank()) return;
+        List<UUID> waiting = jdbcTemplate.query(
+            "SELECT u.user_id FROM users u "
+          + "WHERE upper(u.pending_referral_code) = upper(?) AND u.user_id <> ? AND u.deleted_at IS NULL "
+          + "AND NOT EXISTS (SELECT 1 FROM referrals r WHERE r.referred_id = u.user_id)",
+            (rs, i) -> rs.getObject(1, UUID.class), waitlistCode, referrer.getUserId());
+        for (UUID id : waiting) {
+            Optional<User> referred = userRepository.findById(id);
+            if (referred.isEmpty()) continue;
+            referralRepository.save(Referral.builder()
+                .referrer(referrer)
+                .referred(referred.get())
+                .createdAt(LocalDateTime.now())
+                .codeUsed(waitlistCode.trim().toUpperCase())
+                .build());
+            jdbcTemplate.update("UPDATE users SET pending_referral_code = NULL WHERE user_id = ?", id);
+            scoreUpdateService.onReferral(referrer.getUserId(), id);
+            System.out.println("Referral credited from the waitlist: " + referrer.getUsername() + " referred " + referred.get().getUsername());
+        }
+    }
 
     /**
      * If this email is on the waitlist, mark that entry converted and say so.

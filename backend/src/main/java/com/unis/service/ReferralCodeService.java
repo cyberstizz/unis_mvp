@@ -18,12 +18,17 @@ import java.util.regex.Pattern;
 /**
  * Referral codes: the one place that decides what a typed code means.
  *
- * Two kinds of code reach sign-up:
+ * Three kinds of code reach sign-up:
  *   - A member's own code, made at sign-up (USERNAME-X7K2Q).
  *   - A short code an admin creates for a campaign or partner (HARLEM, LEGEND),
  *     stored in referral_short_codes and tied to an owner account. Whoever
  *     owns the short code is the referrer, exactly as if their own code had
  *     been typed.
+ *   - A waitlist code (UNIS-AB12CD). When its owner makes an account, the
+ *     account keeps that code, and everyone who used it is credited to them.
+ *     See lookup().
+ *
+ * Every sign-up needs a code, on the waitlist and for an account.
  *
  * Codes are matched without regard to case ("harlem" works), and the exact
  * code used is saved on the referral (referrals.code_used), so admin can count
@@ -76,6 +81,64 @@ public class ReferralCodeService {
         return userRepository.findById(owners.get(0))
                 .filter(u -> u.getDeletedAt() == null)
                 .map(u -> new Resolved(u, code, true));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Any code: member, short, launch or waitlist
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Who a code credits, for the two sign-up forms (an account and the
+     * waitlist), which both require one.
+     *
+     *   kind "member"   a member's code, a short code, or a waitlist code whose
+     *                   owner has since made an account: account is the referrer
+     *   kind "waitlist" the code of someone still on the waitlist: they get the
+     *                   credit the day they make an account (users.pending_referral_code)
+     *   kind "launch"   the launch code: Unis itself brought them in, so the
+     *                   referral share stays with Unis
+     *
+     * @param excludeEmail the person signing up, so their own waitlist code
+     *                     can't credit themselves (null when not known yet)
+     */
+    public record Holder(String kind, String code, String username, User account) {}
+
+    public Optional<Holder> lookup(String raw, String excludeEmail) {
+        String code = normalize(raw);
+        if (code.isEmpty() || code.length() > 64) return Optional.empty();
+        if (LAUNCH_CODE.equals(code)) return Optional.of(new Holder("launch", code, "Unis", null));
+
+        Optional<Resolved> member = resolve(code);
+        if (member.isPresent()) {
+            User owner = member.get().owner();
+            if (excludeEmail != null && owner.getEmail() != null && owner.getEmail().equalsIgnoreCase(excludeEmail.trim())) {
+                return Optional.empty();
+            }
+            return Optional.of(new Holder("member", code, owner.getUsername(), owner));
+        }
+
+        String exclude = excludeEmail == null ? "" : excludeEmail.trim();
+        List<String[]> onWaitlist = jdbc.query(
+                "SELECT username, email FROM pre_registrations WHERE upper(referral_code) = ? "
+                        + "AND lower(email) <> lower(?)",
+                (rs, i) -> new String[] { rs.getString("username"), rs.getString("email") },
+                code, exclude);
+        if (onWaitlist.isEmpty()) return Optional.empty();
+
+        // Made an account since joining the waitlist? Then that account is the referrer.
+        Optional<User> account = userRepository.findActiveByEmail(onWaitlist.get(0)[1].trim().toLowerCase());
+        return account
+                .map(u -> new Holder("member", code, u.getUsername(), u))
+                .or(() -> Optional.of(new Holder("waitlist", code, onWaitlist.get(0)[0], null)));
+    }
+
+    /** True when no member or short code already uses these letters. */
+    public boolean isFreeForMember(String code) {
+        String c = normalize(code);
+        if (c.isEmpty() || LAUNCH_CODE.equals(c) || userRepository.existsByReferralCode(c)) return false;
+        Boolean shortTaken = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM referral_short_codes WHERE code = ?)", Boolean.class, c);
+        return !Boolean.TRUE.equals(shortTaken);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

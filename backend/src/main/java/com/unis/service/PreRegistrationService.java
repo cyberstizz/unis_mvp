@@ -27,6 +27,9 @@ public class PreRegistrationService {
     @Autowired
     private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private ReferralCodeService referralCodeService;
+
     // ─── Major metro threshold tiers ───
     // In production, pull these from jurisdiction_activation_thresholds table
     private static final Set<String> MAJOR_METROS = Set.of(
@@ -72,12 +75,17 @@ public class PreRegistrationService {
             throw new IllegalArgumentException("Username already taken");
         }
 
-        // Validate referral code if provided
-        if (req.getReferredByCode() != null && !req.getReferredByCode().isBlank()) {
-            if (!preRegRepo.existsByReferralCode(req.getReferredByCode().trim().toUpperCase())) {
-                throw new IllegalArgumentException("Invalid referral code");
-            }
+        // A referral code is required: everyone hears about Unis from someone,
+        // and that person gets the credit. Any code works: someone else on the
+        // waitlist, a member's code, or a short code like HARLEM.
+        String rawCode = req.getReferredByCode() == null ? "" : req.getReferredByCode().trim();
+        if (rawCode.isEmpty()) {
+            throw new IllegalArgumentException(
+                "A referral code is required. Ask the person who told you about Unis for theirs.");
         }
+        ReferralCodeService.Holder referrer = referralCodeService.lookup(rawCode, req.getEmail())
+            .orElseThrow(() -> new IllegalArgumentException(
+                "That referral code isn't valid. Check it with the person who gave it to you."));
 
         // Build entity
         PreRegistration entity = new PreRegistration();
@@ -98,9 +106,7 @@ public class PreRegistrationService {
             entity.setMetroRegion(metro);
         }
 
-        if (req.getReferredByCode() != null && !req.getReferredByCode().isBlank()) {
-            entity.setReferredBy(req.getReferredByCode().trim().toUpperCase());
-        }
+        entity.setReferredBy(referrer.code());
 
         // Generate unique referral code: UNIS-XXXXXX
         entity.setReferralCode(generateUniqueReferralCode());
@@ -112,6 +118,11 @@ public class PreRegistrationService {
     // ─── Lookup by referral code (for validation) ───
     public Optional<PreRegistrationResponse> findByReferralCode(String code) {
         return preRegRepo.findByReferralCode(code.toUpperCase().trim()).map(this::toResponse);
+    }
+
+    /** Who a code would credit on the waitlist form: anyone on the waitlist, a member, or a short code. */
+    public Optional<ReferralCodeService.Holder> checkCode(String code) {
+        return referralCodeService.lookup(code, null);
     }
 
     // ─── Region progress for a specific state+metro ───
@@ -211,7 +222,9 @@ public class PreRegistrationService {
                 sb.append(CODE_CHARS.charAt(RANDOM.nextInt(CODE_CHARS.length())));
             }
             String code = sb.toString();
-            if (!preRegRepo.existsByReferralCode(code)) {
+            // Unique on the waitlist, and not already a member's or short code,
+            // since the person keeps this code when they make an account.
+            if (!preRegRepo.existsByReferralCode(code) && referralCodeService.isFreeForMember(code)) {
                 return code;
             }
         }
