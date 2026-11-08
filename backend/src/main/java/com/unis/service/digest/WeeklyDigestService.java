@@ -328,7 +328,7 @@ public class WeeklyDigestService {
      * private R2 links are rewritten to the public CDN, full links pass
      * through, and relative paths are served from the API's origin.
      */
-    String absoluteMedia(String url) {
+    public String absoluteMedia(String url) {
         if (url == null || url.isBlank()) return null;
         String u = url.trim();
         if (u.contains("r2.cloudflarestorage.com")) {

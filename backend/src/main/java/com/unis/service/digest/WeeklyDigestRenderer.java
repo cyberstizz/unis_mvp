@@ -1,6 +1,7 @@
 package com.unis.service.digest;
 
 import com.unis.service.digest.WeeklyDigest.Pick;
+import com.unis.service.mail.EmailBrand;
 
 import java.text.NumberFormat;
 import java.util.Locale;
@@ -122,17 +123,9 @@ public final class WeeklyDigestRenderer {
 
     // ── Sections ──────────────────────────────────────────────────────────────
 
+    /** The Unis logo (EmailBrand, shared with the referral email) and the week. */
     private static void header(StringBuilder h, WeeklyDigest d) {
-        h.append("<tr><td class=\"px\" style=\"padding:4px 24px 26px;\">")
-         .append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tr>")
-         .append("<td align=\"left\" style=\"vertical-align:middle;\">")
-         // Text wordmark only — the brand mark is being redesigned.
-         .append("<a href=\"").append(attr(link(d, "/"))).append("\" style=\"").append(font(22, 800, INK))
-         .append("line-height:32px;letter-spacing:-0.03em;text-decoration:none;\">Unis</a>")
-         .append("</td>")
-         .append("<td align=\"right\" style=\"vertical-align:middle;").append(font(12, 600, INK_3)).append("\">")
-         .append(esc(d.weekLabel())).append("</td>")
-         .append("</tr></table></td></tr>");
+        EmailBrand.header(h, d.appBaseUrl(), link(d, "/"), d.weekLabel());
     }
 
     private static void intro(StringBuilder h, WeeklyDigest d, boolean live, boolean tonight) {
