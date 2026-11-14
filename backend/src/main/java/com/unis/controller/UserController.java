@@ -535,14 +535,6 @@ public class UserController {
     public ResponseEntity<Map<String, Object>> validateReferralCode(@PathVariable String code) {
         Map<String, Object> response = new HashMap<>();
 
-        // Master launch code - always valid
-        if (com.unis.service.ReferralCodeService.LAUNCH_CODE.equals(com.unis.service.ReferralCodeService.normalize(code))) {
-            response.put("valid", true);
-            response.put("referrerUsername", "Unis");
-            response.put("referrerId", null);
-            return ResponseEntity.ok(response);
-        }
-
         try {
             // A member's own code or an active short code (HARLEM), any case.
             // Deleted accounts and switched-off short codes refer nobody.

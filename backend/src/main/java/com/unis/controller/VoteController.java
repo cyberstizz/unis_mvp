@@ -102,15 +102,9 @@ public class VoteController {
                     "That genre no longer exists on Unis. Please refresh and try again.");
             }
 
-            if (req.getJurisdictionId() == null) {
-                return voteError(HttpStatus.BAD_REQUEST, "JURISDICTION_MISSING",
-                    "This vote is missing its jurisdiction. Please close the wizard and try again.");
-            }
-            Jurisdiction jurisdiction = jurisdictionRepository.findById(req.getJurisdictionId()).orElse(null);
-            if (jurisdiction == null) {
-                return voteError(HttpStatus.BAD_REQUEST, "JURISDICTION_NOT_FOUND",
-                    "That jurisdiction no longer exists on Unis. Please refresh and try again.");
-            }
+            // No jurisdiction check here: the voter doesn't pick one anymore.
+            // VoteService files the vote under the deepest open race the voter
+            // and the nominee share (any jurisdictionId in the request is ignored).
 
             if (req.getIntervalId() == null) {
                 return voteError(HttpStatus.BAD_REQUEST, "INTERVAL_MISSING",
@@ -120,18 +114,6 @@ public class VoteController {
             if (interval == null) {
                 return voteError(HttpStatus.BAD_REQUEST, "INTERVAL_NOT_FOUND",
                     "That voting interval no longer exists on Unis. Please refresh and try again.");
-            }
-
-            if (jurisdiction.getVotingEnabled() == null || !jurisdiction.getVotingEnabled()) {
-                return voteError(HttpStatus.FORBIDDEN, "VOTING_DISABLED",
-                    "Voting is not enabled in " + jurisdiction.getName() + " yet.");
-            }
-
-            // C6 FIX: Use authenticatedUserId instead of req.getUserId() for eligibility check
-            if (!voteService.canUserVoteInJurisdiction(authenticatedUserId, req.getJurisdictionId())) {
-                return voteError(HttpStatus.FORBIDDEN, "NOT_ELIGIBLE",
-                    "You are not eligible to vote in " + jurisdiction.getName()
-                        + ". You can only vote in your home jurisdiction and its parent jurisdictions.");
             }
 
             // ★ ironclad: the SERVER stamps the vote date, on the VOTER's own
@@ -148,7 +130,6 @@ public class VoteController {
                 .targetType(req.getTargetType())
                 .targetId(req.getTargetId())
                 .genre(genre)
-                .jurisdiction(jurisdiction)
                 .interval(interval)
                 .voteDate(voteDate)
                 .build();
@@ -158,6 +139,10 @@ public class VoteController {
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Vote cast successfully");
             response.put("voteId", saved.getVoteId());
+            if (saved.getJurisdiction() != null) {
+                response.put("jurisdictionId", saved.getJurisdiction().getJurisdictionId());
+                response.put("jurisdictionName", saved.getJurisdiction().getName());
+            }
 
             return ResponseEntity.ok(response);
 

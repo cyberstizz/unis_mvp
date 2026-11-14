@@ -1,5 +1,7 @@
 package com.unis.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,8 @@ import java.util.UUID;
 @Service
 @Profile("local")
 public class LocalFileStorageService implements FileStorageService {
+
+    private static final Logger log = LoggerFactory.getLogger(LocalFileStorageService.class);
 
     @Value("${file.upload-dir:uploads}")
     private String uploadDir;
@@ -49,7 +53,7 @@ public class LocalFileStorageService implements FileStorageService {
                 Files.deleteIfExists(filePath);
             } catch (IOException e) {
                 // Log but don't fail (as in your original)
-                System.err.println("Failed to delete local file: " + fileUrl + " - " + e.getMessage());
+                log.error("Failed to delete local file: {} - {}", fileUrl, e.getMessage());
             }
         }
     }

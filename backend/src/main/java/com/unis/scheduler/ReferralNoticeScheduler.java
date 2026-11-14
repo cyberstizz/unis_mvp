@@ -1,5 +1,7 @@
 package com.unis.scheduler;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.unis.entity.CronExecution;
 import com.unis.repository.CronExecutionRepository;
 import com.unis.service.EmailService;
@@ -46,6 +48,8 @@ import java.util.Optional;
  */
 @Component
 public class ReferralNoticeScheduler {
+
+    private static final Logger log = LoggerFactory.getLogger(ReferralNoticeScheduler.class);
 
     static final String JOB_NAME = "REFERRAL_NOTICES";
     static final String TAG = "referral_notice";
@@ -100,11 +104,11 @@ public class ReferralNoticeScheduler {
             budget = Math.min(dailyLimit - sentToday,
                               mailBudget - noticeService.digestSentToday() - sentToday);
         } catch (Exception e) {
-            System.err.println("[ReferralNotice] action=run status=error phase=query err=" + e.getMessage());
+            log.error("[ReferralNotice] action=run status=error phase=query err={}", e.getMessage());
             return;
         }
         if (budget <= 0) {
-            System.out.println("[ReferralNotice] action=run status=skip reason=daily_limit waiting=" + pending.size());
+            log.info("[ReferralNotice] action=run status=skip reason=daily_limit waiting={}", pending.size());
             return;
         }
 
@@ -118,11 +122,11 @@ public class ReferralNoticeScheduler {
             try {
                 readers = noticeService.upline(p.memberId());
             } catch (Exception e) {
-                System.err.println("[ReferralNotice] action=upline status=error member=" + p.memberId() + " err=" + e.getMessage());
+                log.error("[ReferralNotice] action=upline status=error member={} err={}", p.memberId(), e.getMessage());
                 continue;
             }
             if (readers.size() > budget - sent) {
-                System.out.println("[ReferralNotice] action=run note=daily_limit_reached sentToday+=" + sent);
+                log.info("[ReferralNotice] action=run note=daily_limit_reached sentToday+={}", sent);
                 break;
             }
             if (!noticeService.claim(p.referralId())) continue; // another run has it
@@ -143,7 +147,7 @@ public class ReferralNoticeScheduler {
                     if (accepted) ok++; else bad++;
                 } catch (Exception e) {
                     bad++;
-                    System.err.println("[ReferralNotice] action=build status=error reader=" + r.userId() + " err=" + e.getMessage());
+                    log.error("[ReferralNotice] action=build status=error reader={} err={}", r.userId(), e.getMessage());
                 }
                 sleep();
             }
@@ -165,8 +169,7 @@ public class ReferralNoticeScheduler {
         if (exec == null) return;
 
         long ms = (System.nanoTime() - startNs) / 1_000_000;
-        System.out.println("[ReferralNotice] action=run status=" + (refused ? "refused" : "ok")
-            + " signups=" + signups + " sent=" + sent + " failed=" + failed + " durationMs=" + ms);
+        log.info("[ReferralNotice] action=run status={} signups={} sent={} failed={} durationMs={}", (refused ? "refused" : "ok"), signups, sent, failed, ms);
 
         if (sent == 0) {
             exec.markFailed("no emails sent; " + failed + " failed. Check the Railway logs for [Email].");

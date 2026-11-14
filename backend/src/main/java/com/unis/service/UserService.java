@@ -1,5 +1,7 @@
 package com.unis.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.unis.entity.Vote;
 import com.unis.entity.User;
 import com.unis.entity.Referral;
@@ -44,6 +46,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Service
 @Transactional
 public class UserService {
+
+    private static final Logger log = LoggerFactory.getLogger(UserService.class);
     @Autowired
     private UserRepository userRepository;
 
@@ -193,9 +197,7 @@ public class UserService {
                     .build();
             } else {
                 // Stale supportedArtistId pointing to a deleted user — log and continue.
-                System.out.println("[ProfileSummary] WARNING: user " + userId
-                    + " has supportedArtistId " + user.getSupportedArtistId()
-                    + " but that artist was not found");
+                log.warn("[ProfileSummary] WARNING: user {} has supportedArtistId {} but that artist was not found", userId, user.getSupportedArtistId());
             }
         }
 
@@ -227,7 +229,7 @@ public class UserService {
                 .recent(new java.util.ArrayList<>())  // empty for now; modal can fetch its own list
                 .build();
         } catch (Exception e) {
-            System.out.println("[ProfileSummary] WARNING: vote history failed for " + userId + ": " + e.getMessage());
+            log.warn("[ProfileSummary] WARNING: vote history failed for {}: {}", userId, e.getMessage());
             voteHistory = ProfileSummaryDto.VoteHistorySummary.builder()
                 .totalCount(0)
                 .recent(new java.util.ArrayList<>())
@@ -242,9 +244,7 @@ public class UserService {
             .build();
 
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
-        System.out.println("[ProfileSummary] action=fetch userId=" + userId
-            + " status=ok durationMs=" + durationMs
-            + " hasArtist=" + (supportedArtist != null));
+        log.info("[ProfileSummary] action=fetch userId={} status=ok durationMs={} hasArtist={}", userId, durationMs, (supportedArtist != null));
     
         return ProfileSummaryDto.builder()
             .profile(selfProfile)
@@ -284,13 +284,11 @@ public class UserService {
         if (changed) {
             userRepository.save(user);
         } else {
-            System.out.println("[Preferences] action=update userId=" + userId
-                + " status=noop reason=no_valid_keys keys=" + updates.keySet());
+            log.info("[Preferences] action=update userId={} status=noop reason=no_valid_keys keys={}", userId, updates.keySet());
         }
 
         long ms = (System.nanoTime() - startNs) / 1_000_000;
-        System.out.println("[Preferences] action=update userId=" + userId
-            + " status=ok changed=" + changed + " durationMs=" + ms);
+        log.info("[Preferences] action=update userId={} status=ok changed={} durationMs={}", userId, changed, ms);
 
         return ProfileSummaryDto.Settings.builder()
             .emailNotifications(user.getEmailNotifications())
@@ -308,13 +306,13 @@ public class UserService {
     public boolean unsubscribeByToken(UUID token) {
         Optional<User> opt = userRepository.findByUnsubscribeToken(token);
         if (opt.isEmpty()) {
-            System.out.println("[Preferences] action=unsubscribe status=noop reason=token_not_found");
+            log.info("[Preferences] action=unsubscribe status=noop reason=token_not_found");
             return false;
         }
         User user = opt.get();
         user.setEmailNotifications(false);
         userRepository.save(user);
-        System.out.println("[Preferences] action=unsubscribe userId=" + user.getUserId() + " status=ok");
+        log.info("[Preferences] action=unsubscribe userId={} status=ok", user.getUserId());
         return true;
     }
 
@@ -412,17 +410,14 @@ public class UserService {
             // within 30 days.
             scoreUpdateService.onReferral(referrer.getUserId(), savedUser.getUserId());
 
-            System.out.println("Referral tracked: " + referrer.getUsername() + " referred " + savedUser.getUsername());
+            log.info("Referral tracked: {} referred {}", referrer.getUsername(), savedUser.getUsername());
         } else if ("waitlist".equals(credit.kind())) {
             // Their referrer is still on the waitlist: credited the day they
             // make an account (creditWaitingReferrals).
             jdbcTemplate.update("UPDATE users SET pending_referral_code = ? WHERE user_id = ?",
                 credit.code(), savedUser.getUserId());
             referralTracked = true;
-            System.out.println("Referral pending: " + savedUser.getUsername() + " joined with waitlist code " + credit.code());
-        } else {
-            // The launch code: Unis brought them in, and the share stays with Unis.
-            System.out.println("Referral: " + savedUser.getUsername() + " joined with the launch code");
+            log.info("Referral pending: {} joined with waitlist code {}", savedUser.getUsername(), credit.code());
         }
 
         // Coming off the waitlist: anyone who joined with their code while they
@@ -457,7 +452,7 @@ public class UserService {
             supporterRepository.save(supporter);
  
             scoreUpdateService.onSupporterAdded(supportedArtistId, savedUser.getUserId());
-            System.out.println("Supporter created: " + savedUser.getUsername() + " supports " + supportedArtist.getUsername());
+            log.info("Supporter created: {} supports {}", savedUser.getUsername(), supportedArtist.getUsername());
         }
  
         // How this person found Unis, for the growth metrics: a referral code
@@ -478,10 +473,7 @@ public class UserService {
         savedUser.setSignupPlatform(com.unis.util.ClientPlatform.current());
         savedUser = userRepository.save(savedUser);
 
-        System.out.println("User registered successfully: " + savedUser.getUsername() 
-            + " (Referral Code: " + savedUser.getReferralCode() + ")"
-            + (newUser.getDateOfBirth() != null ? " (DOB: " + newUser.getDateOfBirth() + ")" : "")
-            + " (Explicit content: " + savedUser.getExplicitContentEnabled() + ")");
+        log.info("User registered successfully: {} (Referral Code: {}){} (Explicit content: {})", savedUser.getUsername(), savedUser.getReferralCode(), (newUser.getDateOfBirth() != null ? " (DOB: " + newUser.getDateOfBirth() + ")" : ""), savedUser.getExplicitContentEnabled());
         return savedUser;
     }
  
@@ -536,7 +528,7 @@ public class UserService {
                 .build());
             jdbcTemplate.update("UPDATE users SET pending_referral_code = NULL WHERE user_id = ?", id);
             scoreUpdateService.onReferral(referrer.getUserId(), id);
-            System.out.println("Referral credited from the waitlist: " + referrer.getUsername() + " referred " + referred.get().getUsername());
+            log.info("Referral credited from the waitlist: {} referred {}", referrer.getUsername(), referred.get().getUsername());
         }
     }
 
@@ -854,8 +846,7 @@ public class UserService {
         }
 
         purgeAccount(user, "self");
-        System.out.println("[AccountDelete] action=delete status=ok userId=" + userId
-            + " by=self forfeited=$" + shown);
+        log.info("[AccountDelete] action=delete status=ok userId={} by=self forfeited=${}", userId, shown);
     }
 
     /**
@@ -874,8 +865,7 @@ public class UserService {
         java.math.BigDecimal shown = earningsService.getAvailableBalance(userId)
             .max(java.math.BigDecimal.ZERO).setScale(2, java.math.RoundingMode.FLOOR);
         purgeAccount(user, "admin");
-        System.out.println("[AccountDelete] action=delete status=ok userId=" + userId
-            + " by=admin forfeited=$" + shown);
+        log.info("[AccountDelete] action=delete status=ok userId={} by=admin forfeited=${}", userId, shown);
         return shown;
     }
 
@@ -976,8 +966,7 @@ public class UserService {
         if (user.getCreatedAt() != null && user.getCreatedAt().isAfter(now.minusDays(SIGNUP_REWARD_HOLD_DAYS))) {
             int referral = scoreUpdateService.takeBackRewardsFor("referral:" + userId);
             int supporter = scoreUpdateService.takeBackRewardsFor("supporter:" + userId);
-            System.out.println("[AccountDelete] action=take_back_signup_rewards userId=" + userId
-                + " referral=" + referral + " supporter=" + supporter);
+            log.info("[AccountDelete] action=take_back_signup_rewards userId={} referral={} supporter={}", userId, referral, supporter);
         }
 
         // 9. Wipe contact and profile details. The username stays (reserved
@@ -1005,7 +994,7 @@ public class UserService {
         user.setDeletedAt(now);
         userRepository.save(user);
 
-        System.out.println("[AccountDelete] action=purge status=ok userId=" + userId + " by=" + actor);
+        log.info("[AccountDelete] action=purge status=ok userId={} by={}", userId, actor);
     }
 
     /**
@@ -1066,8 +1055,7 @@ public class UserService {
             supporterRepository.save(supporter);
             scoreUpdateService.onSupporterAdded(newArtistId, userId);   // +5 once per fan, ever
 
-            System.out.println("[Support] action=set userId=" + userId
-                + " status=ok mode=immediate artist=" + newArtistId);
+            log.info("[Support] action=set userId={} status=ok mode=immediate artist={}", userId, newArtistId);
             result.put("status", "immediate");
             result.put("effectiveArtistId", newArtistId);
             return result;
@@ -1078,8 +1066,7 @@ public class UserService {
             user.setPendingSupportedArtistId(null);
             user.setPendingSupportedArtistSince(null);
             userRepository.save(user);
-            System.out.println("[Support] action=set userId=" + userId
-                + " status=ok mode=cancel_pending artist=" + newArtistId);
+            log.info("[Support] action=set userId={} status=ok mode=cancel_pending artist={}", userId, newArtistId);
             result.put("status", "cancelled");
             result.put("effectiveArtistId", currentId);
             return result;
@@ -1093,8 +1080,7 @@ public class UserService {
         LocalDateTime effective = java.time.LocalDate.now(java.time.ZoneId.of("America/New_York"))
                 .plusMonths(1).withDayOfMonth(1).atStartOfDay();
 
-        System.out.println("[Support] action=set userId=" + userId
-            + " status=ok mode=pending from=" + currentId + " to=" + newArtistId);
+        log.info("[Support] action=set userId={} status=ok mode=pending from={} to={}", userId, currentId, newArtistId);
         result.put("status", "pending");
         result.put("effectiveArtistId", currentId);
         result.put("pendingArtistId", newArtistId);
@@ -1109,7 +1095,7 @@ public class UserService {
         user.setPendingSupportedArtistId(null);
         user.setPendingSupportedArtistSince(null);
         userRepository.save(user);
-        System.out.println("[Support] action=cancel_pending userId=" + userId + " status=ok");
+        log.info("[Support] action=cancel_pending userId={} status=ok", userId);
     }
     /**
      * Get total plays across all of an artist's songs
@@ -1233,7 +1219,7 @@ public class UserService {
         
 
         userRepository.save(user);
-        System.out.println("[SocialLinks] action=update userId=" + userId + " status=ok");
+        log.info("[SocialLinks] action=update userId={} status=ok", userId);
     }
 
 

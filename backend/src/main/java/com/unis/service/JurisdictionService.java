@@ -151,16 +151,18 @@ public class JurisdictionService {
 
     /**
      * Get children with additional metadata for the map
-     * Includes hasChildren flag and active status
+     * Includes hasChildren flag and active status.
+     *
+     * isActive is the jurisdiction's own voting_enabled flag: the one switch
+     * that says a neighborhood is open. Open one with
+     *   UPDATE jurisdictions SET voting_enabled = true WHERE name = '...';
+     * (see sql/V2026_11a__jurisdiction_open_flag.sql). Cached up to 10 minutes.
      */
     @Cacheable(value = "jurisdictions", key = "'childrenWithMeta-' + #parentJurisdictionId")
     public List<Map<String, Object>> getChildrenWithMetadata(UUID parentJurisdictionId) {
         List<Jurisdiction> children = jurisdictionRepository.findByParentJurisdictionId(parentJurisdictionId);
         List<Map<String, Object>> result = new ArrayList<>();
-        
-        // Define active jurisdictions (only Harlem and its children for launch)
-        List<String> activeJurisdictions = List.of("Harlem", "Uptown Harlem", "Downtown Harlem");
-        
+
         for (Jurisdiction child : children) {
             Map<String, Object> item = new HashMap<>();
             item.put("jurisdictionId", child.getJurisdictionId());
@@ -169,7 +171,7 @@ public class JurisdictionService {
             item.put("bio", child.getBio());
             item.put("symbolUrl", child.getSymbolUrl());
             item.put("hasChildren", jurisdictionRepository.hasChildren(child.getJurisdictionId()));
-            item.put("isActive", activeJurisdictions.contains(child.getName()));
+            item.put("isActive", Boolean.TRUE.equals(child.getVotingEnabled()));
             
             // Get parent info
             if (child.getParentJurisdiction() != null) {
@@ -180,6 +182,38 @@ public class JurisdictionService {
             result.add(item);
         }
         
+        return result;
+    }
+
+    /**
+     * Every open jurisdiction (voting_enabled = true), each with its chain of
+     * places from the root down to itself. The Find page reads this instead of
+     * hardcoding which states and neighborhoods are live: a state is live when
+     * it appears in some open jurisdiction's chain.
+     *
+     * [{ jurisdictionId, name, chain: [{ jurisdictionId, name }, ... self] }]
+     *
+     * Cached up to 10 minutes, so opening a neighborhood in SQL shows on the
+     * map within 10 minutes (or right away after a restart).
+     */
+    @Transactional(readOnly = true)
+    @Cacheable(value = "jurisdictions", key = "'open'")
+    public List<Map<String, Object>> getOpenJurisdictions() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Jurisdiction j : jurisdictionRepository.findVotingEnabledJurisdictions()) {
+            List<Map<String, Object>> chain = new ArrayList<>();
+            for (Object[] row : jurisdictionRepository.findParentChain(j.getJurisdictionId())) {
+                Map<String, Object> link = new HashMap<>();
+                link.put("jurisdictionId", row[0]);
+                link.put("name", row[1]);
+                chain.add(link);
+            }
+            Map<String, Object> item = new HashMap<>();
+            item.put("jurisdictionId", j.getJurisdictionId());
+            item.put("name", j.getName());
+            item.put("chain", chain);
+            result.add(item);
+        }
         return result;
     }
 

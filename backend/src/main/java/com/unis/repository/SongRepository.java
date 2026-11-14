@@ -1,6 +1,7 @@
 package com.unis.repository;
 
 import com.unis.entity.Song;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -64,6 +65,13 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
 
     @Query("SELECT s FROM Song s JOIN s.artist a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId AND s.deletedAt IS NULL ORDER BY s.score DESC")
     List<Song> findTopByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId);
+
+    /** Top songs by score in these jurisdictions: not removed, artist not deleted (AwardService fallback). */
+    @Query("SELECT s FROM Song s LEFT JOIN s.artist a"
+         + " WHERE s.jurisdiction.jurisdictionId IN :jurisdictionIds"
+         + " AND s.deletedAt IS NULL AND (a IS NULL OR a.deletedAt IS NULL)"
+         + " ORDER BY COALESCE(s.score, 0) DESC")
+    List<Song> findTopActiveByJurisdictions(@Param("jurisdictionIds") List<UUID> jurisdictionIds, Pageable pageable);
 
     @Query("SELECT s FROM Song s WHERE s.jurisdiction.jurisdictionId = :jurisdictionId AND s.deletedAt IS NULL ORDER BY s.score DESC")
     List<Song> findByJurisdictionOrderByScoreDesc(@Param("jurisdictionId") UUID jurisdictionId);

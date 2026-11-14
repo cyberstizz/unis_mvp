@@ -78,7 +78,7 @@ public class SponsorService {
     @Value("${SPONSOR_HARLEM_WEEK_PRICE_CENTS:4000}")
     private int harlemWeekCents;
 
-    @Value("${app.frontend.url:https://unisprototypetwo.netlify.app}")
+    @Value("${app.frontend.url:https://unismusic.com}")
     private String frontendUrl;
 
     private volatile Map<String, UUID> areaJurisdictions;

@@ -171,6 +171,25 @@ public interface JurisdictionRepository extends JpaRepository<Jurisdiction, UUID
     );
 
     /**
+     * The deepest open race (voting_enabled) that holds BOTH the voter and the
+     * nominee: a jurisdiction on the voter's path and on the nominee's path.
+     * Empty when they share no open race. Used by VoteService.submitVote.
+     */
+    @Query(value = """
+        SELECT CAST(j.jurisdiction_id AS text)
+        FROM jurisdictions j
+        WHERE j.voting_enabled = true
+          AND :voterPath LIKE '%' || j.jurisdiction_id::text || '%'
+          AND :nomineePath LIKE '%' || j.jurisdiction_id::text || '%'
+        ORDER BY j.depth DESC NULLS LAST
+        LIMIT 1
+        """, nativeQuery = true)
+    List<String> findDeepestSharedOpenRace(
+        @Param("voterPath") String voterPath,
+        @Param("nomineePath") String nomineePath
+    );
+
+    /**
      * Get a jurisdiction with its path (for eligibility checks)
      */
     @Query("SELECT j FROM Jurisdiction j WHERE j.jurisdictionId = :id")

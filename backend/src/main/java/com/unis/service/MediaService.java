@@ -449,7 +449,7 @@ public class MediaService {
     // NOT CACHED - private helper method
     private Integer computeDuration(MultipartFile file) {
         if (file == null || file.isEmpty()) {
-            System.err.println("File is null or empty, returning fallback duration");
+            log.warn("File is null or empty, returning fallback duration");
             return 180000;
         }
         
@@ -461,9 +461,9 @@ public class MediaService {
             
             parser.parse(is, handler, metadata, context);
             
-            System.out.println("=== Audio Metadata for: " + file.getOriginalFilename() + " ===");
+            log.debug("=== Audio Metadata for: {} ===", file.getOriginalFilename());
             for (String name : metadata.names()) {
-                System.out.println(name + ": " + metadata.get(name));
+                log.debug("{}: {}", name, metadata.get(name));
             }
             
             String durStr = metadata.get("xmpDM:duration");
@@ -475,21 +475,20 @@ public class MediaService {
                 try {
                     double seconds = Double.parseDouble(durStr);
                     int milliseconds = (int) (seconds * 1000);
-                    System.out.println("Parsed duration: " + milliseconds + "ms (" + seconds + "s)");
+                    log.debug("Parsed duration: {}ms ({}s)", milliseconds, seconds);
                     return milliseconds;
                 } catch (NumberFormatException e) {
-                    System.err.println("Could not parse duration value: " + durStr);
+                    log.warn("Could not parse duration value: {}", durStr);
                 }
             } else {
-                System.err.println("No duration metadata found in file");
+                log.warn("No duration metadata found in file");
             }
             
         } catch (Exception e) {
-            System.err.println("Duration parse failed for " + file.getOriginalFilename());
-            e.printStackTrace();
+            log.error("Duration parse failed for {}", file.getOriginalFilename(), e);
         }
         
-        System.err.println("Returning fallback duration of 180000ms (3 min)");
+        log.warn("Returning fallback duration of 180000ms (3 min)");
         return 180000;
     }
 
@@ -683,8 +682,7 @@ public class MediaService {
             hideFiles.run();
         }
 
-        System.out.println("[SongRemove] action=remove status=ok songId=" + songId
-            + " reason=" + reason + " playlists=" + playlistIds.size());
+        log.info("[SongRemove] action=remove status=ok songId={} reason={} playlists={}", songId, reason, playlistIds.size());
     }
 
     private void moveQuietly(String fromUrl, String toUrl, UUID songId) {
@@ -692,9 +690,7 @@ public class MediaService {
         try {
             fileStorageService.moveFile(fromUrl, toUrl);
         } catch (Exception e) {
-            System.err.println("[SongRemove] action=hide_file status=error songId=" + songId
-                + " url=" + fromUrl + " err=" + e.getMessage()
-                + " (file stays at its old address until the 30-day purge)");
+            log.error("[SongRemove] action=hide_file status=error songId={} url={} err={} (file stays at its old address until the 30-day purge)", songId, fromUrl, e.getMessage());
         }
     }
 
@@ -798,11 +794,10 @@ public class MediaService {
             try {
                 fileStorageService.deleteFile(url);
             } catch (Exception e) {
-                System.err.println("[VideoDelete] action=delete_file status=error videoId=" + videoId
-                    + " url=" + url + " err=" + e.getMessage());
+                log.error("[VideoDelete] action=delete_file status=error videoId={} url={} err={}", videoId, url, e.getMessage());
             }
         }
-        System.out.println("[VideoDelete] action=delete status=ok videoId=" + videoId);
+        log.info("[VideoDelete] action=delete status=ok videoId={}", videoId);
     }
 
     // Play song. Not a cache eviction any more: wiping "songs" and "trending"
@@ -810,7 +805,7 @@ public class MediaService {
     // Trending refreshes every minute on its own (CacheConfig).
     public UUID playSong(UUID songId, UUID userId, String source) {
         if (userId == null) {
-            System.out.println(">>> Play rejected: no userId for song " + songId);
+            log.debug(">>> Play rejected: no userId for song {}", songId);
             return null;
         }
 
@@ -821,7 +816,7 @@ public class MediaService {
         // before anything is written. (A saved queue can still try to play it.)
         Song target = songRepository.findById(songId).orElse(null);
         if (target == null || target.isRemoved()) {
-            System.out.println(">>> Play rejected: song " + songId + " is removed or missing");
+            log.debug(">>> Play rejected: song {} is removed or missing", songId);
             return null;
         }
 
@@ -1111,7 +1106,7 @@ public class MediaService {
                 song.getArtist().getUsername(); // Trigger load
             }
         } catch (Exception e) {
-            System.err.println("Error decorating song with stats: " + e.getMessage());
+            log.error("Error decorating song with stats: {}", e.getMessage());
             // We still return the song even if stats fail, so the page doesn't go blank
         }
         
@@ -1147,7 +1142,7 @@ public class MediaService {
                 video.getGenre().getName(); // Trigger load
             }
         } catch (Exception e) {
-            System.err.println("Error decorating video with stats: " + e.getMessage());
+            log.error("Error decorating video with stats: {}", e.getMessage());
             // We still return the video even if stats fail, so the page doesn't go blank
         }
 
@@ -1270,8 +1265,7 @@ public class MediaService {
             scoreUpdateService.onLike(userId, songId);
         }
 
-        System.out.println("✓ Like created: User " + userId + " liked Song " + songId
-            + (firstLike ? " (points awarded)" : " (re-like, no points)"));
+        log.debug("✓ Like created: User {} liked Song {}{}", userId, songId, (firstLike ? " (points awarded)" : " (re-like, no points)"));
 
         // Only this artist's song list shows like counts; the rest of the
         // caches don't (likes used to empty "songs" and "artists" entirely).
@@ -1294,7 +1288,7 @@ public class MediaService {
         // Points represent historical engagement value and remain
         
         if (rowsAffected > 0) {
-            System.out.println("✓ Like removed: User " + userId + " unliked Song " + songId + " (points retained)");
+            log.debug("✓ Like removed: User {} unliked Song {} (points retained)", userId, songId);
             List<UUID> artist = jdbcTemplate.queryForList("SELECT artist_id FROM songs WHERE song_id = ?", UUID.class, songId);
             evictArtistSongs(artist.isEmpty() ? null : artist.get(0));
         }
@@ -1368,8 +1362,7 @@ public class MediaService {
             scoreUpdateService.onLikeVideo(userId, videoId);
         }
 
-        System.out.println("✓ Like created: User " + userId + " liked Video " + videoId
-            + (firstLike ? " (points awarded)" : " (re-like, no points)"));
+        log.debug("✓ Like created: User {} liked Video {}{}", userId, videoId, (firstLike ? " (points awarded)" : " (re-like, no points)"));
         return new LikeOutcome(true, firstLike ? 1 : 0);
     }
 
@@ -1380,7 +1373,7 @@ public class MediaService {
 
         // Points are retained on unlike, same policy as songs
         if (rowsAffected > 0) {
-            System.out.println("✓ Like removed: User " + userId + " unliked Video " + videoId + " (points retained)");
+            log.debug("✓ Like removed: User {} unliked Video {} (points retained)", userId, videoId);
         }
         return rowsAffected > 0;
     }

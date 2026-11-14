@@ -31,7 +31,7 @@ public class SponsorController {
 
     private final SponsorService sponsors;
 
-    @Value("${app.frontend.url:https://unisprototypetwo.netlify.app}")
+    @Value("${app.frontend.url:https://unismusic.com}")
     private String frontendUrl;
 
     public SponsorController(SponsorService sponsors) {

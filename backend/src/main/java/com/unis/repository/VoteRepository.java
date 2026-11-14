@@ -74,16 +74,16 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
     );
 
     /**
-     * Votes this user already cast in one race during one interval period
-     * (e.g. Monday–Sunday for Weekly). Used by VoteService.submitVote to allow
-     * exactly one vote per race per period. 0 = can vote.
+     * Votes this user already cast in one category (artist or song + genre +
+     * interval) during one interval period (e.g. Monday–Sunday for Weekly),
+     * in ANY jurisdiction. Used by VoteService.submitVote to allow exactly one
+     * vote per category per period. 0 = can vote.
      */
     @Query(value = """
         SELECT COUNT(*) FROM votes v
         WHERE v.user_id = :userId
           AND v.target_type = :targetType
           AND v.genre_id = :genreId
-          AND v.jurisdiction_id = :jurisdictionId
           AND v.interval_id = :intervalId
           AND v.vote_date BETWEEN :startDate AND :endDate
         """, nativeQuery = true)
@@ -91,30 +91,9 @@ public interface VoteRepository extends JpaRepository<Vote, UUID> {
         @Param("userId") UUID userId,
         @Param("targetType") String targetType,
         @Param("genreId") UUID genreId,
-        @Param("jurisdictionId") UUID jurisdictionId,
         @Param("intervalId") UUID intervalId,
         @Param("startDate") LocalDate startDate,
         @Param("endDate") LocalDate endDate
-    );
-
-    // =========================================================================
-    // DEPRECATED: Old method that included target_id (keeping for reference)
-    // This allowed voting for multiple different targets per day - WRONG behavior
-    // =========================================================================
-    
-    /**
-     * @deprecated Use existsByUserAndCategoryAndJurisdictionAndIntervalAndDate instead
-     */
-    @Deprecated
-    @Query(value = "SELECT COUNT(*) FROM votes v WHERE v.user_id = :userId AND v.target_type = :targetType AND v.target_id = :targetId AND v.genre_id = :genreId AND v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.vote_date = :voteDate", nativeQuery = true)
-    Long existsByUserUserIdAndTargetTypeAndTargetIdAndGenreGenreIdAndJurisdictionJurisdictionIdAndIntervalIntervalIdAndVoteDate(
-        @Param("userId") UUID userId, 
-        @Param("targetType") String targetType, 
-        @Param("targetId") UUID targetId, 
-        @Param("genreId") UUID genreId, 
-        @Param("jurisdictionId") UUID jurisdictionId, 
-        @Param("intervalId") UUID intervalId, 
-        @Param("voteDate") LocalDate voteDate
     );
 
     @Query(value = "SELECT v.target_id, COUNT(v) as voteCount FROM votes v WHERE v.jurisdiction_id = :jurisdictionId AND v.interval_id = :intervalId AND v.target_type = 'artist' AND v.vote_date = :voteDate GROUP BY v.target_id ORDER BY voteCount DESC", nativeQuery = true)

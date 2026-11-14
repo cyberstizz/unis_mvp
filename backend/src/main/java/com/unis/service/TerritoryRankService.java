@@ -1,5 +1,7 @@
 package com.unis.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.unis.entity.CronExecution;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -47,6 +49,8 @@ import java.util.UUID;
  */
 @Service
 public class TerritoryRankService {
+
+    private static final Logger log = LoggerFactory.getLogger(TerritoryRankService.class);
 
     private final JdbcTemplate jdbc;
     private final NamedParameterJdbcTemplate named;
@@ -102,12 +106,11 @@ public class TerritoryRankService {
                 rows += computeAndSwap(group.getValue(), group.getKey());
             }
             cronMonitorService.markSuccess(exec, rows);
-            System.out.println("=== TERRITORY_RANKS COMPLETE: " + rows + " rank rows written for "
-                + jurisdictionIds.size() + " jurisdiction(s) ===");
+            log.info("=== TERRITORY_RANKS COMPLETE: {} rank rows written for {} jurisdiction(s) ===", rows, jurisdictionIds.size());
             return rows;
         } catch (Exception e) {
             cronMonitorService.markFailed(exec, e.getMessage());
-            System.out.println("=== TERRITORY_RANKS FAILED: " + e.getMessage() + " ===");
+            log.info("=== TERRITORY_RANKS FAILED: {} ===", e.getMessage());
             throw e;
         }
     }
@@ -134,9 +137,7 @@ public class TerritoryRankService {
                 .addValue("scanTo", RaceClockService.scanToUtc(ref))
                 .addValue("period", period);
             int inserted = named.update(INSERT_PERIOD_SQL, p);
-            System.out.println("TERRITORY_RANKS staged period=" + period
-                + " window=" + start + ".." + ref + " jurisdictions=" + jurisdictionIds.size()
-                + " rows=" + inserted);
+            log.info("TERRITORY_RANKS staged period={} window={}..{} jurisdictions={} rows={}", period, start, ref, jurisdictionIds.size(), inserted);
         }
 
         return self.swapStagingToLive(jurisdictionIds);

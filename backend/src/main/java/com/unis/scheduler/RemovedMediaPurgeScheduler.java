@@ -1,5 +1,7 @@
 package com.unis.scheduler;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.unis.entity.CronExecution;
 import com.unis.service.CronMonitorService;
 import com.unis.service.FileStorageService;
@@ -29,6 +31,8 @@ import java.util.UUID;
  */
 @Component
 public class RemovedMediaPurgeScheduler {
+
+    private static final Logger log = LoggerFactory.getLogger(RemovedMediaPurgeScheduler.class);
 
     static final int HOLD_DAYS = 30;
     private static final int BATCH = 500;
@@ -76,11 +80,10 @@ public class RemovedMediaPurgeScheduler {
                 }
             }
 
-            System.out.println("[RemovedMediaPurge] action=run status=ok candidates=" + rows.size()
-                + " purged=" + purged + " failed=" + failed);
+            log.info("[RemovedMediaPurge] action=run status=ok candidates={} purged={} failed={}", rows.size(), purged, failed);
             cronMonitorService.markSuccess(exec, purged);
         } catch (Exception e) {
-            System.err.println("[RemovedMediaPurge] action=run status=error err=" + e.getMessage());
+            log.error("[RemovedMediaPurge] action=run status=error err={}", e.getMessage());
             cronMonitorService.markFailed(exec, e.getMessage());
         }
     }
@@ -92,8 +95,7 @@ public class RemovedMediaPurgeScheduler {
             fileStorageService.deleteFile(url);
             return true;
         } catch (Exception e) {
-            System.err.println("[RemovedMediaPurge] action=delete_file status=error songId=" + songId
-                + " url=" + url + " err=" + e.getMessage());
+            log.error("[RemovedMediaPurge] action=delete_file status=error songId={} url={} err={}", songId, url, e.getMessage());
             return false;
         }
     }

@@ -101,6 +101,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     Page<User> findByRole(User.Role role, Pageable pageable);
 
+    /** Top artists by score in these jurisdictions, not deleted (AwardService fallback). */
+    @Query("SELECT u FROM User u WHERE u.role = :role"
+         + " AND u.deletedAt IS NULL AND u.jurisdiction.jurisdictionId IN :jurisdictionIds"
+         + " ORDER BY COALESCE(u.score, 0) DESC")
+    List<User> findTopActiveByRoleAndJurisdictions(@Param("role") User.Role role,
+                                                   @Param("jurisdictionIds") List<UUID> jurisdictionIds,
+                                                   Pageable pageable);
+
     java.util.Optional<User> findByUnsubscribeToken(java.util.UUID token);
     
     java.util.List<User> findByEmailNotificationsTrueAndDeletedAtIsNull();

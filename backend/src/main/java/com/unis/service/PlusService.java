@@ -57,7 +57,7 @@ public class PlusService {
     @Value("${STRIPE_PLUS_PRICE_ID:}")
     private String priceId;
 
-    @Value("${app.frontend.url:https://unisprototypetwo.netlify.app}")
+    @Value("${app.frontend.url:https://unismusic.com}")
     private String frontendUrl;
 
     /** The price, read from Stripe once and remembered (cents, e.g. 499). */

@@ -29,7 +29,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final StompAuthChannelInterceptor stompAuthChannelInterceptor;
 
-    @Value("${app.frontend.url:http://localhost:5173}")
+    @Value("${app.frontend.url:https://unismusic.com}")
     private String frontendUrl;
 
     public WebSocketConfig(StompAuthChannelInterceptor stompAuthChannelInterceptor) {

@@ -1150,63 +1150,7 @@ Stateless utility. Generates `USERNAME-XXXXX` format codes using `SecureRandom`.
 
 ## 14. Action Items
 
-### 🔴 Critical — Security / Data Integrity
-
-| # | Issue | Location | Status |
-|---|-------|----------|--------|
-| C1 | `POST /api/v1/media/song` was public | `SecurityConfig`, `MediaController` | ✅ FIXED — requires auth, artistId from JWT |
-| C2 | `POST /api/v1/awards/recompute-all` was public and destructive | `SecurityConfig`, `AwardController` | ✅ FIXED — requires `ROLE_ADMIN` |
-| C3 | All `/api/v1/admin/*` endpoints were public | `SecurityConfig`, `AdminController` | ✅ FIXED — requires `ROLE_ADMIN` |
-| C4 | `PUT /profile/{userId}/*` no ownership check | `UserController` | ✅ FIXED — validates JWT userId matches path userId, returns 403 on mismatch |
-| C5 | Soft-deleted users could still authenticate | `UserRepository`, `UserDetailsServiceImpl` | ✅ FIXED — `findActiveByEmail` filters `deleted_at IS NULL` |
-| C6 | `userId` supplied by client not JWT | `JwtRequestFilter`, `SecurityUtils` (new), `VoteController`, `MediaController`, `CommentController`, `MediaService` | ✅ FIXED — all mutations use `SecurityUtils.getAuthenticatedUserId()` |
-| C7 | `StringIndexOutOfBoundsException` in `ReferralCodeGenerator` | `ReferralCodeGenerator.java` | ✅ FIXED — uses `sanitized.length()` |
-
----
-
-### 🟠 Medium — Bugs / Performance
-
-| # | Issue | Location | Action |
-|---|-------|----------|--------|
-| M1 | ~~Duplicate `computeDailyAwards`~~ | `VoteService` | **Resolved** — removed; awards come only from `RaceCloseScheduler`. |
-| M2 | `deleteFile` never called — orphaned files accumulate | `MediaService`, `UserService` | Call `fileStorageService.deleteFile(oldUrl)` on delete and artwork replacement. |
-| M3 | ~~`getIntervalStartDate` Daily returns yesterday~~ | `VoteService` | **Resolved** — periods come from `RaceClockService.periodContaining` on the voter's clock. |
-| M4 | `SupporterRepository.findByListenerId` returns bare type not `Optional` | `SupporterRepository` | Change return type. |
-| M5 | `PlaylistTrack` must declare `@Table(name = "playlist_items")` | `PlaylistTrack` entity | Confirm annotation present. |
-| M6 | No cascade delete for `Referral` records | `ReferralRepository` | Add `deleteByReferrerUserId` and `deleteByReferredUserId`. |
-| M7 | No cleanup path for `Like` records on media deletion | `LikeRepository` | Add `deleteByMediaTypeAndMediaId`. |
-| M8 | `sumEarningsByDay` can return null | `AdViewRepository` | Add `COALESCE(..., 0)`. |
-| M9 | `countPlaysToday()` full table scan | `SongPlayRepository`, `VideoPlayRepository` | Add partial index on `played_at`. |
-| M10 | Trending filters by artist's jurisdiction, not viewer's | `SongPlayRepository.findTrendingByJurisdiction` | Verify and fix join if needed. |
-| M11 | Missing `countTotalPlaysByVideoId` | `VideoPlayRepository` | Add for parity. |
-| M12 | PostGIS not confirmed on Supabase | `JurisdictionRepository` | Verify `CREATE EXTENSION postgis`. |
-| M13 | `reorderPlaylist` silently drops unlisted tracks | `PlaylistService` | Validate all existing track IDs present in input. |
-| M14 | Active jurisdictions hardcoded | `JurisdictionService` | Add `is_active` column to `jurisdictions` table before expansion. |
-| M15 | `javax.annotation.PostConstruct` in Spring Boot 3.x | `CloudflareR2Service` | Replace with `jakarta.annotation.PostConstruct`. |
-
----
-
-### 🟡 Low — Refactors / Cleanup
-
-| # | Issue | Location | Action |
-|---|-------|----------|--------|
-| L1 | `CorsConfig.java` redundant | `CorsConfig.java` | Remove — `SecurityConfig` already handles CORS. |
-| L2 | JJWT deprecated setters | `JwtUtil.java` | Upgrade to 0.12+ builder pattern. |
-| L3 | `System.out.println` throughout | `AwardService`, `JwtRequestFilter` | Replace with SLF4J. |
-| L4 | `RegisterRequest` DTO unused | `RegisterRequest.java` | Delete. |
-| L5 | `AwardDto` unused in controller | `AwardController` | Map `Award` entity to `AwardDto`. |
-| L6 | `UserDto` serves too many purposes | `UserDto.java` | Split into purpose-specific DTOs. |
-| L7 | `PlaylistController` missing `/v1/` | `PlaylistController` | Change to `/api/v1/playlists`. |
-| L8 | `findRecentComments` unguarded | `CommentController` | Add `ROLE_ADMIN`. |
-| L9 | Comment soft delete not backed by `@Where` | `Comment` entity | Add `@Where(clause = "deleted_at IS NULL")`. |
-| L10 | Deprecated vote duplicate-check method | `VoteRepository` | Confirm no call sites, delete. |
-| L11 | `PlaylistRepository.findByUser` requires full `User` | `PlaylistRepository` | Add `findByUser_UserId(UUID)`. |
-| L12 | `VotingIntervalRepository` results not cached | `VotingIntervalRepository` | Add Caffeine cache — static config data. |
-| L13 | ~~`ReferralCodeGenerator` timestamp fallback guessable~~ | `ReferralCodeGenerator` | ✅ FIXED alongside C7. |
-| L14 | No minimum prefix length guard | `ReferralCodeGenerator` | Pad prefix to min 3 chars. |
-| L15 | `createFallbackAwards` calls `findAll()` | `AwardService` | Replace with top-N score query. |
-| L16 | `PATCH /profile/photo` temp endpoint present | `UserController` | Remove or secure before launch. |
-| L17 | Hardcoded `"UNIS-LAUNCH-2024"` referral bypass | `UserController` | Remove before launch. |
+Open issues are tracked in one place: [OPEN_ISSUES.md](./OPEN_ISSUES.md).
 
 ---
 

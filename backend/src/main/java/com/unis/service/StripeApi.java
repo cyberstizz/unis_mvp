@@ -32,6 +32,11 @@ import java.util.StringJoiner;
  *   stripe.secret.key       already set (the same key the rest of Unis uses)
  *   STRIPE_WEBHOOK_SECRET   the endpoint's signing secret (whsec_…) from
  *                           Stripe → Workbench → Webhooks
+ *   STRIPE_CONNECT_WEBHOOK_SECRET
+ *                           optional: the signing secret of a second
+ *                           destination, same URL, with "Events from" set to
+ *                           Connected accounts (for account.updated). Stripe
+ *                           gives every destination its own secret.
  */
 @Component
 public class StripeApi {
@@ -48,6 +53,9 @@ public class StripeApi {
 
     @Value("${STRIPE_WEBHOOK_SECRET:}")
     private String webhookSecret;
+
+    @Value("${STRIPE_CONNECT_WEBHOOK_SECRET:}")
+    private String connectWebhookSecret;
 
     /** Thrown when Stripe answers with an error. The message is Stripe's own, safe to log. */
     public static class StripeException extends RuntimeException {
@@ -138,11 +146,19 @@ public class StripeApi {
 
     /**
      * Checks a webhook's Stripe-Signature header: HMAC-SHA256 of
-     * "timestamp.payload" with the endpoint's signing secret, compared in
+     * "timestamp.payload" with a destination's signing secret, compared in
      * constant time against every v1 signature, and no older than 5 minutes.
+     * Either destination's secret is accepted (Unis's own events, or the
+     * connected-accounts destination when STRIPE_CONNECT_WEBHOOK_SECRET is set).
      */
     public boolean verifyWebhook(String payload, String signatureHeader) {
         if (!webhookConfigured() || payload == null || signatureHeader == null) return false;
+        if (verifyWith(webhookSecret, payload, signatureHeader)) return true;
+        return connectWebhookSecret != null && !connectWebhookSecret.isBlank()
+                && verifyWith(connectWebhookSecret, payload, signatureHeader);
+    }
+
+    private boolean verifyWith(String secret, String payload, String signatureHeader) {
         String timestamp = null;
         java.util.List<String> signatures = new java.util.ArrayList<>();
         for (String part : signatureHeader.split(",")) {
@@ -161,7 +177,7 @@ public class StripeApi {
         if (Math.abs(Instant.now().getEpochSecond() - t) > WEBHOOK_TOLERANCE_SECONDS) return false;
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(webhookSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
             byte[] expected = mac.doFinal((timestamp + "." + payload).getBytes(StandardCharsets.UTF_8));
             String expectedHex = toHex(expected);
             for (String sig : signatures) {

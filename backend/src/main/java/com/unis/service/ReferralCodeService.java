@@ -42,9 +42,6 @@ public class ReferralCodeService {
 
     private static final Logger log = LoggerFactory.getLogger(ReferralCodeService.class);
 
-    /** The original launch code still validates on the sign-up form; it has no owner. */
-    public static final String LAUNCH_CODE = "UNIS-LAUNCH-2024";
-
     /** 3 to 20 characters: letters, digits and hyphens, starting with a letter or digit. */
     private static final Pattern SHORT_CODE = Pattern.compile("^[A-Z0-9][A-Z0-9-]{2,19}$");
 
@@ -95,8 +92,6 @@ public class ReferralCodeService {
      *                   owner has since made an account: account is the referrer
      *   kind "waitlist" the code of someone still on the waitlist: they get the
      *                   credit the day they make an account (users.pending_referral_code)
-     *   kind "launch"   the launch code: Unis itself brought them in, so the
-     *                   referral share stays with Unis
      *
      * @param excludeEmail the person signing up, so their own waitlist code
      *                     can't credit themselves (null when not known yet)
@@ -106,7 +101,6 @@ public class ReferralCodeService {
     public Optional<Holder> lookup(String raw, String excludeEmail) {
         String code = normalize(raw);
         if (code.isEmpty() || code.length() > 64) return Optional.empty();
-        if (LAUNCH_CODE.equals(code)) return Optional.of(new Holder("launch", code, "Unis", null));
 
         Optional<Resolved> member = resolve(code);
         if (member.isPresent()) {
@@ -135,7 +129,7 @@ public class ReferralCodeService {
     /** True when no member or short code already uses these letters. */
     public boolean isFreeForMember(String code) {
         String c = normalize(code);
-        if (c.isEmpty() || LAUNCH_CODE.equals(c) || userRepository.existsByReferralCode(c)) return false;
+        if (c.isEmpty() || userRepository.existsByReferralCode(c)) return false;
         Boolean shortTaken = jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM referral_short_codes WHERE code = ?)", Boolean.class, c);
         return !Boolean.TRUE.equals(shortTaken);
@@ -151,7 +145,6 @@ public class ReferralCodeService {
         if (!SHORT_CODE.matcher(code).matches()) {
             throw new IllegalArgumentException("Use 3 to 20 letters, numbers or hyphens, like HARLEM or LENOX-CUTS.");
         }
-        if (LAUNCH_CODE.equals(code)) throw new IllegalArgumentException("That code is reserved.");
         if (userRepository.existsByReferralCode(code)) {
             throw new IllegalArgumentException("That's already a member's code. Pick another.");
         }

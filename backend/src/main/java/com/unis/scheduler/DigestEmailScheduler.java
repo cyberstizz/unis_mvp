@@ -1,5 +1,7 @@
 package com.unis.scheduler;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.unis.entity.CronExecution;
 import com.unis.repository.CronExecutionRepository;
 import com.unis.service.EmailService;
@@ -44,6 +46,8 @@ import java.util.Optional;
 @Component
 public class DigestEmailScheduler {
 
+    private static final Logger log = LoggerFactory.getLogger(DigestEmailScheduler.class);
+
     static final String JOB_NAME = "WEEKLY_DIGEST";
     static final String TAG = "weekly_digest";
 
@@ -75,17 +79,17 @@ public class DigestEmailScheduler {
         long startNs = System.nanoTime();
 
         if (!enabled) {
-            System.out.println("[Digest] action=run status=skip reason=disabled");
+            log.info("[Digest] action=run status=skip reason=disabled");
             return;
         }
         if (!emailService.isConfigured()) {
-            System.out.println("[Digest] action=run status=skip reason=email_not_configured");
+            log.info("[Digest] action=run status=skip reason=email_not_configured");
             return;
         }
         Optional<CronExecution> last = cronExecutionRepository.findTopByJobNameOrderByStartedAtDesc(JOB_NAME);
         if (last.isPresent() && !"FAILED".equals(last.get().getStatus())
                 && last.get().getStartedAt().isAfter(LocalDateTime.now().minusHours(20))) {
-            System.out.println("[Digest] action=run status=skip reason=already_ran startedAt=" + last.get().getStartedAt());
+            log.info("[Digest] action=run status=skip reason=already_ran startedAt={}", last.get().getStartedAt());
             return;
         }
 
@@ -95,7 +99,7 @@ public class DigestEmailScheduler {
         try {
             targets = digestService.recipients();
         } catch (Exception e) {
-            System.err.println("[Digest] action=run status=error phase=query err=" + e.getMessage());
+            log.error("[Digest] action=run status=error phase=query err={}", e.getMessage());
             exec.markFailed("recipient query: " + e.getMessage());
             cronExecutionRepository.save(exec);
             return;
@@ -108,8 +112,7 @@ public class DigestEmailScheduler {
         for (Recipient r : targets) {
             if (attempted >= dailyLimit) {
                 skipped = total - attempted;
-                System.out.println("[Digest] action=run note=daily_limit_reached limit=" + dailyLimit
-                    + " remaining=" + skipped);
+                log.info("[Digest] action=run note=daily_limit_reached limit={} remaining={}", dailyLimit, skipped);
                 break;
             }
             attempted++;
@@ -124,7 +127,7 @@ public class DigestEmailScheduler {
                 if (ok) sent++; else failed++;
             } catch (Exception e) {
                 failed++;
-                System.err.println("[Digest] action=build status=error user=" + r.userId() + " err=" + e.getMessage());
+                log.error("[Digest] action=build status=error user={} err={}", r.userId(), e.getMessage());
             }
             if (throttleMs > 0) {
                 try {
@@ -137,9 +140,7 @@ public class DigestEmailScheduler {
         }
 
         long ms = (System.nanoTime() - startNs) / 1_000_000;
-        System.out.println("[Digest] action=run status=ok totalTargets=" + total
-            + " attempted=" + attempted + " sent=" + sent + " failed=" + failed
-            + " skipped=" + skipped + " durationMs=" + ms);
+        log.info("[Digest] action=run status=ok totalTargets={} attempted={} sent={} failed={} skipped={} durationMs={}", total, attempted, sent, failed, skipped, ms);
 
         if (failed > 0 && sent == 0 && attempted > 0) {
             exec.markFailed("no emails sent; " + failed + " failed");

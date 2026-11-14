@@ -6,6 +6,7 @@ import com.unis.service.DownloadService;
 import com.unis.service.PlusService;
 import com.unis.service.SponsorService;
 import com.unis.service.StripeApi;
+import com.unis.service.StripeConnectService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -36,6 +37,14 @@ import java.util.Map;
  *   payment_intent.succeeded        a song purchase or support payment went
  *                                   through (records it even if the buyer
  *                                   closed the page before the app confirmed)
+ *
+ * A second destination at the SAME URL, with "Events from" set to Connected
+ * accounts, signed with STRIPE_CONNECT_WEBHOOK_SECRET:
+ *   account.updated                 an artist finished (or changed) payout
+ *                                   setup, so Earnings shows it right away
+ * Connected-account events carry a top-level "account" id. Only
+ * account.updated is acted on from that scope; anything else from a connected
+ * account is ignored, so a mis-ticked box can't record a payment twice.
  */
 @RestController
 @RequestMapping("/api/v1/stripe/webhook")
@@ -48,14 +57,17 @@ public class StripeWebhookController {
     private final SponsorService sponsors;
     private final DownloadService downloads;
     private final DirectSupportService support;
+    private final StripeConnectService connect;
 
     public StripeWebhookController(StripeApi stripe, PlusService plus, SponsorService sponsors,
-                                   DownloadService downloads, DirectSupportService support) {
+                                   DownloadService downloads, DirectSupportService support,
+                                   StripeConnectService connect) {
         this.stripe = stripe;
         this.plus = plus;
         this.sponsors = sponsors;
         this.downloads = downloads;
         this.support = support;
+        this.connect = connect;
     }
 
     @PostMapping
@@ -74,8 +86,16 @@ public class StripeWebhookController {
         String type = event.path("type").asText("");
         String eventId = event.path("id").asText("");
         JsonNode obj = event.path("data").path("object");
+        String connectedAccount = event.path("account").asText("");
 
         try {
+            if (!connectedAccount.isEmpty()) {
+                // From a connected account (the Connected accounts destination).
+                if ("account.updated".equals(type)) connect.onAccountUpdated(connectedAccount, obj);
+                else log.debug("[StripeWebhook] event={} type={} account={} status=ignored", eventId, type, connectedAccount);
+                log.info("[StripeWebhook] event={} type={} status=ok", eventId, type);
+                return ResponseEntity.ok(Map.of("received", true));
+            }
             switch (type) {
                 case "checkout.session.completed", "checkout.session.async_payment_succeeded" -> {
                     String kind = obj.path("metadata").path("unis_kind").asText("");

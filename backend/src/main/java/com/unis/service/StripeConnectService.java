@@ -46,7 +46,7 @@ public class StripeConnectService {
     @Value("${stripe.secret.key}")
     private String stripeSecretKey;
 
-    @Value("${app.frontend.url:https://unisprototypetwo.netlify.app}")
+    @Value("${app.frontend.url:https://unismusic.com}")
     private String frontendBaseUrl;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -285,6 +285,32 @@ public class StripeConnectService {
     // ═══════════════════════════════════════════════════════════════════════════
     // PAYOUT — Transfer money to a connected account
     // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Stripe's account.updated webhook for a connected account (the
+     * connected-accounts destination in StripeWebhookController). Records
+     * onboarding as finished the moment Stripe has the artist's details, the
+     * same rule getAccountStatus applies when they open Earnings, so the status
+     * no longer waits for that visit. Safe to run twice.
+     *
+     * @return rows updated (0 when nothing changed or no Unis account has this id)
+     */
+    public int onAccountUpdated(String stripeAccountId, JsonNode account) {
+        if (stripeAccountId == null || stripeAccountId.isBlank()) return 0;
+        boolean detailsSubmitted = account.path("details_submitted").asBoolean(false);
+        if (!detailsSubmitted) {
+            log.info("[StripeConnect] action=account_updated account={} detailsSubmitted=false status=noop", stripeAccountId);
+            return 0;
+        }
+        int rows = jdbc.update(
+                "UPDATE users SET stripe_onboarding_complete = true"
+                + " WHERE stripe_account_id = ? AND deleted_at IS NULL"
+                + " AND stripe_onboarding_complete IS DISTINCT FROM true",
+                stripeAccountId);
+        log.info("[StripeConnect] action=account_updated account={} payoutsEnabled={} updated={}",
+                stripeAccountId, account.path("payouts_enabled").asBoolean(false), rows);
+        return rows;
+    }
 
     /**
      * A payout Stripe refused. It's a checked exception on purpose: Spring

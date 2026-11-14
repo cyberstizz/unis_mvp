@@ -1,5 +1,7 @@
 package com.unis.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -14,6 +16,8 @@ import java.util.Map;
 
 @Service
 public class EmailService {
+
+    private static final Logger log = LoggerFactory.getLogger(EmailService.class);
 
     @Value("${resend.api.key:}")
     private String resendApiKey;
@@ -45,11 +49,11 @@ public class EmailService {
      */
     public boolean sendTransactional(String toEmail, String subject, String htmlContent) {
         if (!isConfigured()) {
-            System.out.println("[Email] action=send status=skip reason=not_configured to=" + toEmail);
+            log.info("[Email] action=send status=skip reason=not_configured to={}", toEmail);
             return false;
         }
         if (toEmail == null || toEmail.isBlank()) {
-            System.out.println("[Email] action=send status=skip reason=no_recipient");
+            log.info("[Email] action=send status=skip reason=no_recipient");
             return false;
         }
 
@@ -76,17 +80,14 @@ public class EmailService {
             int code = response.statusCode();
 
             if (code >= 200 && code < 300) {
-                System.out.println("[Email] action=send status=ok to=" + normalizedEmail
-                    + " httpStatus=" + code + " durationMs=" + ms);
+                log.info("[Email] action=send status=ok to={} httpStatus={} durationMs={}", normalizedEmail, code, ms);
                 return true;
             }
-            System.err.println("[Email] action=send status=fail to=" + normalizedEmail
-                + " httpStatus=" + code + " durationMs=" + ms + " body=" + response.body());
+            log.error("[Email] action=send status=fail to={} httpStatus={} durationMs={} body={}", normalizedEmail, code, ms, response.body());
             return false;
         } catch (Exception e) {
             long ms = (System.nanoTime() - startNs) / 1_000_000;
-            System.err.println("[Email] action=send status=error to=" + normalizedEmail
-                + " durationMs=" + ms + " err=" + e.getMessage());
+            log.error("[Email] action=send status=error to={} durationMs={} err={}", normalizedEmail, ms, e.getMessage());
             return false;
         }
     }
@@ -103,11 +104,11 @@ public class EmailService {
     public boolean send(String toEmail, String subject, String html, String text,
                         Map<String, String> headers, String tag) {
         if (!isConfigured()) {
-            System.out.println("[Email] action=send status=skip reason=not_configured to=" + toEmail);
+            log.info("[Email] action=send status=skip reason=not_configured to={}", toEmail);
             return false;
         }
         if (toEmail == null || toEmail.isBlank()) {
-            System.out.println("[Email] action=send status=skip reason=no_recipient");
+            log.info("[Email] action=send status=skip reason=no_recipient");
             return false;
         }
 
@@ -139,21 +140,18 @@ public class EmailService {
             long ms = (System.nanoTime() - startNs) / 1_000_000;
             int code = response.statusCode();
             if (code >= 200 && code < 300) {
-                System.out.println("[Email] action=send status=ok tag=" + tag + " to=" + normalizedEmail
-                    + " httpStatus=" + code + " durationMs=" + ms);
+                log.info("[Email] action=send status=ok tag={} to={} httpStatus={} durationMs={}", tag, normalizedEmail, code, ms);
                 return true;
             }
-            System.err.println("[Email] action=send status=fail tag=" + tag + " to=" + normalizedEmail
-                + " httpStatus=" + code + " durationMs=" + ms + " body=" + response.body());
+            log.error("[Email] action=send status=fail tag={} to={} httpStatus={} durationMs={} body={}", tag, normalizedEmail, code, ms, response.body());
             return false;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.err.println("[Email] action=send status=interrupted to=" + normalizedEmail);
+            log.warn("[Email] action=send status=interrupted to={}", normalizedEmail);
             return false;
         } catch (Exception e) {
             long ms = (System.nanoTime() - startNs) / 1_000_000;
-            System.err.println("[Email] action=send status=error tag=" + tag + " to=" + normalizedEmail
-                + " durationMs=" + ms + " err=" + e.getMessage());
+            log.error("[Email] action=send status=error tag={} to={} durationMs={} err={}", tag, normalizedEmail, ms, e.getMessage());
             return false;
         }
     }
@@ -167,10 +165,10 @@ public class EmailService {
         String normalizedEmail = toEmail.toLowerCase();
 
         if (resendApiKey == null || resendApiKey.isBlank()) {
-            System.out.println("=== PASSWORD RESET EMAIL (no Resend key configured) ===");
-            System.out.println("To: " + normalizedEmail);
-            System.out.println("URL: " + resetUrl);
-            System.out.println("========================================================");
+            log.info("=== PASSWORD RESET EMAIL (no Resend key configured) ===");
+            log.info("To: {}", normalizedEmail);
+            log.info("URL: {}", resetUrl);
+            log.info("========================================================");
             return;
         }
 
@@ -196,19 +194,18 @@ public class EmailService {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             // Always log status + body so failures are never silent
-            System.out.println("Resend status: " + response.statusCode());
-            System.out.println("Resend response: " + response.body());
+            log.debug("Resend status: {}", response.statusCode());
+            log.debug("Resend response: {}", response.body());
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                System.out.println("Password reset email sent to " + normalizedEmail);
+                log.info("Password reset email sent to {}", normalizedEmail);
             } else {
-                System.err.println("Resend API error (" + response.statusCode() + "): " + response.body());
-                System.out.println("FALLBACK RESET URL: " + resetUrl);
+                log.error("Resend API error ({}): {}", response.statusCode(), response.body());
+                log.info("FALLBACK RESET URL: {}", resetUrl);
             }
         } catch (Exception e) {
-            System.err.println("Failed to send reset email: " + e.getMessage());
-            e.printStackTrace();
-            System.out.println("FALLBACK RESET URL: " + resetUrl);
+            log.error("Failed to send reset email: {}", e.getMessage(), e);
+            log.info("FALLBACK RESET URL: {}", resetUrl);
         }
     }
 
@@ -271,10 +268,10 @@ public class EmailService {
         String normalizedEmail = toEmail.toLowerCase();
  
         if (resendApiKey == null || resendApiKey.isBlank()) {
-            System.out.println("=== EMAIL VERIFICATION (no Resend key configured) ===");
-            System.out.println("To: " + normalizedEmail);
-            System.out.println("URL: " + verifyUrl);
-            System.out.println("=====================================================");
+            log.info("=== EMAIL VERIFICATION (no Resend key configured) ===");
+            log.info("To: {}", normalizedEmail);
+            log.info("URL: {}", verifyUrl);
+            log.info("=====================================================");
             return;
         }
  
@@ -297,17 +294,17 @@ public class EmailService {
                     .build();
  
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            System.out.println("Resend (verify) status: " + response.statusCode());
+            log.debug("Resend (verify) status: {}", response.statusCode());
  
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                System.err.println("Resend verify error (" + response.statusCode() + "): " + response.body());
-                System.out.println("FALLBACK VERIFY URL: " + verifyUrl);
+                log.error("Resend verify error ({}): {}", response.statusCode(), response.body());
+                log.info("FALLBACK VERIFY URL: {}", verifyUrl);
             } else {
-                System.out.println("Verification email sent to " + normalizedEmail);
+                log.info("Verification email sent to {}", normalizedEmail);
             }
         } catch (Exception e) {
-            System.err.println("Failed to send verification email: " + e.getMessage());
-            System.out.println("FALLBACK VERIFY URL: " + verifyUrl);
+            log.error("Failed to send verification email: {}", e.getMessage());
+            log.info("FALLBACK VERIFY URL: {}", verifyUrl);
         }
     }
  

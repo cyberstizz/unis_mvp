@@ -1,5 +1,7 @@
 package com.unis.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.unis.entity.User;
 import com.unis.entity.Song;
 import com.unis.repository.UserRepository;
@@ -20,6 +22,8 @@ import java.util.UUID;
 
 @Service
 public class ScoreUpdateService {
+
+    private static final Logger log = LoggerFactory.getLogger(ScoreUpdateService.class);
 
     // Playlist rewards. Public so PlaylistService takes back exactly what was
     // paid when a playlist is deleted — the two can never drift apart.
@@ -270,7 +274,7 @@ public class ScoreUpdateService {
                 + LEVEL_SQL.replace("{s}", "GREATEST(0, COALESCE(score, 0) + 1)")
                 + " WHERE deleted_at IS NULL AND created_at IS NOT NULL AND created_at <= ?",
                 java.sql.Timestamp.valueOf(LocalDateTime.now().minusMonths(1)));
-        System.out.println("[Score] action=monthly_age_bonus status=ok users=" + updated);
+        log.info("[Score] action=monthly_age_bonus status=ok users={}", updated);
     }
 
     // ============================================================================

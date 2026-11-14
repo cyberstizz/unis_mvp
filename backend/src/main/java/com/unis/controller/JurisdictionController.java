@@ -71,6 +71,16 @@ public ResponseEntity<List<Jurisdiction>> getByName(@PathVariable String name) {
     }
 
     /**
+     * GET /api/v1/jurisdictions/open
+     * The open jurisdictions (voting_enabled = true), each with its chain from
+     * the root down. Public, like the rest of GET /api/v1/jurisdictions/**.
+     */
+    @GetMapping("/open")
+    public ResponseEntity<List<Map<String, Object>>> getOpen() {
+        return ResponseEntity.ok(jurisdictionService.getOpenJurisdictions());
+    }
+
+    /**
      * GET /api/v1/jurisdictions/roots
      * Get root jurisdictions (Unis and any others with no parent)
      */

@@ -433,7 +433,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                                               VotingInterval interval) {
         
         if (awardRepository.existsAwardForCategory(targetType, jurisdictionId, genreId, intervalId, awardDate)) {
-            System.out.println("Award already exists for " + targetType + " in jurisdiction " + jurisdictionId + " on " + awardDate);
+            log.info("Award already exists for {} in jurisdiction {} on {}", targetType, jurisdictionId, awardDate);
             return false;
         }
 
@@ -446,8 +446,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         );
 
         if (candidates.isEmpty()) {
-            System.out.println("No eligible " + targetType + "s in jurisdiction " + jurisdictionId
-                             + " / genre " + genreId + " — no award for this category");
+            log.info("No eligible {}s in jurisdiction {} / genre {} — no award for this category", targetType, jurisdictionId, genreId);
             return false;
         }
 
@@ -455,7 +454,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         WinnerResult winner = determineWinner(candidates);
 
         if (winner == null) {
-            System.out.println("Could not determine winner for " + targetType);
+            log.info("Could not determine winner for {}", targetType);
             return false;
         }
 
@@ -484,12 +483,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         Award savedAward = awardRepository.save(award);
         awardRepository.flush();
         
-        System.out.println("✓ Award SAVED with ID: " + savedAward.getAwardId() + " for " + targetType + 
-                          " winner in jurisdiction " + jurisdictionId + 
-                          " with " + winner.totalPoints + " total points (" +
-                          winner.weightedPoints + " vote + " + winner.engagementPoints + " engagement)" +
-                          " (" + winner.rawVoteCount + " votes, " + winner.playsCount + " plays, " + winner.likesCount + " likes)" +
-                          " (determined by " + winner.determinationMethod + ")");
+        log.info("✓ Award SAVED with ID: {} for {} winner in jurisdiction {} with {} total points ({} vote + {} engagement) ({} votes, {} plays, {} likes) (determined by {})", savedAward.getAwardId(), targetType, jurisdictionId, winner.totalPoints, winner.weightedPoints, winner.engagementPoints, winner.rawVoteCount, winner.playsCount, winner.likesCount, winner.determinationMethod);
         
         scoreUpdateService.onAward(winner.targetId, awardPoints);
         
@@ -618,9 +612,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
             winner.tiedCandidatesCount = tiedOnScore;
         }
 
-        System.out.println("Winner determination: " + winner.determinationMethod +
-                          " (total " + winner.totalPoints + ", tied candidates: " +
-                          winner.tiedCandidatesCount + ")");
+        log.info("Winner determination: {} (total {}, tied candidates: {})", winner.determinationMethod, winner.totalPoints, winner.tiedCandidatesCount);
 
         return winner;
     }
@@ -703,7 +695,7 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
     @Transactional(readOnly = false)
     @CacheEvict(value = {"awards", "leaderboards", "standings"}, allEntries = true)
     public void recomputeAllHistoricalAwards() {
-        System.out.println("=== RECOMPUTING ALL HISTORICAL AWARDS ===");
+        log.info("=== RECOMPUTING ALL HISTORICAL AWARDS ===");
         
         String sql = "SELECT DISTINCT vote_date FROM votes ORDER BY vote_date";
         Query query = entityManager.createNativeQuery(sql);
@@ -713,17 +705,17 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         
         Optional<VotingInterval> dailyInterval = votingIntervalRepository.findByName("Daily");
         if (dailyInterval.isEmpty()) {
-            System.out.println("ERROR: Daily interval not found!");
+            log.warn("ERROR: Daily interval not found!");
             return;
         }
 
         for (java.sql.Date sqlDate : voteDates) {
             LocalDate date = sqlDate.toLocalDate();
-            System.out.println("Processing votes for " + date);
+            log.info("Processing votes for {}", date);
             computeAwardsInternal(date, dailyInterval.get().getIntervalId(), null, null);
         }
         
-        System.out.println("=== HISTORICAL RECOMPUTATION COMPLETE ===");
+        log.info("=== HISTORICAL RECOMPUTATION COMPLETE ===");
     }
 
     // =========================================================================
@@ -807,23 +799,22 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
         List<Award> fallbackAwards = new ArrayList<>();
         
         List<UUID> jurisdictionIds = getJurisdictionAndAllChildren(jurisdictionId);
+        if (jurisdictionIds.isEmpty()) return fallbackAwards;
+        // Looked up once, not once per award.
+        Jurisdiction jurisdiction = jurisdictionRepository.findById(jurisdictionId).orElse(null);
+        VotingInterval interval = votingIntervalRepository.findById(intervalId).orElse(null);
         
         if ("song".equals(type)) {
-            List<Song> songs = songRepository.findAll().stream()
-                .filter(s -> !s.isRemoved())
-                .filter(s -> s.getArtist() == null || s.getArtist().getDeletedAt() == null)
-                .filter(s -> s.getJurisdiction() != null && jurisdictionIds.contains(s.getJurisdiction().getJurisdictionId()))
-                .sorted((a, b) -> Integer.compare(b.getScore(), a.getScore()))
-                .limit(10)
-                .collect(Collectors.toList());
+            // Only the top 10 in these jurisdictions, from the database.
+            List<Song> songs = songRepository.findTopActiveByJurisdictions(jurisdictionIds, PageRequest.of(0, 10));
             
             for (Song song : songs) {
                 Award award = Award.builder()
                     .targetType("song")
                     .targetId(song.getSongId())
                     .genre(song.getGenre())
-                    .jurisdiction(jurisdictionRepository.findById(jurisdictionId).orElse(null))
-                    .interval(votingIntervalRepository.findById(intervalId).orElse(null))
+                    .jurisdiction(jurisdiction)
+                    .interval(interval)
                     .awardDate(awardDate)
                     .votesCount(0)
                     .weightedPoints(0)
@@ -838,21 +829,17 @@ private LeaderboardEntryDto hydrateLeaderboardEntry(CandidateResult c, String ty
                 fallbackAwards.add(award);
             }
         } else if ("artist".equals(type)) {
-            List<User> artists = userRepository.findAll().stream()
-                .filter(u -> u.getRole() == User.Role.artist)
-                .filter(u -> u.getDeletedAt() == null)
-                .filter(u -> u.getJurisdiction() != null && jurisdictionIds.contains(u.getJurisdiction().getJurisdictionId()))
-                .sorted((a, b) -> Integer.compare(b.getScore(), a.getScore()))
-                .limit(10)
-                .collect(Collectors.toList());
+            // Only the top 10 in these jurisdictions, from the database.
+            List<User> artists = userRepository.findTopActiveByRoleAndJurisdictions(
+                    User.Role.artist, jurisdictionIds, PageRequest.of(0, 10));
             
             for (User artist : artists) {
                 Award award = Award.builder()
                     .targetType("artist")
                     .targetId(artist.getUserId())
                     .genre(artist.getGenre())
-                    .jurisdiction(jurisdictionRepository.findById(jurisdictionId).orElse(null))
-                    .interval(votingIntervalRepository.findById(intervalId).orElse(null))
+                    .jurisdiction(jurisdiction)
+                    .interval(interval)
                     .awardDate(awardDate)
                     .votesCount(0)
                     .weightedPoints(0)

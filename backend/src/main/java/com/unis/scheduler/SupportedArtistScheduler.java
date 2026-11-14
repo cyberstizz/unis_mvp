@@ -1,5 +1,7 @@
 package com.unis.scheduler;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.unis.entity.Supporter;
 import com.unis.entity.User;
 import com.unis.repository.SupporterRepository;
@@ -40,6 +42,8 @@ import java.util.UUID;
 @Component
 public class SupportedArtistScheduler {
 
+    private static final Logger log = LoggerFactory.getLogger(SupportedArtistScheduler.class);
+
     private final UserRepository userRepository;
     private final SupporterRepository supporterRepository;
     private final ScoreUpdateService scoreUpdateService;
@@ -62,7 +66,7 @@ public class SupportedArtistScheduler {
         try {
             pending = userRepository.findByPendingSupportedArtistIdIsNotNull();
         } catch (Exception e) {
-            System.err.println("[SupportPromote] action=run status=error phase=query err=" + e.getMessage());
+            log.error("[SupportPromote] action=run status=error phase=query err={}", e.getMessage());
             return;
         }
 
@@ -83,8 +87,7 @@ public class SupportedArtistScheduler {
                     fan.setPendingSupportedArtistSince(null);
                     userRepository.save(fan);
                     skippedDeleted++;
-                    System.out.println("[SupportPromote] action=promote userId=" + fanId
-                        + " status=skip reason=target_invalid target=" + newArtistId);
+                    log.info("[SupportPromote] action=promote userId={} status=skip reason=target_invalid target={}", fanId, newArtistId);
                     continue;
                 }
 
@@ -94,8 +97,7 @@ public class SupportedArtistScheduler {
                     fan.setPendingSupportedArtistSince(null);
                     userRepository.save(fan);
                     skippedNoop++;
-                    System.out.println("[SupportPromote] action=promote userId=" + fanId
-                        + " status=skip reason=already_effective artist=" + newArtistId);
+                    log.info("[SupportPromote] action=promote userId={} status=skip reason=already_effective artist={}", fanId, newArtistId);
                     continue;
                 }
 
@@ -122,20 +124,16 @@ public class SupportedArtistScheduler {
                 scoreUpdateService.onSupporterAdded(newArtistId, fanId);   // +5 once per fan, ever
 
                 promoted++;
-                System.out.println("[SupportPromote] action=promote userId=" + fanId
-                    + " status=ok from=" + oldArtistId + " to=" + newArtistId);
+                log.info("[SupportPromote] action=promote userId={} status=ok from={} to={}", fanId, oldArtistId, newArtistId);
 
             } catch (Exception e) {
                 failed++;
-                System.err.println("[SupportPromote] action=promote userId=" + fanId
-                    + " status=error err=" + e.getMessage());
+                log.error("[SupportPromote] action=promote userId={} status=error err={}", fanId, e.getMessage());
                 // Continue with the rest of the batch.
             }
         }
 
         long ms = (System.nanoTime() - startNs) / 1_000_000;
-        System.out.println("[SupportPromote] action=run status=ok total=" + total
-            + " promoted=" + promoted + " skippedDeleted=" + skippedDeleted
-            + " skippedNoop=" + skippedNoop + " failed=" + failed + " durationMs=" + ms);
+        log.info("[SupportPromote] action=run status=ok total={} promoted={} skippedDeleted={} skippedNoop={} failed={} durationMs={}", total, promoted, skippedDeleted, skippedNoop, failed, ms);
     }
 }
