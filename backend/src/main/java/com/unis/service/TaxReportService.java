@@ -29,7 +29,8 @@ import java.util.Map;
  *     1099-MISC (other income); filed for $2,000 or more in a year.
  *   • Song sales and direct support — card payments to the artist.
  *     Form 1099-K; filed for more than $20,000 AND more than 200 payments.
- *   • Unis Plus — an artist's 60% share of subscribers' fees, by plays. It is
+ *   • Unis Plus — an artist's share of subscribers' fees (half of each fee to
+ *     the subscriber's supported artist, plus a share by plays). It is
  *     credited to the same balance and paid out the same way, but because it
  *     is paid for the use of their music it may be royalties (1099-MISC box 2,
  *     filed for $10 or more) rather than other income. The report shows it

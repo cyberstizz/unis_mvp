@@ -8,6 +8,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -25,9 +27,10 @@ import java.util.*;
  *               past_due (Stripe is retrying a card) AND the paid period hasn't
  *               ended. Ad slots read GET /api/v1/plus/status and disappear.
  *   Each month  Stripe's invoice.paid webhook writes a plus_payments row. At the
- *               Community Share close, 60% of it (after Stripe's fees) goes to
- *               the artists that subscriber played that month, by counted
- *               plays; Unis's 40% joins the pot (CommunityShareService).
+ *               Community Share close, half of it goes to the subscriber's
+ *               supported artist; of the rest after Stripe's fees, half goes to
+ *               the artists they played that month, by counted plays, and half
+ *               joins the pot (CommunityShareService).
  *   Manage      POST /api/v1/plus/portal → Stripe's customer portal (change
  *               card, cancel). Canceling keeps Plus until the paid period
  *               ends; there are no partial refunds.
@@ -94,6 +97,8 @@ public class PlusService {
         m.put("status", null);
         m.put("paidThrough", null);
         m.put("cancelAtPeriodEnd", false);
+        m.put("supportedArtistId", null);
+        m.put("creditedToSupportedCents", 0);
         if (userId == null) return m;
         jdbc.query("SELECT status, current_period_end, cancel_at_period_end FROM plus_subscriptions WHERE user_id = ?",
                 rs -> {
@@ -105,6 +110,24 @@ public class PlusService {
                     m.put("paidThrough", end == null ? null : end.toLocalDateTime().toString());
                     m.put("cancelAtPeriodEnd", rs.getBoolean("cancel_at_period_end"));
                 }, userId);
+
+        // Who they support now, and everything their plan has credited that
+        // artist so far (their half plus their share by plays). Read from the
+        // ledger, so it only counts money that actually reached the artist: it
+        // first shows after the member's first monthly close.
+        List<UUID> supported = jdbc.queryForList(
+                "SELECT supported_artist_id FROM users WHERE user_id = ? AND supported_artist_id IS NOT NULL",
+                UUID.class, userId);
+        if (!supported.isEmpty()) {
+            UUID artistId = supported.get(0);
+            m.put("supportedArtistId", artistId.toString());
+            BigDecimal credited = jdbc.queryForObject("""
+                    SELECT COALESCE(SUM(amount), 0) FROM earnings_ledger
+                    WHERE user_id = ? AND source_user_id = ? AND stream = 'plus_artist'
+                    """, BigDecimal.class, artistId, userId);
+            m.put("creditedToSupportedCents",
+                    credited == null ? 0 : credited.movePointRight(2).setScale(0, RoundingMode.DOWN).intValue());
+        }
         return m;
     }
 

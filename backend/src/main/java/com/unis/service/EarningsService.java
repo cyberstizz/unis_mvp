@@ -103,7 +103,8 @@ public class EarningsService {
                 "lastMonth", money(last.get("supporter")),
                 "thisMonth", money(BigDecimal.ZERO)));
         summary.put("adjustments", Map.of("lifetime", money(adjustmentsLifetime)));
-        // Artists: their 60% share of Unis Plus fees from subscribers who played them.
+        // Artists: their Unis Plus share — half of each supporting member's fee,
+        // plus a share by plays from members who played them.
         summary.put("plusEarnings", Map.of(
                 "lifetime", money(plusLifetime),
                 "lastMonth", money(last.get("plus_artist"))));
