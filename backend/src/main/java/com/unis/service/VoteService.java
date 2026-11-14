@@ -138,7 +138,6 @@ public class VoteService {
         // 1. GUARD CLAUSES: Validate required fields preventing NPE
         if (vote.getUser() == null) throw new IllegalArgumentException("User is required");
         if (vote.getGenre() == null) throw new IllegalArgumentException("Genre is required");
-        if (vote.getJurisdiction() == null) throw new IllegalArgumentException("Jurisdiction is required");
         if (vote.getInterval() == null) throw new IllegalArgumentException("Interval is required");
         if (!"artist".equals(vote.getTargetType()) && !"song".equals(vote.getTargetType())) {
             throw new VoteRejectedException(org.springframework.http.HttpStatus.BAD_REQUEST, "TARGET_TYPE_INVALID",
@@ -150,7 +149,6 @@ public class VoteService {
         }
 
         UUID userId = vote.getUser().getUserId();
-        UUID targetJurisdictionId = vote.getJurisdiction().getJurisdictionId();
         LocalDate voteDate = vote.getVoteDate() != null ? vote.getVoteDate() : raceClock.todayForUser(userId);
         vote.setVoteDate(voteDate);
 
@@ -163,29 +161,37 @@ public class VoteService {
             .getResultList();
 
         // =====================================================================
-        // 3. Voter eligibility — the voter must live in (or under) this race.
+        // 3. Nominee — the artist/song must exist and be in this genre.
         // =====================================================================
-        if (!canUserVoteInJurisdiction(userId, targetJurisdictionId)) {
-            throw new IllegalArgumentException(
-                "User is not eligible to vote in this jurisdiction. " +
-                "Users can only vote in their home jurisdiction and its voting-enabled ancestors."
-            );
+        Jurisdiction nomineeHome = checkNominee(vote);
+
+        // =====================================================================
+        // 4. ONE VOTE, COUNTED UP THE CHAIN.
+        //    The voter no longer picks a jurisdiction. The server files the
+        //    vote under the deepest open race that holds both the voter and
+        //    the nominee. RankingService then counts it once in every open
+        //    race that holds them both (that race and each one above it), and
+        //    in no race the voter doesn't live in. So a Downtown Harlem voter
+        //    backing a Downtown Harlem artist counts in Downtown Harlem and
+        //    Harlem; backing a Los Angeles artist counts only in races they
+        //    share (Unis-wide, once that race is open).
+        //    Whatever jurisdiction the client sent is ignored.
+        // =====================================================================
+        Jurisdiction race = resolveSharedRace(userId, nomineeHome);
+        if (race == null) {
+            throw new VoteRejectedException(org.springframework.http.HttpStatus.FORBIDDEN, "NO_SHARED_RACE",
+                "This vote can't be counted yet: you and this nominee aren't in any open race together. "
+                    + "You can vote for artists and songs from your own area and the areas around it.");
         }
+        vote.setJurisdiction(race);
 
         // =====================================================================
-        // 4. Nominee eligibility — the artist/song must exist, be in this
-        //    genre, and be on the ballot in this jurisdiction (its home or an
-        //    area above it). Previously only the wizard enforced this, so a
-        //    direct API call could vote anyone into any race.
-        // =====================================================================
-        checkNomineeEligibility(vote);
-
-        // =====================================================================
-        // 5. One vote per race per period.
-        //    Race = voter + artist/song + genre + jurisdiction + interval.
-        //    Period = the interval's calendar window (see votingPeriod). The
-        //    old check only looked at today's date, so a weekly or annual vote
-        //    could be cast again every single day.
+        // 5. One vote per category per period.
+        //    Category = artist/song + genre + interval, whatever the
+        //    jurisdiction. Period = the interval's calendar window (see
+        //    votingPeriod). Before, a voter could vote once per jurisdiction up
+        //    their chain, and every one of those votes counted in the same
+        //    races, multiplying their weight.
         // =====================================================================
         String intervalName = vote.getInterval().getName();
         LocalDate[] period = votingPeriod(intervalName, voteDate);
@@ -194,7 +200,6 @@ public class VoteService {
                 userId,
                 vote.getTargetType(),
                 vote.getGenre().getGenreId(),
-                targetJurisdictionId,
                 vote.getInterval().getIntervalId(),
                 period[0],
                 period[1]);
@@ -206,8 +211,8 @@ public class VoteService {
             String interval = intervalName == null ? "" : intervalName.toLowerCase() + " ";
             throw new VoteRejectedException(org.springframework.http.HttpStatus.CONFLICT, "ALREADY_VOTED",
                 "You already cast your " + interval + vote.getGenre().getName() + " " + vote.getTargetType()
-                    + " vote in " + vote.getJurisdiction().getName() + " " + periodNoun(intervalName)
-                    + ". Votes can't be changed — this race opens again " + reopens + ".");
+                    + " vote " + periodNoun(intervalName)
+                    + ". It's one vote per category, and votes can't be changed — you can vote again " + reopens + ".");
         }
 
         // 4. Save the vote
@@ -241,16 +246,34 @@ public class VoteService {
     }
 
     /**
-     * Server-side nominee check (mirrors what the voting wizard offers).
+     * The deepest open race holding both this voter and the nominee's home,
+     * or null when they share none.
+     */
+    private Jurisdiction resolveSharedRace(UUID voterId, Jurisdiction nomineeHome) {
+        User voter = userRepository.findById(voterId).orElse(null);
+        Jurisdiction voterHome = voter == null || voter.getJurisdiction() == null ? null
+            : jurisdictionRepository.findById(voter.getJurisdiction().getJurisdictionId()).orElse(null);
+        if (voterHome == null || voterHome.getPath() == null || voterHome.getPath().isEmpty()) {
+            throw new VoteRejectedException(org.springframework.http.HttpStatus.FORBIDDEN, "VOTER_NO_HOME",
+                "Your account doesn't have a home area yet, so your vote can't be counted. Set your location and try again.");
+        }
+        List<String> ids = jurisdictionRepository.findDeepestSharedOpenRace(voterHome.getPath(), nomineeHome.getPath());
+        if (ids == null || ids.isEmpty() || ids.get(0) == null) return null;
+        return jurisdictionRepository.findById(UUID.fromString(ids.get(0))).orElse(null);
+    }
+
+    /**
+     * Server-side nominee check: exists, right genre, has a home area.
      *
      * A song's home is its own jurisdiction (what the nominee lists and the
      * wizard use), falling back to its artist's. Throws VoteRejectedException
      * with a message the user can act on.
+     *
+     * @return the nominee's home jurisdiction, with its path
      */
-    private void checkNomineeEligibility(Vote vote) {
+    private Jurisdiction checkNominee(Vote vote) {
         org.springframework.http.HttpStatus forbidden = org.springframework.http.HttpStatus.FORBIDDEN;
         UUID targetId = vote.getTargetId();
-        Jurisdiction race = vote.getJurisdiction();
         UUID raceGenreId = vote.getGenre().getGenreId();
 
         String nomineeName;
@@ -301,14 +324,7 @@ public class VoteService {
                 "NOMINEE_PATH_MISSING",
                 "We couldn't confirm where " + nomineeName + " can be voted on. Your vote was not counted — please try again later.");
         }
-
-        // Same rule as voters: the race must be the nominee's home or an area
-        // above it, and voting must be on there.
-        if (!jurisdictionRepository.canUserVoteInJurisdiction(nomineePath, race.getJurisdictionId())) {
-            throw new VoteRejectedException(forbidden, "NOMINEE_NOT_ELIGIBLE",
-                nomineeName + " isn't on the ballot in " + race.getName()
-                    + ". Artists and songs can only be voted for in their home area and the areas above it.");
-        }
+        return homeWithPath;
     }
 
     // =========================================================================
