@@ -134,6 +134,26 @@ public class MessageController {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // PIN (private to you, up to 3)
+    // PUT /api/v1/conversations/{conversationId}/pin  Body: { pinned: true|false }
+    //   → ConversationView (pinnedAt set or null)
+    // ─────────────────────────────────────────────────────────────
+    @PutMapping("/conversations/{conversationId}/pin")
+    public ResponseEntity<?> pin(@PathVariable UUID conversationId, @RequestBody Map<String, Object> body) {
+        try {
+            UUID userId = SecurityUtils.getAuthenticatedUserId();
+            Object raw = body != null ? body.get("pinned") : null;
+            if (raw == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "pinned is required"));
+            }
+            boolean pinned = Boolean.parseBoolean(raw.toString());
+            return ResponseEntity.ok(messagingService.setPinned(userId, conversationId, pinned));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // THREAD
     // GET /api/v1/conversations/{conversationId}/messages?before=&limit=
     // (Frontend should send this with useCache:false — GET responses are cached.)

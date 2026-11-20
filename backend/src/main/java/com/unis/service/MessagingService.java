@@ -76,6 +76,9 @@ public class MessagingService {
     /** Same number the help center quotes (helpContent.jsx MESSAGE_REQUEST_DAILY_LIMIT). */
     public static final int MAX_NEW_REQUESTS_PER_DAY = 15;
 
+    /** How many chats one person can pin to the top of their inbox. */
+    public static final int MAX_PINNED = 3;
+
     /** One reaction per person per message, from this set: ❤️ 🔥 😂 😮 😢 👏 */
     public static final List<String> REACTIONS = List.of(
             "❤️", "🔥", "😂", "😮", "😢", "👏");
@@ -298,6 +301,46 @@ public class MessagingService {
         convo.setDeclinedAt(LocalDateTime.now());
         conversationRepository.save(convo);
         log.info("Request {} deleted by {}", conversationId, viewerId);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // PINS
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Pin or unpin a chat for the viewer only. Requests can't be pinned, and
+     * one person can pin at most {@link #MAX_PINNED}. Pinning one that's
+     * already pinned (or unpinning one that isn't) changes nothing.
+     */
+    @Transactional
+    public ConversationView setPinned(UUID viewerId, UUID conversationId, boolean pinned) {
+        Conversation convo = requireConversation(conversationId);
+        assertParticipant(convo, viewerId);
+        String lane = laneFor(convo, viewerId);
+        if (lane == null) throw new RuntimeException("Conversation not found.");
+        if (pinned && !"chats".equals(lane)) {
+            throw new RuntimeException("Accept the request before pinning it.");
+        }
+
+        boolean isOne = viewerId.equals(convo.getParticipantOne());
+        LocalDateTime current = isOne ? convo.getPinnedAtOne() : convo.getPinnedAtTwo();
+
+        if (pinned && current == null) {
+            long alreadyPinned = conversationRepository.findAllForUser(viewerId).stream()
+                    .filter(c -> pinnedAtFor(c, viewerId) != null)
+                    .filter(c -> "chats".equals(laneFor(c, viewerId)))
+                    .count();
+            if (alreadyPinned >= MAX_PINNED) {
+                throw new RuntimeException("You can pin up to " + MAX_PINNED + " chats.");
+            }
+            LocalDateTime now = LocalDateTime.now();
+            if (isOne) convo.setPinnedAtOne(now); else convo.setPinnedAtTwo(now);
+            conversationRepository.save(convo);
+        } else if (!pinned && current != null) {
+            if (isOne) convo.setPinnedAtOne(null); else convo.setPinnedAtTwo(null);
+            conversationRepository.save(convo);
+        }
+        return toConversationView(convo, requireUser(viewerId), lane);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -647,7 +690,12 @@ public class MessagingService {
                 lane,
                 viewerId.equals(c.getInitiatedBy()),
                 c.getStatus() == ConversationStatus.PENDING,
-                role, place, otherSupportsMe, online, lastMine, lastSeen);
+                role, place, otherSupportsMe, online, lastMine, lastSeen,
+                pinnedAtFor(c, viewerId));
+    }
+
+    private LocalDateTime pinnedAtFor(Conversation c, UUID viewerId) {
+        return viewerId.equals(c.getParticipantOne()) ? c.getPinnedAtOne() : c.getPinnedAtTwo();
     }
 
     private long unreadFor(Conversation c, UUID viewerId) {

@@ -18,6 +18,7 @@ import java.util.UUID;
  *   otherOnline          Active now — only when BOTH have activity status on
  *   lastMessageMine      the latest message is the viewer's ("You:" prefix)
  *   lastMessageSeen      ...and the other person has read it (mutual receipts)
+ *   pinnedAt             when the viewer pinned it, or null (Nov 2026; private to the viewer)
  */
 public record ConversationView(
         UUID id,
@@ -35,5 +36,6 @@ public record ConversationView(
         boolean otherSupportsMe,
         boolean otherOnline,
         boolean lastMessageMine,
-        boolean lastMessageSeen
+        boolean lastMessageSeen,
+        LocalDateTime pinnedAt
 ) {}

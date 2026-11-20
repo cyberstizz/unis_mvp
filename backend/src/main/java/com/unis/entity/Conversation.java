@@ -46,6 +46,15 @@ public class Conversation {
     @Column(name = "last_read_at_two")
     private LocalDateTime lastReadAtTwo;
 
+    // ── Pins (sql/V2026_11b__conversation_pins.sql) ────────────────────────
+    // Private to each side, like the read marks. NULL = not pinned.
+
+    @Column(name = "pinned_at_one")
+    private LocalDateTime pinnedAtOne;
+
+    @Column(name = "pinned_at_two")
+    private LocalDateTime pinnedAtTwo;
+
     @Column(name = "created_at", nullable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
