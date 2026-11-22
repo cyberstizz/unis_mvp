@@ -149,6 +149,16 @@ public class VoteService {
         }
 
         UUID userId = vote.getUser().getUserId();
+
+        // Visitors (joined from outside an open area) can't vote until their
+        // own city opens. VoteController checks first; this is the backstop
+        // for any other caller.
+        User voterAccount = userRepository.findById(userId).orElse(null);
+        if (com.unis.service.VisitorService.isVisitor(voterAccount)) {
+            throw new VoteRejectedException(org.springframework.http.HttpStatus.FORBIDDEN, "VISITOR_NO_VOTE",
+                com.unis.service.VisitorService.voteRefusal(voterAccount));
+        }
+
         LocalDate voteDate = vote.getVoteDate() != null ? vote.getVoteDate() : raceClock.todayForUser(userId);
         vote.setVoteDate(voteDate);
 

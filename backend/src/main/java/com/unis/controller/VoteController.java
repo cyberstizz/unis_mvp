@@ -84,6 +84,14 @@ public class VoteController {
                     "We could not identify your account. Please log out and back in.");
             }
 
+            // Visitors (joined from outside an open area) vote once their own
+            // city opens. Checked before the phone, so they aren't sent to
+            // verify a number for a vote they can't cast.
+            if (com.unis.service.VisitorService.isVisitor(user)) {
+                return voteError(HttpStatus.FORBIDDEN, "VISITOR_NO_VOTE",
+                    com.unis.service.VisitorService.voteRefusal(user));
+            }
+
             if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
                 return voteError(HttpStatus.FORBIDDEN, "PHONE_UNVERIFIED",
                     "Verify your phone number to vote.");

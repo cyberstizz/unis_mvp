@@ -260,6 +260,43 @@ public class User {
     @Column(name = "pending_supported_artist_since")
     private LocalDateTime pendingSupportedArtistSince;
 
+    // -----------------------------------------------------------------------
+    // Visitors: people who joined from outside an open area (the waitlist
+    // form). They can listen, like, make playlists, follow, comment and
+    // message; they can't vote or upload until their own city opens, and
+    // their plays and likes stay out of the race standings. They have no
+    // jurisdiction; their profile shows "Dallas, TX · Visitor" from the fields
+    // below. See VisitorService and backend/sql/V2026_11c__visitor_accounts.sql.
+    // -----------------------------------------------------------------------
+    @Builder.Default
+    @Column(name = "visitor", nullable = false)
+    private Boolean visitor = false;
+
+    /** Joined while the visitor switch was closed or the daily cap was hit: can't sign in yet. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Builder.Default
+    @Column(name = "visitor_held", nullable = false)
+    private Boolean visitorHeld = false;
+
+    @Column(name = "visitor_state_code", length = 2)
+    private String visitorStateCode;
+
+    @Column(name = "visitor_state_name", length = 100)
+    private String visitorStateName;
+
+    /** Their city as picked on the form ("Dallas"), or what they typed for "Other". */
+    @Column(name = "visitor_city", length = 150)
+    private String visitorCity;
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "visitor_released_at")
+    private LocalDateTime visitorReleasedAt;
+
+    /** When a Harlem sign-up ticked "I live in ..." on the sign-up honesty check. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "home_attested_at")
+    private LocalDateTime homeAttestedAt;
+
     public enum Role {
         listener, artist
     }

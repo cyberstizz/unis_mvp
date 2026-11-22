@@ -34,6 +34,30 @@ public class MediaController {
     @Autowired
     private com.unis.service.AnonymousPlayService anonymousPlayService;
 
+    @Autowired
+    private com.unis.repository.UserRepository userRepository;
+
+    /**
+     * Visitors (joined from outside an open area) upload once their own city
+     * opens: no songs or videos are stored for them before that. Null when the
+     * signed-in user may upload.
+     */
+    private ResponseEntity<Map<String, String>> visitorUploadRefusal() {
+        UUID me;
+        try {
+            me = SecurityUtils.getAuthenticatedUserId();
+        } catch (Exception e) {
+            return null;   // not signed in: the normal auth answer applies
+        }
+        if (me == null) return null;
+        com.unis.entity.User u = userRepository.findById(me).orElse(null);
+        if (!com.unis.service.VisitorService.isVisitor(u)) return null;
+        log.info("[Upload] refused userId={} reason=visitor", me);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+            "error", com.unis.service.VisitorService.uploadRefusal(u),
+            "code", "VISITOR_UPLOAD_LOCKED"));
+    }
+
     // POST /api/v1/media/signup-song — debut upload during signup (token-authorized, no login)
     @PostMapping(value = "/signup-song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Song> addSignupSong(
@@ -50,10 +74,12 @@ public class MediaController {
 
     // POST /api/v1/media/song — C1 + C6: now requires auth (SecurityConfig), artistId from JWT
     @PostMapping(value = "/song", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Song> addSong(
+    public ResponseEntity<?> addSong(
             @RequestPart("song") String songJson,
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "artwork", required = false) MultipartFile artwork) {
+        ResponseEntity<Map<String, String>> refused = visitorUploadRefusal();
+        if (refused != null) return refused;
         // C6 FIX: artistId will be extracted from JWT inside MediaService
         // The songJson still contains artistId from the frontend but MediaService should
         // override it with the authenticated user. See note below.
@@ -63,10 +89,12 @@ public class MediaController {
 
     // POST /api/v1/media/video
     @PostMapping(value = "/video", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<Video> addVideo(
+    public ResponseEntity<?> addVideo(
             @RequestPart("video") String videoJson,
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "artwork", required = false) MultipartFile artwork) {
+        ResponseEntity<Map<String, String>> refused = visitorUploadRefusal();
+        if (refused != null) return refused;
         Video saved = mediaService.addVideo(videoJson, file, artwork);
         return ResponseEntity.ok(saved);
     }

@@ -1,5 +1,7 @@
 package com.unis.dto;
 
+import java.time.LocalDate;
+
 // ─── Request DTO ───
 public class PreRegistrationRequest {
     private String email;
@@ -11,7 +13,8 @@ public class PreRegistrationRequest {
     private String stateName;      // "New York", "California"
     private String metroRegion;    // "Greater Los Angeles" or "Other"
     private String cityFreetext;   // only if metroRegion == "Other"
-    private String referredByCode; // optional referral code
+    private String referredByCode; // required referral code
+    private LocalDate dateOfBirth; // required for new sign-ups (visitor accounts can message people)
 
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
@@ -42,5 +45,7 @@ public class PreRegistrationRequest {
 
     public String getReferredByCode() { return referredByCode; }
     public void setReferredByCode(String referredByCode) { this.referredByCode = referredByCode; }
-}
 
+    public LocalDate getDateOfBirth() { return dateOfBirth; }
+    public void setDateOfBirth(LocalDate dateOfBirth) { this.dateOfBirth = dateOfBirth; }
+}

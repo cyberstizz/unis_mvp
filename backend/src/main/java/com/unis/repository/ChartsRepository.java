@@ -18,6 +18,10 @@ import java.util.UUID;
  * jurisdiction_tree pattern as VoteRepository, so querying an aggregate
  * jurisdiction (e.g. Harlem) includes plays of songs in its children
  * (Uptown / Downtown Harlem).
+ *
+ * Visitors' plays (people who joined from outside an open area) are left
+ * out: an area's chart is made by the people who live there. Their plays
+ * still count for the artist everywhere else (VisitorService).
  */
 @Repository
 public interface ChartsRepository extends JpaRepository<SongPlay, UUID> {
@@ -38,8 +42,10 @@ public interface ChartsRepository extends JpaRepository<SongPlay, UUID> {
         "FROM song_plays sp " +
         "JOIN songs s ON s.song_id = sp.song_id " +
         "JOIN jurisdiction_tree jt ON s.jurisdiction_id = jt.jurisdiction_id " +
+        "LEFT JOIN users listener ON listener.user_id = sp.user_id " +
         "WHERE sp.played_at >= :startTime AND sp.played_at < :endTime " +
         "AND s.deleted_at IS NULL " +
+        "AND listener.visitor IS NOT TRUE " +
         "GROUP BY sp.song_id " +
         "ORDER BY play_count DESC, sp.song_id",
         nativeQuery = true)
@@ -62,8 +68,10 @@ public interface ChartsRepository extends JpaRepository<SongPlay, UUID> {
         "SELECT COUNT(*) FROM song_plays sp " +
         "JOIN songs s ON s.song_id = sp.song_id " +
         "JOIN jurisdiction_tree jt ON s.jurisdiction_id = jt.jurisdiction_id " +
+        "LEFT JOIN users listener ON listener.user_id = sp.user_id " +
         "WHERE sp.played_at >= :startTime AND sp.played_at < :endTime " +
-        "AND s.deleted_at IS NULL",
+        "AND s.deleted_at IS NULL " +
+        "AND listener.visitor IS NOT TRUE",
         nativeQuery = true)
     Long countPlaysForRange(
             @Param("jurisdictionId") UUID jurisdictionId,

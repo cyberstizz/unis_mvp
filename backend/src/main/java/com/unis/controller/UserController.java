@@ -155,9 +155,20 @@ public class UserController {
             user.setSignupCampaign(campaign.isEmpty() ? null : campaign.substring(0, Math.min(80, campaign.length())));
         }
 
+        if (dto.getJurisdictionId() == null) {
+            throw new RuntimeException("Please choose your area.");
+        }
         Jurisdiction jurisdiction = jurisdictionRepository.findById(dto.getJurisdictionId())
             .orElseThrow(() -> new RuntimeException("Jurisdiction not found"));
+        // Only an open area with no areas inside it (Uptown or Downtown Harlem
+        // today). Everyone else joins as a visitor through the waitlist form.
+        userService.requireOpenSignupArea(jurisdiction);
         user.setJurisdiction(jurisdiction);
+        // The honesty check on the sign-up's "Your Hood" step. Recorded when
+        // sent; not required, so an app build without the check still works.
+        if (Boolean.TRUE.equals(dto.getHomeAttested())) {
+            user.setHomeAttestedAt(java.time.LocalDateTime.now());
+        }
 
         if (dto.getGenreId() != null) {
             Genre genre = genreRepository.findById(dto.getGenreId())

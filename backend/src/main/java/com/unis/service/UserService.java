@@ -7,6 +7,7 @@ import com.unis.entity.User;
 import com.unis.entity.Referral;
 import com.unis.entity.Song;
 import com.unis.entity.Supporter;
+import com.unis.entity.Jurisdiction;
 import com.unis.repository.UserRepository;
 import com.unis.repository.SongRepository;
 import com.unis.repository.VideoRepository;
@@ -457,8 +458,11 @@ public class UserService {
  
         // How this person found Unis, for the growth metrics: a referral code
         // wins, then a waitlist email, then a campaign link, otherwise organic.
-        // The waitlist entry is marked converted either way.
-        boolean fromWaitlist = markWaitlistConverted(savedUser.getEmail());
+        // The waitlist entry is marked converted either way, except for a
+        // visitor: they came through the waitlist form and are still waiting
+        // for their own city to open (VisitorService).
+        boolean fromWaitlist = Boolean.TRUE.equals(savedUser.getVisitor())
+            || markWaitlistConverted(savedUser.getEmail());
         String signupSource;
         if (referralTracked) {
             signupSource = "referral";
@@ -666,6 +670,30 @@ public class UserService {
         // Load everything the JSON shows before the profile is cached
         // (CacheReady explains why).
         return CacheReady.user(artist);
+    }
+
+    /**
+     * A Harlem (resident) sign-up must pick an area that is open and has no
+     * areas inside it: today Uptown Harlem or Downtown Harlem. Before, the
+     * server took any jurisdiction id the app sent, so a hand-made request
+     * could join Manhattan, Harlem itself or Unis. Opening a new neighborhood
+     * (jurisdictions.voting_enabled = true) makes it pickable with no code
+     * change. Everyone else joins as a visitor (VisitorService).
+     */
+    public void requireOpenSignupArea(Jurisdiction jurisdiction) {
+        if (jurisdiction == null) {
+            throw new RuntimeException("Please choose your area.");
+        }
+        Boolean ok = jdbcTemplate.queryForObject(
+            "SELECT j.voting_enabled = TRUE AND NOT EXISTS ("
+          + "  SELECT 1 FROM jurisdictions c WHERE c.parent_jurisdiction_id = j.jurisdiction_id) "
+          + "FROM jurisdictions j WHERE j.jurisdiction_id = ?",
+            Boolean.class, jurisdiction.getJurisdictionId());
+        if (!Boolean.TRUE.equals(ok)) {
+            throw new RuntimeException(
+                "That area isn't open for sign-ups yet. Choose Uptown Harlem or Downtown Harlem, "
+                    + "or join from your city as a visitor.");
+        }
     }
 
     // NOT CACHED - Used for authentication, needs fresh data

@@ -39,7 +39,11 @@ import java.util.UUID;
  *       the Unis-wide race is decided by everyone. A Los Angeles fan's
  *       Unis-wide vote for a Harlem artist counts Unis-wide, not in Harlem.</li>
  *   <li>Plays and likes count everywhere the artist competes, on the artist's
- *       home calendar day. Fans anywhere help an artist through listening.</li>
+ *       home calendar day, from anyone who lives in an open area (or plays
+ *       without signing in). Visitors' plays and likes still count for the
+ *       artist (play counts, points, earnings) but stay out of the standings
+ *       until the visitor's own city opens: local charts are decided by the
+ *       people who live there (VisitorService).</li>
  * </ul>
  */
 @Service
@@ -361,6 +365,7 @@ public class RankingService {
                   AND __PLAY_DAY__ BETWEEN :startDate AND :endDate
                   AND COALESCE(ps.jurisdiction_id, pa.jurisdiction_id) IN (:thisAndChildren)
                   AND (listener.deleted_at IS NULL OR listener.deleted_at >= :closesAt)
+                  AND listener.visitor IS NOT TRUE
                 GROUP BY sp.song_id
             ) p ON p.song_id = s.song_id
             LEFT JOIN (
@@ -369,10 +374,12 @@ public class RankingService {
                 JOIN songs ls ON ls.song_id = lk.media_id
                 JOIN users la ON la.user_id = ls.artist_id
                 JOIN jurisdictions aj ON aj.jurisdiction_id = la.jurisdiction_id
+                LEFT JOIN users liker ON liker.user_id = lk.user_id
                 WHERE lk.media_type = 'song'
                   AND lk.created_at >= :scanFrom AND lk.created_at < :scanTo
                   AND __LIKE_DAY__ BETWEEN :startDate AND :endDate
                   AND COALESCE(ls.jurisdiction_id, la.jurisdiction_id) IN (:thisAndChildren)
+                  AND liker.visitor IS NOT TRUE
                 GROUP BY lk.media_id
             ) l ON l.media_id = s.song_id
             WHERE (s.deleted_at IS NULL OR s.deleted_at >= :closesAt)
@@ -423,6 +430,7 @@ public class RankingService {
                   AND pa.jurisdiction_id IN (:thisAndChildren)
                   AND (ps.deleted_at IS NULL OR ps.deleted_at >= :closesAt)
                   AND (listener.deleted_at IS NULL OR listener.deleted_at >= :closesAt)
+                  AND listener.visitor IS NOT TRUE
                 GROUP BY ps.artist_id
             ) p ON p.artist_id = u.user_id
             LEFT JOIN (
@@ -431,10 +439,12 @@ public class RankingService {
                 JOIN songs ls ON ls.song_id = lk.media_id
                 JOIN users la ON la.user_id = ls.artist_id
                 JOIN jurisdictions aj ON aj.jurisdiction_id = la.jurisdiction_id
+                LEFT JOIN users liker ON liker.user_id = lk.user_id
                 WHERE lk.media_type = 'song'
                   AND lk.created_at >= :scanFrom AND lk.created_at < :scanTo
                   AND __LIKE_DAY__ BETWEEN :startDate AND :endDate
                   AND la.jurisdiction_id IN (:thisAndChildren)
+                  AND liker.visitor IS NOT TRUE
                   AND (ls.deleted_at IS NULL OR ls.deleted_at >= :closesAt)
                 GROUP BY ls.artist_id
             ) l ON l.artist_id = u.user_id

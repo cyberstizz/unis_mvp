@@ -60,6 +60,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         new Rule("signup-photo",   "PATCH","/api/v1/users/profile/photo",           20, HOUR,    Key.IP),
         new Rule("signup-song",    "POST", "/api/v1/media/signup-song",             10, HOUR,    Key.IP),
         new Rule("waitlist",       "POST", "/api/v1/waitlist/register",             10, HOUR,    Key.IP),
+        new Rule("home-area",      "POST", "/api/v1/waitlist/home-area",            20, HOUR,    Key.IP),
         new Rule("availability",   "GET",  "/api/v1/users/check-*",                 60, MINUTE,  Key.IP),
         new Rule("referral-check", "GET",  "/api/v1/users/validate-referral/**",    60, MINUTE,  Key.IP),
 

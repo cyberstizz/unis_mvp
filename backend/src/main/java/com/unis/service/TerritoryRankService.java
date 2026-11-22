@@ -348,6 +348,7 @@ public class TerritoryRankService {
                   BETWEEN :start AND :end
               AND s.deleted_at IS NULL
               AND listener.deleted_at IS NULL
+              AND listener.visitor IS NOT TRUE
             GROUP BY s.artist_id
         ),
         like_cts AS (
@@ -356,7 +357,9 @@ public class TerritoryRankService {
             JOIN songs s ON s.song_id = l.media_id
             JOIN users a ON a.user_id = s.artist_id
             JOIN jurisdictions aj ON aj.jurisdiction_id = a.jurisdiction_id
+            LEFT JOIN users liker ON liker.user_id = l.user_id
             WHERE l.media_type = 'song'
+              AND liker.visitor IS NOT TRUE
               AND l.created_at >= :scanFrom AND l.created_at < :scanTo
               AND CAST((CAST(l.created_at AS timestamp) AT TIME ZONE 'UTC') AT TIME ZONE aj.timezone AS date)
                   BETWEEN :start AND :end

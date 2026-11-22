@@ -50,10 +50,20 @@ public class PreRegistrationService {
         "Cleveland", "Pittsburgh"
     );
 
-    private int getThresholdForRegion(String metroRegion) {
+    /**
+     * How many sign-ups a city needs to open. The one copy of this rule:
+     * AuthController and VisitorService read it from here (AuthController used
+     * to keep its own list, which could drift). The /waitlist page and the help
+     * center quote the same three numbers.
+     */
+    public static int thresholdForRegion(String metroRegion) {
         if (MAJOR_METROS.contains(metroRegion)) return 1000;
         if (MID_MARKETS.contains(metroRegion)) return 500;
         return 250;
+    }
+
+    private int getThresholdForRegion(String metroRegion) {
+        return thresholdForRegion(metroRegion);
     }
 
     // ─── Register ───
@@ -61,7 +71,8 @@ public class PreRegistrationService {
     public PreRegistrationResponse register(PreRegistrationRequest req) {
         // Validate uniqueness
         if (preRegRepo.existsByEmail(req.getEmail().toLowerCase().trim())) {
-            throw new IllegalArgumentException("Email already registered on the waitlist");
+            throw new IllegalArgumentException(
+                "This email is already on the waitlist. Sign in with it to come in.");
         }
         if (preRegRepo.existsByUsername(req.getUsername().toLowerCase().trim())) {
             throw new IllegalArgumentException("Username already taken");

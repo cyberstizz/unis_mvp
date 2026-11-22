@@ -21,6 +21,10 @@ public class PreRegistrationResponse {
     private Integer regionThreshold;
     private Double regionProgressPercent;
 
+    // Visitor account (VisitorService): true when the visitor switch was
+    // closed or the daily cap was hit, so they can't sign in yet.
+    private Boolean visitorHeld;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -65,4 +69,7 @@ public class PreRegistrationResponse {
 
     public Double getRegionProgressPercent() { return regionProgressPercent; }
     public void setRegionProgressPercent(Double regionProgressPercent) { this.regionProgressPercent = regionProgressPercent; }
+
+    public Boolean getVisitorHeld() { return visitorHeld; }
+    public void setVisitorHeld(Boolean visitorHeld) { this.visitorHeld = visitorHeld; }
 }

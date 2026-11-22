@@ -22,7 +22,6 @@ import org.springframework.web.bind.annotation.*;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -60,6 +59,9 @@ public class AuthController {
 
     @Autowired
     private com.unis.service.SessionService sessionService;
+
+    @Autowired
+    private com.unis.service.VisitorService visitorService;
 
     /**
      * Pre-launch gate on the server. While true, only accounts with an admin
@@ -100,6 +102,12 @@ public class AuthController {
                 body.put("message", "Please verify your email to activate your account. Check your inbox for the link.");
                 return ResponseEntity.status(403).body(body);
             }
+            // A visitor who joined while the visitor switch was closed or the
+            // day's cap was reached: let them in if there's room now, otherwise
+            // the "You're on the list" answer (VisitorService).
+            if (com.unis.service.VisitorService.isVisitor(user) && !visitorService.tryRelease(user)) {
+                return ResponseEntity.status(403).body(visitorService.heldBody(user));
+            }
             if (prelaunch && adminRoleRepository.findByUserId(user.getUserId()).isEmpty()) {
                 Map<String, Object> body = new LinkedHashMap<>();
                 body.put("prelaunch", true);
@@ -131,33 +139,49 @@ public class AuthController {
 
             return ResponseEntity.ok(new AuthResponse(token));
         } catch (BadCredentialsException e) {
-            // Normal login failed — check if they're a waitlist user
+            // No account matched. Someone who joined the waitlist before
+            // visitor accounts existed has only a waitlist entry: the first
+            // time they sign in with its password, their visitor account is
+            // made from it and they're asked to confirm their email.
             try {
                 Optional<PreRegistration> waitlistUser = preRegistrationRepository
                     .findByEmail(loginRequest.getEmail().toLowerCase().trim());
 
-                if (waitlistUser.isPresent()) {
+                if (waitlistUser.isPresent()
+                        && passwordEncoder.matches(loginRequest.getPassword(), waitlistUser.get().getPasswordHash())
+                        && !visitorService.hasAccount(waitlistUser.get().getEmail())) {
                     PreRegistration pr = waitlistUser.get();
-
-                    if (passwordEncoder.matches(loginRequest.getPassword(), pr.getPasswordHash())) {
-                        long regionCount = preRegistrationRepository
-                            .countByStateCodeAndMetroRegion(pr.getStateCode(), pr.getMetroRegion());
-
-                        int threshold = getThresholdForRegion(pr.getMetroRegion());
-
-                        Map<String, Object> response = new LinkedHashMap<>();
-                        response.put("waitlist", true);
-                        response.put("username", pr.getUsername());
-                        response.put("referralCode", pr.getReferralCode());
-                        response.put("metroRegion", pr.getMetroRegion());
-                        response.put("stateCode", pr.getStateCode());
-                        response.put("stateName", pr.getStateName());
-                        response.put("regionSignupCount", regionCount);
-                        response.put("regionThreshold", threshold);
-                        response.put("message", "Your region isn't active yet. Share your referral code to unlock it faster!");
-
-                        return ResponseEntity.status(403).body(response);
+                    try {
+                        User account = visitorService.convertLegacy(pr, loginRequest.getPassword());
+                        if (account != null) {
+                            emailVerificationService.sendVerification(account);
+                            Map<String, Object> body = new LinkedHashMap<>();
+                            body.put("unverified", true);
+                            body.put("email", account.getEmail());
+                            body.put("message", "Your visitor account is ready. Confirm your email to come in: we just sent the link.");
+                            return ResponseEntity.status(403).body(body);
+                        }
+                    } catch (com.unis.service.VisitorService.LegacyConversionFailed ignored) {
+                        // Falls through to the old waitlist answer below.
                     }
+
+                    long regionCount = preRegistrationRepository
+                        .countByStateCodeAndMetroRegion(pr.getStateCode(), pr.getMetroRegion());
+
+                    int threshold = com.unis.service.PreRegistrationService.thresholdForRegion(pr.getMetroRegion());
+
+                    Map<String, Object> response = new LinkedHashMap<>();
+                    response.put("waitlist", true);
+                    response.put("username", pr.getUsername());
+                    response.put("referralCode", pr.getReferralCode());
+                    response.put("metroRegion", pr.getMetroRegion());
+                    response.put("stateCode", pr.getStateCode());
+                    response.put("stateName", pr.getStateName());
+                    response.put("regionSignupCount", regionCount);
+                    response.put("regionThreshold", threshold);
+                    response.put("message", "Your region isn't active yet. Share your referral code to unlock it faster!");
+
+                    return ResponseEntity.status(403).body(response);
                 }
             } catch (Exception ignored) {
                 // Waitlist check failed — fall through to normal error
@@ -171,28 +195,6 @@ public class AuthController {
             org.slf4j.LoggerFactory.getLogger(AuthController.class).error("[Auth] login error", e);
             return ResponseEntity.status(500).body("Login failed. Please try again.");
         }
-    }
-
-    private int getThresholdForRegion(String metroRegion) {
-        Set<String> majorMetros = Set.of(
-            "Los Angeles", "Chicago", "Atlanta",
-            "Houston", "Miami", "Dallas",
-            "Phoenix", "Philadelphia", "San Francisco Bay Area",
-            "Seattle", "Boston", "Denver",
-            "Detroit", "Minneapolis", "Washington DC"
-        );
-        Set<String> midMarkets = Set.of(
-            "Nashville", "Memphis", "New Orleans",
-            "Charlotte", "Las Vegas", "Austin",
-            "Portland", "San Antonio", "San Diego",
-            "Tampa", "Orlando", "Sacramento",
-            "Kansas City", "Columbus", "St. Louis",
-            "Baltimore", "Milwaukee", "Indianapolis",
-            "Cleveland", "Pittsburgh"
-        );
-        if (majorMetros.contains(metroRegion)) return 1000;
-        if (midMarkets.contains(metroRegion)) return 500;
-        return 250;
     }
 
     /**

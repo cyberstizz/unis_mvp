@@ -44,6 +44,9 @@ public class ArtistPhotoController {
 
     private final ArtistPhotoService service;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.unis.repository.UserRepository userRepository;
+
     public ArtistPhotoController(ArtistPhotoService service) {
         this.service = service;
     }
@@ -79,6 +82,13 @@ public class ArtistPhotoController {
         UUID me = SecurityUtils.getAuthenticatedUserId();
         if (!me.equals(artistId)) {
             return ResponseEntity.status(403).body(Map.of("error", "You can only edit your own photos."));
+        }
+        // Visitors upload once their own city opens (VisitorService).
+        com.unis.entity.User u = userRepository.findById(me).orElse(null);
+        if (com.unis.service.VisitorService.isVisitor(u)) {
+            return ResponseEntity.status(403).body(Map.of(
+                "error", com.unis.service.VisitorService.uploadRefusal(u),
+                "code", "VISITOR_UPLOAD_LOCKED"));
         }
         try {
             ArtistPhoto saved = service.add(artistId, file);

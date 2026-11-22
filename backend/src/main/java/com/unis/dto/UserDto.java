@@ -27,4 +27,6 @@ public class UserDto {
     private String themePreference;
     private String gender;
     private String signupCampaign;  // campaign code from the link the person arrived on (?c= or utm_campaign)   
+    // Sign-up honesty check: the person ticked "I live in <area>" before Next.
+    private Boolean homeAttested;
 }
