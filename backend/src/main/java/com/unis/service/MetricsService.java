@@ -45,8 +45,8 @@ public class MetricsService {
     /** Before launch the job still runs, so the dashboard can be checked; those numbers are marked preview. */
     private static final LocalDate PREVIEW_COHORT_FLOOR = LocalDate.of(2000, 1, 1);
 
-    /** Launch day: the official record starts here. Change with UNIS_METRICS_OFFICIAL_START if launch moves. */
-    @Value("${unis.metrics.official-start:2026-11-21}")
+    /** Launch day: the official record starts here. Follows UNIS_LAUNCH_DATE (UNIS_METRICS_OFFICIAL_START still overrides). */
+    @Value("${unis.metrics.official-start:${unis.launch-date:2027-01-01}}")
     private String officialStartText;
 
     private volatile LocalDate officialStart;

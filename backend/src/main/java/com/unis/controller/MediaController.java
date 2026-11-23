@@ -293,11 +293,14 @@ public class MediaController {
             @PathVariable UUID songId,
             @RequestParam(required = false) UUID userId) {
         try {
+            // Only the logged-in listener's own like. The userId in the URL is
+            // ignored (it let anyone check what another account had liked);
+            // logged out, nothing is liked.
             UUID resolvedUserId;
             try {
                 resolvedUserId = SecurityUtils.getAuthenticatedUserId();
             } catch (Exception e) {
-                resolvedUserId = userId;
+                return ResponseEntity.ok(Map.of("isLiked", false));
             }
             boolean liked = mediaService.isLiked(songId, resolvedUserId);
             return ResponseEntity.ok(Map.of("isLiked", liked));

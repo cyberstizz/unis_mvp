@@ -54,6 +54,12 @@ import java.util.UUID;
  *       it opened. Its first award is the first period that ends after that.</li>
  * </ul>
  *
+ * <p>Launch day (unis.launch-date, Railway variable UNIS_LAUNCH_DATE, default
+ * 2027-01-01): a period that ends before launch day is recorded as a BASELINE
+ * without deciding anything, so backstage test activity before launch never
+ * crowns a winner (no 2026 Artist of the Year from a few test days). A period
+ * that runs across launch day (the week of Dec 29) is decided as normal.
+ *
  * <p>Runs are logged to cron_executions under the same job names the old
  * crons used (DAILY_AWARDS, WEEKLY_AWARDS, ...), only when a period was
  * actually closed, so the admin cron panel keeps working unchanged.
@@ -83,6 +89,19 @@ public class RaceCloseScheduler {
     private final CronMonitorService cronMonitorService;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
+
+    /** No race period ending before this day is decided. See the class note. */
+    @org.springframework.beans.factory.annotation.Value("${unis.launch-date:2027-01-01}")
+    private String launchDateText;
+
+    LocalDate launchDate() {
+        try {
+            return LocalDate.parse(launchDateText == null ? "" : launchDateText.trim());
+        } catch (Exception e) {
+            log.warn("[RaceClose] action=launchDate status=invalid value={} using=2027-01-01", launchDateText);
+            return LocalDate.of(2027, 1, 1);
+        }
+    }
 
     public RaceCloseScheduler(AwardService awardService,
                               TerritoryRankService territoryRankService,
@@ -128,6 +147,7 @@ public class RaceCloseScheduler {
         Set<UUID> dayEnded = new LinkedHashSet<>();
         int closed = 0;
         int baselined = 0;
+        LocalDate launchDay = launchDate();
 
         for (VotingInterval interval : intervals) {
             String name = interval.getName();
@@ -146,6 +166,17 @@ public class RaceCloseScheduler {
                     continue;
                 }
                 for (LocalDate periodEnd : pending) {
+                    if (periodEnd.isBefore(launchDay)) {
+                        // Before launch: mark it done, award nobody.
+                        jdbc.update(
+                            "INSERT INTO race_period_closures (jurisdiction_id, interval_id, period_end, kind) "
+                                + "VALUES (?, ?, ?, 'BASELINE') ON CONFLICT DO NOTHING",
+                            race, interval.getIntervalId(), periodEnd);
+                        baselined++;
+                        log.info("[RaceClose] action=prelaunchSkip race={} interval={} periodEnd={} launch={}",
+                            race, name, periodEnd, launchDay);
+                        continue;
+                    }
                     CronExecution exec = executions.computeIfAbsent(name,
                         n -> cronMonitorService.startExecution(JOB_NAMES.getOrDefault(n, n.toUpperCase() + "_AWARDS")));
                     try {
