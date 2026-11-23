@@ -461,6 +461,7 @@ public class MediaController {
             response.put("title", song.getTitle());
             response.put("artist", song.getArtist().getUsername());
             response.put("lyrics", song.getLyrics());
+            response.put("syncedLyrics", song.getSyncedLyrics());
             response.put("explicit", song.getExplicit());
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -542,21 +543,28 @@ public class MediaController {
         return Math.max(1, Math.min(limit, 50));
     }
 
+    // The lyrics wizard saves here. Body: { "lyrics": "...", "syncedLyrics": "[00:12.40]..." }.
+    // Either key may be left out to keep what's saved; "" clears it.
     // Only the song's artist or an admin (previously any logged-in user).
     @PatchMapping("/song/{songId}/lyrics")
-    public ResponseEntity<Song> updateLyrics(
+    public ResponseEntity<?> updateLyrics(
             @PathVariable UUID songId,
             @RequestBody Map<String, String> body) {
         String lyrics = body.get("lyrics");
+        String syncedLyrics = body.get("syncedLyrics");
         try {
             UUID requesterId = SecurityUtils.getAuthenticatedUserId();
-            Song updated = mediaService.updateSong(songId, requesterId, isAdmin(), null, null, lyrics, null, null);
-            return ResponseEntity.ok(updated);
+            Song updated = mediaService.saveLyrics(songId, requesterId, isAdmin(), lyrics, syncedLyrics);
+            Map<String, Object> response = new HashMap<>();
+            response.put("songId", updated.getSongId());
+            response.put("lyrics", updated.getLyrics());
+            response.put("syncedLyrics", updated.getSyncedLyrics());
+            return ResponseEntity.ok(response);
         } catch (MediaService.NotOwnerException e) {
             log.warn("Refused lyrics update of song {}: not the owner", songId);
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
         } catch (org.springframework.web.server.ResponseStatusException e) {
-            return ResponseEntity.status(e.getStatusCode()).build();
+            return ResponseEntity.status(e.getStatusCode()).body(Map.of("error", String.valueOf(e.getReason())));
         }
     }
 }

@@ -65,6 +65,11 @@ public class Song {
     @Column(name = "lyrics", columnDefinition = "TEXT")
     private String lyrics;
 
+    // The same words with a start time per line, as LRC text
+    // ("[mm:ss.xx]line"). NULL = no timing yet. See V2026_11d.
+    @Column(name = "synced_lyrics", columnDefinition = "TEXT")
+    private String syncedLyrics;
+
     @Column(name = "plays_today")
     private Integer playsToday = 0;
 

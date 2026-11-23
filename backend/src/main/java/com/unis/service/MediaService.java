@@ -759,10 +759,96 @@ public class MediaService {
  
             song.setCleanVersionId(cleanVersionId);
         }
- 
+
         return songRepository.save(song);
     }
- 
+
+    // ── Timed lyrics ────────────────────────────────────────────────────
+    // Limits for what the lyrics wizard can save. Generous: a long song is
+    // ~100 lines and ~4,000 characters.
+    static final int LYRICS_MAX_CHARS = 20_000;
+    static final int SYNCED_MAX_LINES = 600;
+    private static final java.util.regex.Pattern LRC_LINE =
+        java.util.regex.Pattern.compile("^\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\](.*)$");
+
+    /**
+     * Saves a song's lyrics from the lyrics wizard (PATCH /song/{id}/lyrics).
+     * Only the song's own artist or an admin; a removed song can't be edited.
+     *
+     *   lyrics        the plain words. null = leave as is, "" = clear.
+     *   syncedLyrics  the timed version as LRC text. null = leave as is,
+     *                 "" = clear the timing. Every non-blank line must start
+     *                 with a [mm:ss.xx] time, and times must not go backwards.
+     *
+     * Clearing the words also clears the timing (timing without words would
+     * show an empty karaoke view).
+     */
+    @CacheEvict(value = {"songs", "artists", "trending"}, allEntries = true)
+    public Song saveLyrics(UUID songId, UUID requesterId, boolean requesterIsAdmin, String lyrics, String syncedLyrics) {
+        Song song = songRepository.findById(songId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Song not found"));
+        boolean isOwner = song.getArtist() != null && song.getArtist().getUserId().equals(requesterId);
+        if (!isOwner && !requesterIsAdmin) {
+            throw new NotOwnerException("You can only edit your own songs.");
+        }
+        if (song.isRemoved()) {
+            throw new ResponseStatusException(HttpStatus.GONE, "This song was removed and can't be edited.");
+        }
+
+        if (lyrics != null) {
+            String words = lyrics.replace("\r\n", "\n").strip();
+            if (words.length() > LYRICS_MAX_CHARS) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Lyrics are too long.");
+            }
+            song.setLyrics(words.isEmpty() ? null : words);
+            if (words.isEmpty()) song.setSyncedLyrics(null);
+        }
+
+        if (syncedLyrics != null && (lyrics == null || !lyrics.isBlank())) {
+            song.setSyncedLyrics(cleanSyncedLyrics(syncedLyrics));
+        }
+
+        Song saved = songRepository.save(song);
+        log.info("[Lyrics] action=save status=ok songId={} words={} timed={}",
+            songId, saved.getLyrics() != null, saved.getSyncedLyrics() != null);
+        return saved;
+    }
+
+    /** Checks LRC text and returns it tidied, or null when it's blank. */
+    static String cleanSyncedLyrics(String raw) {
+        String text = raw.replace("\r\n", "\n").strip();
+        if (text.isEmpty()) return null;
+        if (text.length() > LYRICS_MAX_CHARS * 2) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Timed lyrics are too long.");
+        }
+        StringBuilder out = new StringBuilder();
+        long lastMs = -1;
+        int count = 0;
+        for (String line : text.split("\n")) {
+            String trimmed = line.strip();
+            if (trimmed.isEmpty()) continue;
+            java.util.regex.Matcher m = LRC_LINE.matcher(trimmed);
+            if (!m.matches()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Every timed line needs a start time.");
+            }
+            long min = Long.parseLong(m.group(1));
+            long sec = Long.parseLong(m.group(2));
+            String frac = m.group(3) == null ? "0" : m.group(3);
+            long ms = min * 60_000 + sec * 1000 + Math.round(Double.parseDouble("0." + frac) * 1000);
+            if (sec > 59 || ms < lastMs) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Line times must go in order.");
+            }
+            lastMs = ms;
+            if (++count > SYNCED_MAX_LINES) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Too many timed lines.");
+            }
+            out.append(String.format("[%02d:%02d.%02d]", ms / 60_000, (ms / 1000) % 60, (ms % 1000) / 10))
+               .append(m.group(4).strip())
+               .append('\n');
+        }
+        return count == 0 ? null : out.toString().stripTrailing();
+    }
+
 
     /**
      * Artist or admin deletes a video (DELETE /api/v1/media/video/{id}).
