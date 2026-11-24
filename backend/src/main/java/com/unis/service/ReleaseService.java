@@ -13,6 +13,8 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -50,15 +52,18 @@ public class ReleaseService {
     private final UserRepository users;
     private final FileStorageService fileStorageService;
     private final ArtistTeamService teamService;
+    private final ReleaseAlertService alertService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ReleaseService(ReleaseRepository releases, SongRepository songs, UserRepository users,
-                          FileStorageService fileStorageService, ArtistTeamService teamService) {
+                          FileStorageService fileStorageService, ArtistTeamService teamService,
+                          ReleaseAlertService alertService) {
         this.releases = releases;
         this.songs = songs;
         this.users = users;
         this.fileStorageService = fileStorageService;
         this.teamService = teamService;
+        this.alertService = alertService;
     }
 
     // ── Reading ─────────────────────────────────────────────────────────────
@@ -106,7 +111,8 @@ public class ReleaseService {
         placeSongs(r.getReleaseId(), tracks);
 
         teamService.logIfActing(artistId, "published the " + typeWord(in.type) + " " + in.title);
-        log.info("[Release] created id={} artist={} type={} tracks={}", r.getReleaseId(), artistId, in.type, tracks.size());
+        log.info("[Release] created id={} artist={} type={} tracks={} notify={}", r.getReleaseId(), artistId, in.type, tracks.size(), in.notifyFollowers);
+        if (in.notifyFollowers) alertAfterCommit(artistId, r.getReleaseId(), in.type, tracks, in.followerNote);
         return new ReleaseDetail(view(r, artist, tracks), tracks);
     }
 
@@ -162,7 +168,34 @@ public class ReleaseService {
 
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    private record Input(String title, Release.Type type, String description, boolean descriptionSet, List<UUID> songIds) {}
+    private record Input(String title, Release.Type type, String description, boolean descriptionSet, List<UUID> songIds,
+                         boolean notifyFollowers, String followerNote) {}
+
+    /**
+     * Tells followers once the release is saved for good. Runs after the
+     * commit, in its own transaction, so an alert problem never undoes the
+     * release; it's only logged.
+     */
+    private void alertAfterCommit(UUID artistId, UUID releaseId, Release.Type type, List<Song> tracks, String note) {
+        List<UUID> trackIds = tracks.stream().map(Song::getSongId).toList();
+        Runnable send = () -> {
+            try {
+                alertService.releasePublished(artistId, releaseId, type, trackIds, note);
+            } catch (Exception e) {
+                log.error("[Release] follower alert failed release={} err={}", releaseId, e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    send.run();
+                }
+            });
+        } else {
+            send.run();
+        }
+    }
 
     private Input parse(String json, boolean creating) {
         JsonNode n;
@@ -206,7 +239,11 @@ public class ReleaseService {
         if (creating && (ids == null || ids.isEmpty())) throw bad("Add at least one song.");
         if (ids != null && ids.isEmpty()) throw bad("A release needs at least one song.");
         if (ids != null && ids.size() > MAX_TRACKS) throw bad("A release can have up to " + MAX_TRACKS + " songs.");
-        return new Input(title, type, desc, descSet, ids);
+
+        // Follower alert (creating only): on unless the artist switched it off.
+        boolean notify = !n.has("notifyFollowers") || n.get("notifyFollowers").isNull() || n.get("notifyFollowers").asBoolean(true);
+        String note = n.hasNonNull("followerNote") ? ReleaseAlertService.cleanNote(n.get("followerNote").asText()) : null;
+        return new Input(title, type, desc, descSet, ids, creating && notify, creating ? note : null);
     }
 
     /** The songs, in order, after checking they're this artist's, live, and free (or already on this release). */

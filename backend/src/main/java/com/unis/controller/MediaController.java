@@ -37,6 +37,29 @@ public class MediaController {
     @Autowired
     private com.unis.repository.UserRepository userRepository;
 
+    @Autowired
+    private com.unis.service.ReleaseAlertService releaseAlertService;
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper ALERT_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * Tells the artist's followers about a new song, unless the upload said
+     * notifyFollowers: false. Clean companion versions don't alert (the
+     * explicit version already did). The song is already saved; a problem
+     * here is only logged.
+     */
+    private void alertFollowers(Song saved, String songJson) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode n = ALERT_JSON.readTree(songJson == null ? "{}" : songJson);
+            if (n.has("notifyFollowers") && !n.get("notifyFollowers").isNull() && !n.get("notifyFollowers").asBoolean(true)) return;
+            if (n.path("isCleanVersion").asBoolean(false)) return;
+            if (saved == null || saved.getArtist() == null) return;
+            releaseAlertService.songUploaded(saved.getArtist().getUserId(), saved.getSongId());
+        } catch (Exception e) {
+            log.error("[Upload] follower alert failed song={} err={}", saved == null ? null : saved.getSongId(), e.getMessage());
+        }
+    }
+
     /**
      * Visitors (joined from outside an open area) upload once their own city
      * opens: no songs or videos are stored for them before that. Null when the
@@ -84,6 +107,7 @@ public class MediaController {
         // The songJson still contains artistId from the frontend but MediaService should
         // override it with the authenticated user. See note below.
         Song saved = mediaService.addSong(songJson, file, artwork);
+        alertFollowers(saved, songJson);
         return ResponseEntity.ok(saved);
     }
 

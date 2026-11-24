@@ -67,6 +67,7 @@ public class TeamActAsFilter extends OncePerRequestFilter {
         r("GET", "/v1/stripe/(status|payouts)", null),
         r("GET", "/v1/songs/my-sales", null),
         r("GET", "/v1/releases(/.*)?", null),
+        r("GET", "/v1/release-alerts/reach", null),
         // Music
         r("POST", "/v1/media/song", "uploaded a song"),
         r("POST", "/v1/media/video", "uploaded a video"),

@@ -231,6 +231,9 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/users/validate-referral/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/users/unsubscribe").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/users/unsubscribe").permitAll()
+                // Release emails' own unsubscribe link (ReleaseAlertController): the token is the key.
+                .requestMatchers(HttpMethod.GET, "/api/v1/release-alerts/unsubscribe").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/release-alerts/unsubscribe").permitAll()
                 .requestMatchers("/api/v1/users/check-email").permitAll()
                 .requestMatchers("/api/v1/users/check-username").permitAll()
                 .requestMatchers("/api/v1/users/*/default-song").permitAll()
