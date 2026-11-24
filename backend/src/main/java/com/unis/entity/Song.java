@@ -82,6 +82,14 @@ public class Song {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    // The release this song is on (album, EP, mixtape or single), if any, and
+    // its place in that release. See Release and ReleaseService.
+    @Column(name = "release_id")
+    private UUID releaseId;
+
+    @Column(name = "track_number")
+    private Integer trackNumber;
+
     @Column(name = "clean_version_id")
     private UUID cleanVersionId;
 

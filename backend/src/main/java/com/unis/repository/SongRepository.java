@@ -63,6 +63,14 @@ public interface SongRepository extends JpaRepository<Song, UUID> {
     @Query("SELECT s FROM Song s WHERE s.artist.userId = :artistId AND s.deletedAt IS NULL ORDER BY s.createdAt DESC")
     List<Song> findByArtistId(@Param("artistId") UUID artistId);
 
+    // A release's live songs in track order (ReleaseService).
+    @Query("SELECT s FROM Song s WHERE s.releaseId = :releaseId AND s.deletedAt IS NULL ORDER BY s.trackNumber ASC, s.createdAt ASC")
+    List<Song> findLiveByReleaseId(@Param("releaseId") UUID releaseId);
+
+    // Every song pointing at a release, removed ones included (to unlink them).
+    @Query("SELECT s FROM Song s WHERE s.releaseId = :releaseId")
+    List<Song> findAllByReleaseId(@Param("releaseId") UUID releaseId);
+
     @Query("SELECT s FROM Song s JOIN s.artist a WHERE a.jurisdiction.jurisdictionId = :jurisdictionId AND s.deletedAt IS NULL ORDER BY s.score DESC")
     List<Song> findTopByJurisdiction(@Param("jurisdictionId") UUID jurisdictionId);
 

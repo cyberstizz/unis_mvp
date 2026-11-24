@@ -28,6 +28,16 @@ public class SecurityConfig {
     @Autowired
     private RateLimiter rateLimiter;
 
+    // Artist teams: lets a manager work on an artist's dashboard (TeamActAsFilter).
+    @Autowired
+    private com.unis.service.ArtistTeamService artistTeamService;
+
+    @Autowired
+    private com.unis.repository.UserRepository userRepository;
+
+    @Autowired
+    private AuthUserCache authUserCache;
+
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
@@ -283,6 +293,9 @@ public class SecurityConfig {
                 // Comments (read-only)
                 .requestMatchers(HttpMethod.GET, "/api/v1/comments/**").permitAll()
 
+                // Releases: albums, EPs, mixtapes and singles (read-only)
+                .requestMatchers(HttpMethod.GET, "/api/v1/releases/**").permitAll()
+
                 // ===== CATCH-ALL: everything else under /api/v1 requires auth =====
                 .requestMatchers("/api/v1/**").authenticated()
                 .requestMatchers("/uploads/**").permitAll()
@@ -307,7 +320,9 @@ public class SecurityConfig {
                             org.springframework.http.HttpStatus.UNAUTHORIZED)))
             .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class)
             // After the JWT filter, so per-account limits know who is signed in.
-            .addFilterAfter(new RateLimitFilter(rateLimiter), JwtRequestFilter.class);
+            .addFilterAfter(new RateLimitFilter(rateLimiter), JwtRequestFilter.class)
+            // After both: a team member acting for an artist (X-Unis-Act-As) on dashboard requests only.
+            .addFilterAfter(new TeamActAsFilter(artistTeamService, userRepository, authUserCache), RateLimitFilter.class);
 
         return http.build();
     }

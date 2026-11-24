@@ -30,7 +30,14 @@ public class BroadcastController {
     public ResponseEntity<?> broadcast(@RequestBody Map<String, String> body) {
         try {
             UUID artistId = SecurityUtils.getAuthenticatedUserId();
-            Map<String, Object> result = artistBroadcastService.broadcastToSupporters(artistId, body.get("body"));
+            String text = body.get("body");
+            // Sent by a manager for the artist (TeamActAsFilter): signed, so
+            // supporters know it came from the artist's team.
+            var actor = com.unis.service.ArtistTeamService.currentActorName();
+            if (actor.isPresent() && text != null && !text.isBlank()) {
+                text = text.trim() + "\n\n— from the team (" + actor.get() + ")";
+            }
+            Map<String, Object> result = artistBroadcastService.broadcastToSupporters(artistId, text);
             return ResponseEntity.ok(result);
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
