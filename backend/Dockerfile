@@ -7,6 +7,10 @@ COPY ./src ./src
 RUN mvn -q -e -DskipTests package
 
 FROM eclipse-temurin:21-jdk
+# ffmpeg measures each song's loudness, tempo and key (AudioAnalysisService).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 

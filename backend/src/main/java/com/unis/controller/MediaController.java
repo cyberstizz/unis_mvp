@@ -40,6 +40,19 @@ public class MediaController {
     @Autowired
     private com.unis.service.ReleaseAlertService releaseAlertService;
 
+    // Measures loudness, tempo, key and the rest in the background after an
+    // upload, for volume levelling and Unis Mix. Never delays or fails the upload.
+    @Autowired
+    private com.unis.service.AudioAnalysisService audioAnalysisService;
+
+    private void measureLater(Song saved, MultipartFile file) {
+        try {
+            if (saved != null) audioAnalysisService.analyzeUploadLater(saved.getSongId(), file);
+        } catch (Exception e) {
+            log.error("[Upload] measuring failed to start song={} err={}", saved.getSongId(), e.getMessage());
+        }
+    }
+
     private static final com.fasterxml.jackson.databind.ObjectMapper ALERT_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
 
     /**
@@ -92,6 +105,7 @@ public class MediaController {
         mediaService.requireRightsConfirmed(songJson, false);
         UUID artistId = signupUploadService.consume(signupToken);   // validates + single-use
         Song saved = mediaService.addSongForArtist(artistId, songJson, file, artwork);
+        measureLater(saved, file);
         return ResponseEntity.ok(saved);
     }
 
@@ -108,6 +122,7 @@ public class MediaController {
         // override it with the authenticated user. See note below.
         Song saved = mediaService.addSong(songJson, file, artwork);
         alertFollowers(saved, songJson);
+        measureLater(saved, file);
         return ResponseEntity.ok(saved);
     }
 

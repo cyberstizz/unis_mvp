@@ -252,6 +252,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/taxonomy/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/browse").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/song/*/recommended").permitAll()
+                // Measured loudness/tempo/key for levelling and Unis Mix (songs are public)
+                .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/analysis").permitAll()
+                // A playlist's saved transitions; the controller hides private playlists
+                .requestMatchers(HttpMethod.GET, "/api/v1/playlists/*/mix").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/artist/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/songs/jurisdiction/*").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/media/videos/artist/*").permitAll()
